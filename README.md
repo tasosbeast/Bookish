@@ -1,4 +1,24 @@
-# Bookish database design
+# Bookish backend
+
+Express 5 API with JWT authentication, rotating refresh cookies, bcrypt, Zod validation, and PostgreSQL/Prisma 7. See [API documentation](docs/API.md) for the directory structure, endpoint contracts, examples, security behavior and transaction semantics.
+
+## Run locally
+
+1. Install Node.js 22.12+ and run `npm ci`.
+2. Copy `.env.example` to `.env`. Set `DATABASE_URL` and generate two different random JWT secrets using the command in the example file.
+3. Start PostgreSQL (optionally `docker compose up -d db`). The sample Compose credentials are for local development only.
+4. Run `npm run db:generate`, `npm run db:validate`, then `npm run db:deploy` against a **new, empty database**.
+5. Run `npm run dev` or `npm start`. Default API URL: `http://localhost:3000`.
+
+The committed initial migration creates all tables, including refresh sessions, and applies the SQL checks and trigram indexes. The database role must be able to install `pg_trgm`. If you already deployed the original schema, baseline that database and generate a forward migration for refresh sessions; do not apply the initial CREATE TABLE migration over existing tables.
+
+## Verification
+
+`npm test` runs validation, HTTP security, JWT and retry tests without a database. `npm run test:integration` requires `TEST_DATABASE_URL` pointing at a migrated test database; without it the suite is explicitly skipped. For example in PowerShell, set `$env:TEST_DATABASE_URL='postgresql://bookish:bookish@localhost:5432/bookish_test'`, deploy migrations to that database using `DATABASE_URL`, then run the integration suite. Integration tests create and remove only their own fixtures.
+
+GitHub Actions provisions PostgreSQL and runs migrations and both suites. The integration suite checks signup/login, logout, refresh replay revocation, filtering/search, rating synchronization, clearing ratings and concurrent likes. No GitHub workflow run is implied by local verification.
+
+## Database design
 
 Target: Node.js, Express, PostgreSQL, Prisma ORM 7. Prisma field names are camelCase; `@map` / `@@map` expose snake_case database columns and tables. UUIDs identify entities; join tables use compound primary keys. All timestamps include time zones.
 
@@ -8,9 +28,9 @@ Target: Node.js, Express, PostgreSQL, Prisma ORM 7. Prisma field names are camel
 - `prisma.config.ts`: Prisma 7 connection configuration; set `DATABASE_URL` in your environment (or `.env`, excluded from version control).
 - `prisma/constraints-and-search.sql`: additional PostgreSQL constraints and search indexes.
 
-From this directory, after installing matching Prisma 7 CLI/client packages and dotenv, run `npx prisma validate`, then `npx prisma migrate dev --name init --create-only`. Append `constraints-and-search.sql` to the generated migration, after its table definitions, and run `npx prisma migrate dev` and `npx prisma generate`. The database must support the pg_trgm extension. For production, deploy the committed migration with `prisma migrate deploy`. The SQL supplement is not applied automatically by Prisma and should not be run twice.
+The SQL supplement is already included in the committed initial migration. Keep it as a reference; do not run it again after deploying the migration. For later model changes, create forward migrations with `prisma migrate dev` in development and deploy committed migrations with `prisma migrate deploy`.
 
-The Express runtime also needs `@prisma/adapter-pg` and `pg`; initialize the generated Prisma client with the PostgreSQL adapter. This folder supplies a database design, not an Express server or installed dependencies.
+The Express runtime uses `@prisma/adapter-pg` and `pg`; the generated Prisma client is initialized with the PostgreSQL adapter.
 
 ## Relations and semantics
 
@@ -50,6 +70,6 @@ Hash passwords with a password-hashing library; never store plaintext or expose 
 | ReviewLike(userId, reviewId) primary key; ReviewLike(reviewId) | Duplicate-like prevention and counting likes per review |
 | GIN trigram indexes on title and author | Case-insensitive substring searches, such as ILIKE '%hobbit%' |
 
-Use deterministic ordering and keyset pagination with the indexed ID tie-breakers. Trigram indexes work best with search strings of at least three characters; very short searches can still scan. Plain B-tree indexes are not sufficient for arbitrary substring matching. Genre-plus-rating queries may still require a sort after joining: inspect realistic query plans before adding further indexes. Add PostgreSQL full-text search separately if ranked description/content search becomes a requirement.
+The API uses bounded offset pagination with deterministic ID tie-breakers; keyset pagination is a future optimization for large catalogs. Trigram indexes work best with search strings of at least three characters; very short searches can still scan. Plain B-tree indexes are not sufficient for arbitrary substring matching. Genre-plus-rating queries may still require a sort after joining: inspect realistic query plans before adding further indexes. Add PostgreSQL full-text search separately if ranked description/content search becomes a requirement.
 
-Design reviewed statically; Prisma validation and migration execution have not been run against an installed Prisma toolchain or a PostgreSQL instance in this workspace.
+Use the verification commands above to validate the schema and exercise the API against your environment.
