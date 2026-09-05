@@ -42,17 +42,19 @@ export async function saveReview(userId, { bookId, rating, reviewText }) {
     return review;
   });
 }
-export async function toggleLike(userId, reviewId) {
+export async function setReviewLike(userId, reviewId, liked) {
   return serializable(prisma, async tx => {
     if (!await tx.review.findUnique({ where: { id: reviewId }, select: { id: true } })) {
       throw new AppError(404, 'REVIEW_NOT_FOUND', 'Review not found');
     }
-    const where = { userId_reviewId: { userId, reviewId } };
-    const existing = await tx.reviewLike.findUnique({ where });
-    if (existing) await tx.reviewLike.delete({ where });
-    else await tx.reviewLike.create({ data: { userId, reviewId } });
+    if (liked) {
+      await tx.reviewLike.upsert({ where: { userId_reviewId: { userId, reviewId } },
+        create: { userId, reviewId }, update: {} });
+    } else {
+      await tx.reviewLike.deleteMany({ where: { userId, reviewId } });
+    }
     const likesCount = await tx.reviewLike.count({ where: { reviewId } });
     await tx.review.update({ where: { id: reviewId }, data: { likesCount } });
-    return { reviewId, liked: !existing, likesCount };
+    return { reviewId, liked, likesCount };
   });
 }

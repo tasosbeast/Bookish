@@ -97,7 +97,7 @@ Like states are fetched in one query restricted to the current reader and return
 
 ## Shelves and reviews
 
-All following routes require `Authorization: Bearer <accessToken>`. GET returns 200; POST returns 200 for either create or update.
+All following routes require `Authorization: Bearer <accessToken>`. Successful operations return 200, including an already-satisfied like/unlike request.
 
 `GET /api/user-books?status=read&page=1&limit=20`
 
@@ -142,7 +142,27 @@ Supply `status` and/or `userRating`. Status is `want_to_read`, `currently_readin
 
 Upserts the user's unique review and canonical shelf rating together, preserving an existing shelf status. Text is optional, nullable and at most 10000 characters; omit to preserve it, send null to clear it. Review writes and shelf rating writes recompute `Book.averageRating` and `ratingsCount` from all non-null shelf ratings, counting each reader once. No ratings produces a null average and zero count.
 
-`POST /api/reviews/:id/like` toggles the current user's like. Returns `{ "data": { "reviewId": "...", "liked": true, "likesCount": 1 } }`. The join row and cached count are changed together. This is a **toggle**, so clients must not blindly retry a request after an ambiguous network failure; a second successful request reverses the first.
+Likes use explicit, idempotent state-setting commands (no request body):
+
+| Endpoint | Effect | Response |
+| --- | --- | --- |
+| PUT /api/reviews/:id/like | Ensure the current reader's like exists | `{ "data": { "reviewId": "...", "liked": true, "likesCount": 1 } }` |
+| DELETE /api/reviews/:id/like | Ensure the current reader's like is absent | `{ "data": { "reviewId": "...", "liked": false, "likesCount": 0 } }` |
+
+Repeated or simultaneous PUT requests create at most one like for the reader; repeated DELETE requests succeed even when their like is already absent. Neither operation modifies another reader's like. The join row and cached count are maintained together in a serializable transaction. `likesCount` reflects that transaction's snapshot and can differ between retries when other readers act. Unknown reviews return 404 for both methods; invalid UUIDs return 400, and missing/invalid/revoked access tokens return 401.
+
+**Contract change:** the old `POST /api/reviews/:id/like` toggle has been removed. Authenticated requests using POST receive 405 with `Allow: PUT, DELETE`; they do not change a like. Frontend callers must send the desired state explicitly:
+
+```js
+const response = await fetch(`http://localhost:3000/api/reviews/${reviewId}/like`, {
+  method: desiredLiked ? 'PUT' : 'DELETE',
+  headers: { Authorization: `Bearer ${accessToken}` },
+});
+if (!response.ok) throw new Error('Could not save like state');
+const { data: { liked, likesCount } } = await response.json();
+```
+
+After a lost response, the client can retry the **same desired state** safely. Serialize state changes per review and cancel stale retries when the user changes their intent: a delayed PUT after an intentional DELETE would legitimately set the like again. Opposite concurrent commands are applied in the database's serialization order. CORS permits PUT and DELETE from the configured frontend origin.
 
 These writes use serializable transactions and bounded exponential retry with jitter for serialization/deadlock and concurrent-insert conflicts. Each retry reruns the whole transaction. Exhausted serialization contention returns 503 with `Retry-After: 1`. Future deletion routes must also refresh affected aggregates in the same transaction; direct writes bypass these service invariants.
 

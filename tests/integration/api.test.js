@@ -66,10 +66,36 @@ test('PostgreSQL: authentication, search, rating synchronization and concurrent 
     await post(1, 'user-books', { bookId: bookIds[1], userRating: 5 }).expect(200);
     await post(1, 'user-books', { bookId: bookIds[1], userRating: null }).expect(200);
     assert.equal((await prisma.book.findUnique({ where: { id: bookIds[1] } })).averageRating, null);
-    await Promise.all([post(1, `reviews/${reviewId}/like`, {}).expect(200), post(2, `reviews/${reviewId}/like`, {}).expect(200)]);
+    const likeRequest = (index, method, id = reviewId) => request(app)[method](`/api/reviews/${id}/like`)
+      .auth(users[index].token, { type: 'bearer' });
+    await Promise.all([likeRequest(1, 'put').expect(200), likeRequest(2, 'put').expect(200)]);
     assert.equal((await prisma.review.findUnique({ where: { id: reviewId } })).likesCount, 2);
-    await Promise.all([post(3, `reviews/${reviewId}/like`, {}).expect(200), post(3, `reviews/${reviewId}/like`, {}).expect(200)]);
-    assert.equal((await prisma.review.findUnique({ where: { id: reviewId } })).likesCount, 2);
+    await t.test('like and unlike are idempotent under sequential and concurrent retries', async () => {
+      const responseFor = (liked, likesCount) => ({ data: { reviewId, liked, likesCount } });
+      const putResponses = await Promise.all([likeRequest(3, 'put').expect(200), likeRequest(3, 'put').expect(200)]);
+      for (const result of putResponses) assert.deepEqual(result.body, responseFor(true, 3));
+      assert.deepEqual((await likeRequest(3, 'put').expect(200)).body, responseFor(true, 3));
+      assert.equal(await prisma.reviewLike.count({ where: { userId: userIds[3], reviewId } }), 1);
+      assert.equal((await prisma.review.findUnique({ where: { id: reviewId } })).likesCount, 3);
+      const detailPath = `/api/books/${bookId}`;
+      const before = await request(app).get(detailPath).auth(users[3].token, { type: 'bearer' }).expect(200);
+      assert.equal(before.body.data.reviews.data[0].likedByMe, true);
+      const deleteResponses = await Promise.all([likeRequest(3, 'delete').expect(200), likeRequest(3, 'delete').expect(200)]);
+      for (const result of deleteResponses) assert.deepEqual(result.body, responseFor(false, 2));
+      assert.deepEqual((await likeRequest(3, 'delete').expect(200)).body, responseFor(false, 2));
+      assert.equal(await prisma.reviewLike.count({ where: { userId: userIds[3], reviewId } }), 0);
+      assert.equal(await prisma.reviewLike.count({ where: { reviewId } }), 2);
+      assert.equal((await prisma.review.findUnique({ where: { id: reviewId } })).likesCount, 2);
+      const after = await request(app).get(detailPath).auth(users[3].token, { type: 'bearer' }).expect(200);
+      assert.equal(after.body.data.reviews.data[0].likedByMe, false);
+      const legacy = await likeRequest(3, 'post').expect(405);
+      assert.equal(legacy.headers.allow, 'PUT, DELETE');
+      assert.equal(await prisma.reviewLike.count({ where: { userId: userIds[3], reviewId } }), 0);
+      for (const method of ['put', 'delete']) {
+        await likeRequest(3, method, randomUUID()).expect(404);
+        await likeRequest(3, method, 'invalid-id').expect(400);
+      }
+    });
     const search = await request(app).get('/api/books').query({ genre: tag, q: '50%_', limit: 1 }).expect(200);
     assert.equal(search.body.data[0].id, bookId);
     assert.equal(search.body.pagination.total, 1);
@@ -157,6 +183,7 @@ test('PostgreSQL: authentication, search, rating synchronization and concurrent 
           await request(app).get(path).auth(token, { type: 'bearer' }).expect(401);
         }
       }
+      for (const method of ['put', 'delete']) await likeRequest(0, method).expect(401);
       await request(app).get('/api/auth/me').expect(401);
       await request(app).get('/api/user-books').expect(401);
       await request(app).get(`/api/books/${bookId}`).expect(200);

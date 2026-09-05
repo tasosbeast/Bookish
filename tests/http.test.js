@@ -29,6 +29,24 @@ test('protected routes reject missing and malformed bearer tokens', async () => 
   await request(app).post('/api/user-books').send({}).expect(401);
   await request(app).post('/api/reviews').set('Authorization', 'Bearer invalid').send({}).expect(401);
 });
+test('explicit like writes require authentication', async () => {
+  const path = `/api/reviews/${randomUUID()}/like`;
+  for (const method of ['put', 'delete']) {
+    await request(app)[method](path).expect(401);
+    await request(app)[method](path).set('Authorization', 'Bearer invalid').expect(401);
+  }
+});
+test('CORS preflight permits authenticated PUT and DELETE likes from the frontend', async () => {
+  for (const method of ['PUT', 'DELETE']) {
+    const response = await request(app).options(`/api/reviews/${randomUUID()}/like`)
+      .set('Origin', process.env.CLIENT_ORIGIN)
+      .set('Access-Control-Request-Method', method)
+      .set('Access-Control-Request-Headers', 'authorization').expect(204);
+    assert.equal(response.headers['access-control-allow-origin'], process.env.CLIENT_ORIGIN);
+    assert.ok(response.headers['access-control-allow-methods'].split(',').includes(method));
+    assert.match(response.headers['access-control-allow-headers'], /Authorization/i);
+  }
+});
 test('profile and shelf reads require authentication; public books reject supplied invalid credentials', async () => {
   for (const path of ['/api/auth/me', '/api/user-books']) {
     await request(app).get(path).expect(401);

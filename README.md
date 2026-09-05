@@ -29,7 +29,7 @@ npm run test:integration
 
 Stop the test server when finished with `docker compose -f compose.test.yaml stop`. Its data persists in the dedicated test volume. For a separately provisioned test database, use its connection URL instead; the database name must still end in `_test`.
 
-Local verification on 2026-09-06: the initial migration deployed successfully to the dedicated PostgreSQL 17 test server; all 12 unit/HTTP tests and all 11 integration test entries passed, with zero skips. Integration coverage includes literal email/username equality, wildcard-shaped inputs and legacy mixed-case identities. The development database runs separately from the test server.
+Local verification on 2026-09-06: the initial migration deployed successfully to the dedicated PostgreSQL 17 test server; all 14 unit/HTTP tests and all 12 integration test entries passed, with zero skips. Coverage includes idempotent like/unlike retries, concurrent writes, CORS, literal email/username equality, wildcard-shaped inputs and legacy mixed-case identities. The development database runs separately from the test server.
 
 GitHub Actions provisions PostgreSQL and runs migrations and both suites. The integration suite checks signup/login, logout, refresh replay revocation, filtering/search, rating synchronization, clearing ratings and concurrent likes. It also covers shelf filtering/pagination/user isolation, safe profile restoration after refresh, anonymous and personalized review like states, and invalid/revoked credentials on read endpoints. No GitHub workflow run is implied by local verification.
 
@@ -40,6 +40,10 @@ GitHub Actions provisions PostgreSQL and runs migrations and both suites. The in
 - `GET /api/books/:id?page=1&limit=20` includes `likedByMe` on each review. Anonymous readers receive false; authenticated readers receive their own like state. Both book GET routes reject invalid supplied Authorization headers with 401. The catalog route `/api/books/` still returns its existing book list; reviews belong to the detail route.
 
 See [API examples](docs/API.md) for the refresh → profile → shelves flow and full response shapes.
+
+## Like commands
+
+Use authenticated `PUT /api/reviews/:id/like` to ensure a like exists and `DELETE /api/reviews/:id/like` to ensure it is absent. Both return 200 with `{ "data": { "reviewId": "...", "liked": true, "likesCount": 1 } }` (with `liked: false` for DELETE). Repeating the same command preserves that reader's desired state, including concurrent retries. The previous POST toggle now returns 405 with `Allow: PUT, DELETE`; frontend callers must use the new methods. See [like contracts and retry examples](docs/API.md#shelves-and-reviews).
 
 ## Database design
 
