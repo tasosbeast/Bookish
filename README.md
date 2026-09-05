@@ -14,9 +14,27 @@ The committed initial migration creates all tables, including refresh sessions, 
 
 ## Verification
 
-`npm test` runs validation, HTTP security, JWT and retry tests without a database. `npm run test:integration` requires `TEST_DATABASE_URL` pointing at a migrated test database; without it the suite is explicitly skipped. For example in PowerShell, set `$env:TEST_DATABASE_URL='postgresql://bookish:bookish@localhost:5432/bookish_test'`, deploy migrations to that database using `DATABASE_URL`, then run the integration suite. Integration tests create and remove only their own fixtures.
+`npm test` runs validation, HTTP security, JWT and retry tests without a database. `npm run test:integration` requires `TEST_DATABASE_URL` pointing at a dedicated, migrated test database whose name ends in `_test`; without it the suite is explicitly skipped, which means integration verification is **incomplete**, not passed. Integration tests create and remove only their own fixtures. Never point tests or test migrations at a development or production database; never reset an existing database for verification.
 
-GitHub Actions provisions PostgreSQL and runs migrations and both suites. The integration suite checks signup/login, logout, refresh replay revocation, filtering/search, rating synchronization, clearing ratings and concurrent likes. No GitHub workflow run is implied by local verification.
+After provisioning an empty, dedicated `bookish_test` PostgreSQL database, run in a separate PowerShell session:
+
+```powershell
+$env:TEST_DATABASE_URL='postgresql://bookish:bookish@localhost:5432/bookish_test'
+$env:DATABASE_URL=$env:TEST_DATABASE_URL
+npm run db:deploy
+npm test
+npm run test:integration
+```
+
+GitHub Actions provisions PostgreSQL and runs migrations and both suites. The integration suite checks signup/login, logout, refresh replay revocation, filtering/search, rating synchronization, clearing ratings and concurrent likes. It also covers shelf filtering/pagination/user isolation, safe profile restoration after refresh, anonymous and personalized review like states, and invalid/revoked credentials on read endpoints. No GitHub workflow run is implied by local verification.
+
+## Frontend read endpoints
+
+- `GET /api/user-books?status=read&page=1&limit=20` requires a bearer access token and returns only that reader's shelf entries with nested book details and genres. Omit `status` for all shelves. Results sort by `updatedAt` descending, then `bookId` ascending. Existing shelf POST requests are unchanged.
+- `GET /api/auth/me` requires a bearer access token (including one issued by refresh) and returns `{ "user": { "id", "username", "email", "profilePicture", "bio" } }` with those five fields only.
+- `GET /api/books/:id?page=1&limit=20` includes `likedByMe` on each review. Anonymous readers receive false; authenticated readers receive their own like state. Both book GET routes reject invalid supplied Authorization headers with 401. The catalog route `/api/books/` still returns its existing book list; reviews belong to the detail route.
+
+See [API examples](docs/API.md) for the refresh → profile → shelves flow and full response shapes.
 
 ## Database design
 

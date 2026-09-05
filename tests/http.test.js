@@ -29,6 +29,16 @@ test('protected routes reject missing and malformed bearer tokens', async () => 
   await request(app).post('/api/user-books').send({}).expect(401);
   await request(app).post('/api/reviews').set('Authorization', 'Bearer invalid').send({}).expect(401);
 });
+test('profile and shelf reads require authentication; public books reject supplied invalid credentials', async () => {
+  for (const path of ['/api/auth/me', '/api/user-books']) {
+    await request(app).get(path).expect(401);
+  }
+  for (const path of ['/api/auth/me', '/api/user-books', '/api/books/', `/api/books/${randomUUID()}`]) {
+    for (const header of ['', 'Basic invalid', 'Bearer invalid']) {
+      await request(app).get(path).set('Authorization', header).expect(401);
+    }
+  }
+});
 test('JWT verification rejects wrong token type, tampering, expiration and algorithm', () => {
   const tokens = signTokens(randomUUID(), randomUUID(), new Date(Date.now() + 60000));
   assert.equal(verifyToken(tokens.accessToken, 'access').type, 'access');

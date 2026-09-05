@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { signupSchema, shelfSchema, booksSchema } from '../src/validators/index.js';
+import { signupSchema, shelfSchema, booksSchema, shelvesQuerySchema } from '../src/validators/index.js';
 
 test('signup normalizes identity but preserves password and enforces bcrypt byte limit', () => {
   const body = { username: '  Reader_1 ', email: ' READER@example.com ', password: '  strong password  ' };
@@ -23,5 +23,16 @@ test('pagination is bounded and sort fields are allowlisted', () => {
   assert.deepEqual(booksSchema.parse({ query: {} }).query, { page: 1, limit: 20, sort: 'rating', order: 'desc' });
   for (const query of [{ page: 0 }, { limit: 101 }, { sort: 'passwordHash' }, { q: ['a', 'b'] }]) {
     assert.equal(booksSchema.safeParse({ query }).success, false);
+  }
+});
+
+test('shelf queries bound pagination, validate status and reject client-supplied identity', () => {
+  assert.deepEqual(shelvesQuerySchema.parse({ query: {} }).query, { page: 1, limit: 20 });
+  for (const status of ['want_to_read', 'currently_reading', 'read']) {
+    assert.equal(shelvesQuerySchema.parse({ query: { status, page: '2', limit: '1' } }).query.status, status);
+  }
+  for (const query of [{ status: 'reading' }, { page: 10001 }, { limit: 0 }, { limit: 101 },
+    { page: 1.5 }, { userId: 'another-user' }, { status: ['read', 'want_to_read'] }]) {
+    assert.equal(shelvesQuerySchema.safeParse({ query }).success, false);
   }
 });

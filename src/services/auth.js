@@ -5,6 +5,11 @@ import { AppError } from '../lib/errors.js';
 import { digest, signTokens, verifyToken, REFRESH_SECONDS } from './tokens.js';
 
 const safeUser = { id: true, username: true, email: true, profilePicture: true, bio: true };
+export async function currentUser(userId) {
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: safeUser });
+  if (!user) throw new AppError(401, 'SESSION_EXPIRED', 'Session is no longer active');
+  return user;
+}
 // Real cost-equivalent comparison for unknown accounts, without hashing on every failed request.
 const dummyHash = await bcrypt.hash(randomUUID(), 12);
 

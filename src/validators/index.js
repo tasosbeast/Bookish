@@ -21,6 +21,10 @@ export const booksSchema = z.object({ query: z.object({
   order: z.enum(['asc', 'desc']).default('desc'),
 }).strict() });
 export const bookSchema = z.object({ params: z.object({ id: uuid }), query: z.object(pagination).strict() });
+export const shelvesQuerySchema = z.object({ query: z.object({
+  ...pagination,
+  status: z.enum(['want_to_read', 'currently_reading', 'read']).optional(),
+}).strict() });
 export const shelfSchema = z.object({ body: z.object({
   bookId: uuid,
   status: z.enum(['want_to_read', 'currently_reading', 'read']).optional(),

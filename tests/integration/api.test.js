@@ -30,7 +30,7 @@ test('PostgreSQL: authentication, search, rating synchronization and concurrent 
       const body = { username: `reader_${tag}_${i}`, email: `${tag}_${i}@example.com`, password: 'correct horse battery staple' };
       const result = await auth('signup', body).expect(201);
       userIds.push(result.body.user.id);
-      users.push({ body, token: result.body.accessToken, cookie: cookieOf(result) });
+      users.push({ body, profile: result.body.user, token: result.body.accessToken, cookie: cookieOf(result) });
       assert.equal(result.body.user.passwordHash, undefined);
       assert.match(result.headers['set-cookie'][0], /HttpOnly/);
       assert.match(result.headers['set-cookie'][0], /SameSite=Strict/);
@@ -43,7 +43,7 @@ test('PostgreSQL: authentication, search, rating synchronization and concurrent 
     const genre = await prisma.genre.create({ data: { name: tag, slug: tag } });
     genreId = genre.id;
     for (const data of [{ title: `50%_Book ${tag}`, publicationYear: 2024 }, { title: `Other ${tag}`, publicationYear: null }]) {
-      const book = await prisma.book.create({ data: { ...data, author: 'Test Author', bookGenres: { create: { genreId } } } });
+      const book = await prisma.book.create({ data: { ...data, author: 'Test Author', coverImageUrl: 'https://example.com/cover.jpg', bookGenres: { create: { genreId } } } });
       bookIds.push(book.id);
     }
     const post = (index, route, body) => request(app).post(`/api/${route}`).auth(users[index].token, { type: 'bearer' }).send(body);
@@ -78,9 +78,87 @@ test('PostgreSQL: authentication, search, rating synchronization and concurrent 
     const details = await request(app).get(`/api/books/${bookId}?limit=1`).expect(200);
     assert.equal(details.body.data.reviews.data[0].user.email, undefined);
     await request(app).get(`/api/books/${randomUUID()}`).expect(404);
+
+    const get = (index, path) => request(app).get(path).auth(users[index].token, { type: 'bearer' });
+    await t.test('shelves filter all statuses, paginate tied timestamps and isolate users', async () => {
+      await post(0, 'user-books', { bookId: bookIds[1], status: 'read' }).expect(200);
+      const timestamp = new Date('2026-01-01T00:00:00Z');
+      await prisma.userBook.updateMany({ where: { userId: userIds[0], bookId: { in: bookIds } }, data: { updatedAt: timestamp } });
+      const first = await get(0, '/api/user-books?limit=1&page=1').expect(200);
+      const second = await get(0, '/api/user-books?limit=1&page=2').expect(200);
+      assert.deepEqual([first.body.data[0].bookId, second.body.data[0].bookId], [...bookIds].sort());
+      assert.deepEqual(first.body.pagination, { page: 1, limit: 1, total: 2, totalPages: 2 });
+      assert.equal(first.headers['cache-control'], 'no-store');
+      for (const row of [first.body.data[0], second.body.data[0]]) {
+        assert.equal(row.book.id, row.bookId);
+        assert.equal(row.book.author, 'Test Author');
+        assert.equal(row.book.coverImageUrl, 'https://example.com/cover.jpg');
+        assert.deepEqual(row.book.genres, [{ id: genreId, name: tag, slug: tag }]);
+        assert.equal(row.book.averageRating, row.bookId === bookId ? 2 : null);
+        assert.equal(row.userRating, row.bookId === bookId ? 2 : null);
+        assert.ok(row.createdAt);
+        assert.equal(row.updatedAt, timestamp.toISOString());
+      }
+      assert.equal((await get(0, '/api/user-books?status=read').expect(200)).body.data[0].bookId, bookIds[1]);
+      assert.equal((await get(0, '/api/user-books?status=currently_reading').expect(200)).body.data[0].bookId, bookId);
+      assert.equal((await get(0, '/api/user-books?status=want_to_read').expect(200)).body.pagination.total, 0);
+      const other = await get(1, '/api/user-books?status=want_to_read').expect(200);
+      assert.equal(other.body.pagination.total, 2);
+      assert.ok(other.body.data.every(row => row.status === 'want_to_read' && row.userRating === null));
+      assert.equal((await get(2, '/api/user-books').expect(200)).body.pagination.total, 0);
+      assert.deepEqual((await get(0, '/api/user-books?page=3&limit=1').expect(200)).body.data, []);
+      for (const query of ['status=invalid', 'limit=101', 'page=0', `userId=${userIds[1]}`]) {
+        await get(0, `/api/user-books?${query}`).expect(400);
+      }
+    });
+
+    await t.test('review pages include only the requesting reader\'s like state', async () => {
+      const secondReview = await post(2, 'reviews', { bookId, rating: 3 }).expect(200);
+      const ids = [reviewId, secondReview.body.data.id].sort();
+      await prisma.review.updateMany({ where: { id: { in: ids } }, data: { createdAt: new Date('2026-01-01T00:00:00Z') } });
+      const anonymous = await request(app).get(`/api/books/${bookId}?limit=2`).expect(200);
+      assert.ok(anonymous.body.data.reviews.data.every(row => row.likedByMe === false));
+      const authenticated = await get(1, `/api/books/${bookId}?limit=2`).expect(200);
+      assert.deepEqual(authenticated.body.data.reviews.data.map(row => row.id), ids);
+      assert.equal(authenticated.body.data.reviews.pagination.total, 2);
+      assert.equal(authenticated.headers['cache-control'], 'no-store');
+      for (const row of authenticated.body.data.reviews.data) {
+        assert.equal(row.likedByMe, row.id === reviewId);
+        assert.deepEqual(Object.keys(row.user).sort(), ['id', 'profilePicture', 'username']);
+        assert.equal(row.likes, undefined);
+      }
+      for (let page = 1; page <= 2; page++) {
+        const result = await get(1, `/api/books/${bookId}?limit=1&page=${page}`).expect(200);
+        assert.equal(result.body.data.reviews.data[0].id, ids[page - 1]);
+        assert.equal(result.body.data.reviews.data[0].likedByMe, ids[page - 1] === reviewId);
+        assert.deepEqual(result.body.data.reviews.pagination, { page, limit: 1, total: 2, totalPages: 2 });
+      }
+      assert.ok((await get(0, `/api/books/${bookId}`).expect(200)).body.data.reviews.data.every(row => !row.likedByMe));
+      assert.deepEqual((await get(1, `/api/books/${bookId}?page=3&limit=1`).expect(200)).body.data.reviews.data, []);
+    });
+
+    await t.test('me returns exactly the signup/login safe profile', async () => {
+      for (const index of [0, 1]) {
+        const me = await get(index, '/api/auth/me').expect(200);
+        assert.deepEqual(me.body, { user: users[index].profile });
+        assert.equal(me.headers['cache-control'], 'no-store');
+      }
+    });
     // Rotation consumes the previous token; replay revokes the new token and all access tokens for this session.
     const rotated = await auth('refresh', {}, users[0].cookie).expect(200);
+    const restored = await request(app).get('/api/auth/me').auth(rotated.body.accessToken, { type: 'bearer' }).expect(200);
+    assert.deepEqual(restored.body, { user: users[0].profile });
     await auth('refresh', {}, users[0].cookie).expect(401);
     await auth('refresh', {}, cookieOf(rotated)).expect(401);
     await post(0, 'user-books', { bookId, status: 'read' }).expect(401);
+    await t.test('read endpoints reject invalid, logged-out and replay-revoked access tokens', async () => {
+      for (const path of ['/api/auth/me', '/api/user-books', '/api/books/', `/api/books/${bookId}`]) {
+        for (const token of ['invalid', loggedIn.body.accessToken, rotated.body.accessToken]) {
+          await request(app).get(path).auth(token, { type: 'bearer' }).expect(401);
+        }
+      }
+      await request(app).get('/api/auth/me').expect(401);
+      await request(app).get('/api/user-books').expect(401);
+      await request(app).get(`/api/books/${bookId}`).expect(200);
+    });
   });

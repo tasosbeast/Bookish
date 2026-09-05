@@ -2,7 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { AppError } from '../lib/errors.js';
 
 export const pageInfo = (page, limit, total) => ({ page, limit, total, totalPages: Math.ceil(total / limit) });
-const genres = { bookGenres: { select: { genre: { select: { id: true, name: true, slug: true } } } } };
+export const genres = { bookGenres: { select: { genre: { select: { id: true, name: true, slug: true } } } } };
 export function serializeBook(book) {
   const { bookGenres, ...fields } = book;
   return { ...fields, averageRating: book.averageRating === null ? null : Number(book.averageRating),
@@ -27,7 +27,7 @@ export async function listBooks(query) {
   ], { isolationLevel: 'RepeatableRead' });
   return { data: books.map(serializeBook), pagination: pageInfo(page, limit, total) };
 }
-export async function bookDetails(id, { page, limit }) {
+export async function bookDetails(id, { page, limit }, userId) {
   return prisma.$transaction(async tx => {
     const book = await tx.book.findUnique({ where: { id }, include: genres });
     if (!book) throw new AppError(404, 'BOOK_NOT_FOUND', 'Book not found');
@@ -36,6 +36,15 @@ export async function bookDetails(id, { page, limit }) {
       orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
       include: { user: { select: { id: true, username: true, profilePicture: true } } } });
     const total = await tx.review.count({ where });
-    return { data: { ...serializeBook(book), reviews: { data: reviews, pagination: pageInfo(page, limit, total) } } };
+    // One bounded query for the whole review page, within the same read snapshot.
+    const likes = userId && reviews.length ? await tx.reviewLike.findMany({
+      where: { userId, reviewId: { in: reviews.map(review => review.id) } },
+      select: { reviewId: true },
+    }) : [];
+    const likedIds = new Set(likes.map(like => like.reviewId));
+    return { data: { ...serializeBook(book), reviews: {
+      data: reviews.map(review => ({ ...review, likedByMe: likedIds.has(review.id) })),
+      pagination: pageInfo(page, limit, total),
+    } } };
   }, { isolationLevel: 'RepeatableRead' });
 }

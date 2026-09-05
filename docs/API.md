@@ -30,6 +30,7 @@ Send `X-Bookish-CSRF: 1` on **all auth POST requests**, including signup/login. 
 | POST /api/auth/login | `{ "email": "reader@example.com", "password": "a long unique passphrase" }` | 200, safe user + access token; refresh cookie |
 | POST /api/auth/refresh | No body; refresh cookie required | 200, new access token and rotated refresh cookie |
 | POST /api/auth/logout | No body; refresh cookie | 204, session revoked and cookie cleared |
+| GET /api/auth/me | No body; bearer access token required | 200, `{ "user": { "id": "...", "username": "reader_1", "email": "reader@example.com", "profilePicture": null, "bio": null } }` |
 
 Username/email are trimmed and lowercased; username is 3–30 ASCII letters/digits/underscores. Passwords are never trimmed and must be at least 12 characters and at most 72 UTF-8 bytes, avoiding bcrypt's silent truncation. Password hashes use bcrypt cost 12 and never appear in responses.
 
@@ -46,6 +47,21 @@ const response = await fetch('http://localhost:3000/api/auth/login', {
 const { accessToken } = await response.json();
 ```
 
+To restore a frontend session after reload, rotate the refresh cookie first, then use the new access token for profile and shelf reads. `/me` selects exactly the same five safe user fields as signup/login; it never returns password hashes or refresh-session data. It requires no CSRF header because it is a bearer-authenticated GET. Missing, invalid, expired or revoked credentials return 401. Profile and shelf responses use `Cache-Control: no-store`.
+
+```js
+const refreshed = await fetch('http://localhost:3000/api/auth/refresh', {
+  method: 'POST', credentials: 'include', headers: { 'X-Bookish-CSRF': '1' },
+});
+if (!refreshed.ok) throw new Error('Please sign in again');
+const { accessToken } = await refreshed.json();
+const headers = { Authorization: `Bearer ${accessToken}` };
+const profileResponse = await fetch('http://localhost:3000/api/auth/me', { headers });
+const { user } = await profileResponse.json();
+const shelvesResponse = await fetch('http://localhost:3000/api/user-books?status=read&page=1&limit=20', { headers });
+const shelves = await shelvesResponse.json();
+```
+
 ## Books
 
 `GET /api/books?page=1&limit=20&genre=fantasy&sort=rating&order=desc&q=hobbit`
@@ -60,9 +76,53 @@ Response: `{ "data": [ ...booksWithGenres ], "pagination": { "page": 1, "limit":
 
 `GET /api/books/:id?page=1&limit=20` returns `{ "data": { ...book, "genres": [...], "reviews": { "data": [...], "pagination": {...} } } }`. Pagination applies to reviews. Reviews are newest first with ID as tie-breaker. Reviewer data includes only ID, username and profile picture. Unknown books return 404.
 
+Each review also has `likedByMe: true | false`. Without an Authorization header it is always false, even if the browser has a refresh cookie. Supply `Authorization: Bearer <accessToken>` to obtain the current reader's state. Both `/api/books/` and `/api/books/:id` validate any supplied Authorization header and active session; malformed, empty, expired or revoked credentials return 401 instead of falling back to anonymous access. The catalog's response shape is unchanged and does not embed reviews.
+
+For example, `GET /api/books/:id?limit=1` can return a review containing:
+
+```json
+{
+  "id": "11111111-1111-4111-8111-111111111111",
+  "rating": 4,
+  "reviewText": "Thoughtful and engaging.",
+  "likesCount": 2,
+  "likedByMe": true,
+  "user": { "id": "22222222-2222-4222-8222-222222222222", "username": "reader_1", "profilePicture": null }
+}
+```
+
+Like states are fetched in one query restricted to the current reader and returned review IDs, inside the same repeatable-read transaction. No liker identities or session fields are exposed. Detail responses use `Cache-Control: no-store` and `Vary: Authorization` to prevent sharing personalized responses.
+
 ## Shelves and reviews
 
-All following routes require `Authorization: Bearer <accessToken>` and return 200 for either create or update.
+All following routes require `Authorization: Bearer <accessToken>`. GET returns 200; POST returns 200 for either create or update.
+
+`GET /api/user-books?status=read&page=1&limit=20`
+
+Returns only the user identified by the verified access token. `status` is optional and accepts `want_to_read`, `currently_reading` or `read`. `page` is 1–10000 (default 1); `limit` is 1–100 (default 20). Entries sort by `updatedAt` descending, then `bookId` ascending, including when timestamps tie. Count and page share a repeatable-read snapshot. Unknown parameters, including a caller-supplied `userId`, return 400. An empty or out-of-range page returns an empty `data` array with accurate pagination metadata.
+
+```json
+{
+  "data": [{
+    "bookId": "11111111-1111-4111-8111-111111111111",
+    "status": "read",
+    "userRating": 4,
+    "createdAt": "2026-09-06T00:00:00.000Z",
+    "updatedAt": "2026-09-06T00:00:00.000Z",
+    "book": {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "title": "Example Book",
+      "author": "Example Author",
+      "coverImageUrl": null,
+      "averageRating": 4.25,
+      "genres": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Fantasy", "slug": "fantasy" }]
+    }
+  }],
+  "pagination": { "page": 1, "limit": 20, "total": 1, "totalPages": 1 }
+}
+```
+
+The nested book also includes its other existing scalar fields (description, ISBN, publication year, ratings count and timestamps). `userRating` and `averageRating` can be null; the latter is serialized as a JSON number when rated. Only the current reader's shelf is returned, and no user/session relation is included.
 
 `POST /api/user-books`
 
