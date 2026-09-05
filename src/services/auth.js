@@ -24,11 +24,14 @@ async function newSession(tx, userId) {
 export async function signup(data) {
   const passwordHash = await bcrypt.hash(data.password, 12);
   return prisma.$transaction(async tx => {
-    // Existing databases may contain mixed-case identities.
-    const existing = await tx.user.findFirst({ where: { OR: [
-      { email: { equals: data.email, mode: 'insensitive' } },
-      { username: { equals: data.username, mode: 'insensitive' } },
-    ] }, select: { id: true } });
+    // Match the lower(...) unique indexes, including legacy mixed-case identities.
+    // Prisma insensitive equals uses ILIKE, where '_' and '%' are patterns.
+    const [existing] = await tx.$queryRaw`
+      SELECT id FROM users
+      WHERE lower(email) = lower(${data.email})
+         OR lower(username) = lower(${data.username})
+      LIMIT 1
+    `;
     if (existing) throw new AppError(409, 'IDENTITY_EXISTS', 'Username or email is already registered');
     const user = await tx.user.create({ data: { username: data.username, email: data.email, passwordHash }, select: safeUser });
     return { user, ...await newSession(tx, user.id) };
@@ -36,7 +39,14 @@ export async function signup(data) {
 }
 
 export async function login(data) {
-  const user = await prisma.user.findFirst({ where: { email: { equals: data.email, mode: 'insensitive' } } });
+  // Tagged query parameters preserve literal equality without SQL interpolation.
+  const [user] = await prisma.$queryRaw`
+    SELECT id, username, email, password_hash AS "passwordHash",
+           profile_picture AS "profilePicture", bio
+    FROM users
+    WHERE lower(email) = lower(${data.email})
+    LIMIT 1
+  `;
   const valid = await bcrypt.compare(data.password, user?.passwordHash ?? dummyHash);
   if (!user || !valid) throw new AppError(401, 'INVALID_CREDENTIALS', 'Invalid email or password');
   const session = await newSession(prisma, user.id);

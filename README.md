@@ -29,7 +29,7 @@ npm run test:integration
 
 Stop the test server when finished with `docker compose -f compose.test.yaml stop`. Its data persists in the dedicated test volume. For a separately provisioned test database, use its connection URL instead; the database name must still end in `_test`.
 
-Local verification on 2026-09-06: the initial migration deployed successfully to the dedicated PostgreSQL 17 test server; all 12 unit/HTTP tests and all 5 integration test entries passed, with zero skips. The development database runs separately from the test server.
+Local verification on 2026-09-06: the initial migration deployed successfully to the dedicated PostgreSQL 17 test server; all 12 unit/HTTP tests and all 11 integration test entries passed, with zero skips. Integration coverage includes literal email/username equality, wildcard-shaped inputs and legacy mixed-case identities. The development database runs separately from the test server.
 
 GitHub Actions provisions PostgreSQL and runs migrations and both suites. The integration suite checks signup/login, logout, refresh replay revocation, filtering/search, rating synchronization, clearing ratings and concurrent likes. It also covers shelf filtering/pagination/user isolation, safe profile restoration after refresh, anonymous and personalized review like states, and invalid/revoked credentials on read endpoints. No GitHub workflow run is implied by local verification.
 
@@ -74,7 +74,7 @@ Compute `Book.averageRating` and `ratingsCount` from non-null UserBook ratings, 
 
 Maintain likesCount from ReviewLike rows in the like/unlike transaction, with the same concurrency protection. User deletion must collect affected book and review IDs before cascading and refresh surviving book averages/counts and review like counts in the same transaction. Direct database writes bypass these service rules; use database triggers instead if multiple independent writers will modify these tables.
 
-Hash passwords with a password-hashing library; never store plaintext or expose passwordHash in public API responses. Trim identity input and use a consistent email/username normalization policy. The lower-case expression indexes reject case-only duplicates; Prisma's ordinary `findUnique` remains case-sensitive unless input is normalized consistently. `@updatedAt` is maintained by Prisma; direct SQL updates must set updated_at themselves.
+Hash passwords with a password-hashing library; never store plaintext or expose passwordHash in public API responses. Trim identity input and use a consistent email/username normalization policy. Signup and login use parameterized `lower(column) = lower(value)` identity equality, aligned with the lower-case expression indexes that reject case-only duplicates. This supports legacy mixed-case identities and treats underscores literally, unlike Prisma's insensitive `equals` filter, which generates ILIKE. `@updatedAt` is maintained by Prisma; direct SQL updates must set updated_at themselves.
 
 ## Indexes and query patterns
 
