@@ -1,0 +1,125 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum ReadingStatus {
+  want_to_read
+  currently_reading
+  read
+}
+
+model User {
+  id             String       @id @default(uuid()) @db.Uuid
+  username       String       @unique @db.VarChar(30)
+  email          String       @unique @db.VarChar(254)
+  passwordHash   String       @map("password_hash") @db.Text
+  profilePicture String?      @map("profile_picture") @db.Text
+  bio            String?      @db.Text
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  reviews        Review[]
+  userBooks      UserBook[]
+  reviewLikes    ReviewLike[]
+
+  @@map("users")
+}
+
+// One record represents one edition; ISBNs identify editions, not abstract works.
+model Book {
+  id              String      @id @default(uuid()) @db.Uuid
+  title           String      @db.Text
+  author          String      @db.Text
+  description     String?     @db.Text
+  coverImageUrl   String?     @map("cover_image_url") @db.Text
+  isbn            String?     @unique @db.VarChar(13)
+  publicationYear Int?        @map("publication_year") @db.SmallInt
+  // Cache of AVG(UserBook.userRating); null means no ratings.
+  averageRating   Decimal?    @map("average_rating") @db.Decimal(3, 2)
+  ratingsCount    Int         @default(0) @map("ratings_count")
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  reviews         Review[]
+  userBooks       UserBook[]
+  bookGenres      BookGenre[]
+
+  @@index([publicationYear, id])
+  @@index([averageRating(sort: Desc), id])
+  @@map("books")
+}
+
+model Review {
+  id         String       @id @default(uuid()) @db.Uuid
+  userId     String       @map("user_id") @db.Uuid
+  bookId     String       @map("book_id") @db.Uuid
+  rating     Int          @db.SmallInt
+  reviewText String?      @map("review_text") @db.Text
+  likesCount Int          @default(0) @map("likes_count")
+  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  book       Book         @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  likes      ReviewLike[]
+
+  @@unique([userId, bookId])
+  @@index([bookId, createdAt(sort: Desc), id])
+  @@index([userId, createdAt(sort: Desc), id])
+  @@map("reviews")
+}
+
+model UserBook {
+  userId     String        @map("user_id") @db.Uuid
+  bookId     String        @map("book_id") @db.Uuid
+  status     ReadingStatus @default(want_to_read)
+  // Canonical user rating, including ratings without a written review.
+  userRating Int?          @map("user_rating") @db.SmallInt
+  createdAt  DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  book       Book          @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@id([userId, bookId])
+  @@index([userId, status, updatedAt(sort: Desc), bookId])
+  @@index([bookId])
+  @@map("user_books")
+}
+
+model Genre {
+  id         String      @id @default(uuid()) @db.Uuid
+  name       String      @unique @db.VarChar(80)
+  slug       String      @unique @db.VarChar(100)
+  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  bookGenres BookGenre[]
+
+  @@map("genres")
+}
+
+model BookGenre {
+  bookId    String   @map("book_id") @db.Uuid
+  genreId   String   @map("genre_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  book      Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  genre     Genre    @relation(fields: [genreId], references: [id], onDelete: Cascade)
+
+  @@id([bookId, genreId])
+  @@index([genreId, bookId])
+  @@map("book_genres")
+}
+
+// Records who liked a review and prevents duplicate likes.
+model ReviewLike {
+  userId    String   @map("user_id") @db.Uuid
+  reviewId  String   @map("review_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  review    Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@id([userId, reviewId])
+  @@index([reviewId])
+  @@map("review_likes")
+}
