@@ -16,15 +16,20 @@ The committed initial migration creates all tables, including refresh sessions, 
 
 `npm test` runs validation, HTTP security, JWT and retry tests without a database. `npm run test:integration` requires `TEST_DATABASE_URL` pointing at a dedicated, migrated test database whose name ends in `_test`; without it the suite is explicitly skipped, which means integration verification is **incomplete**, not passed. Integration tests create and remove only their own fixtures. Never point tests or test migrations at a development or production database; never reset an existing database for verification.
 
-After provisioning an empty, dedicated `bookish_test` PostgreSQL database, run in a separate PowerShell session:
+With Docker Desktop running, start the dedicated test server and run in a separate PowerShell session. `compose.test.yaml` uses port 55433 and its own volume, separate from the development database on port 5432:
 
 ```powershell
-$env:TEST_DATABASE_URL='postgresql://bookish:bookish@localhost:5432/bookish_test'
+docker compose -f compose.test.yaml up -d --wait
+$env:TEST_DATABASE_URL='postgresql://bookish:bookish@localhost:55433/bookish_test'
 $env:DATABASE_URL=$env:TEST_DATABASE_URL
 npm run db:deploy
 npm test
 npm run test:integration
 ```
+
+Stop the test server when finished with `docker compose -f compose.test.yaml stop`. Its data persists in the dedicated test volume. For a separately provisioned test database, use its connection URL instead; the database name must still end in `_test`.
+
+Local verification on 2026-09-06: the initial migration deployed successfully to the dedicated PostgreSQL 17 test server; all 12 unit/HTTP tests and all 5 integration test entries passed, with zero skips. The development database runs separately from the test server.
 
 GitHub Actions provisions PostgreSQL and runs migrations and both suites. The integration suite checks signup/login, logout, refresh replay revocation, filtering/search, rating synchronization, clearing ratings and concurrent likes. It also covers shelf filtering/pagination/user isolation, safe profile restoration after refresh, anonymous and personalized review like states, and invalid/revoked credentials on read endpoints. No GitHub workflow run is implied by local verification.
 

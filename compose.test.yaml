@@ -1,0 +1,20 @@
+# Dedicated test server: separate port and volume from compose.yaml's development DB.
+name: bookish-test
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: bookish
+      POSTGRES_PASSWORD: bookish
+      POSTGRES_DB: bookish_test
+    ports:
+      - "127.0.0.1:55433:5432"
+    volumes:
+      - bookish_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bookish -d bookish_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+volumes:
+  bookish_test_data:
