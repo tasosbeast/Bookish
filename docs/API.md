@@ -175,3 +175,37 @@ Errors have `{ "error": { "code": "...", "message": "..." } }`. Validation error
 The Prisma generator uses `prisma-client-js` to produce JavaScript for the requested plain `.js` Express backend. Prisma 7's PostgreSQL driver adapter is configured in `src/lib/prisma.js`. Tooling dependency overrides pin patched `deepmerge-ts` and `mysql2` versions; recheck them when upgrading Prisma.
 
 References: [Prisma driver adapters](https://docs.prisma.io/docs/orm/v7/core-concepts/supported-databases/database-drivers), [Prisma transactions and retries](https://www.prisma.io/docs/orm/v6/prisma-client/queries/transactions).
+## Exact personal book state
+
+`GET /api/user-books/:bookId` requires a verified access token and active session. The UUID identifies an existing book; identity always comes from the token. Query parameters are not accepted. The response has `Cache-Control: no-store`.
+
+```http
+GET /api/user-books/11111111-1111-4111-8111-111111111111
+Authorization: Bearer <access-token>
+```
+
+```json
+{
+  "data": {
+    "bookId": "11111111-1111-4111-8111-111111111111",
+    "shelf": {
+      "bookId": "11111111-1111-4111-8111-111111111111",
+      "status": "currently_reading",
+      "userRating": 4,
+      "createdAt": "2026-09-06T10:00:00.000Z",
+      "updatedAt": "2026-09-06T10:00:00.000Z"
+    },
+    "review": {
+      "id": "22222222-2222-4222-8222-222222222222",
+      "bookId": "11111111-1111-4111-8111-111111111111",
+      "rating": 4,
+      "reviewText": "A thoughtful read.",
+      "likesCount": 0,
+      "createdAt": "2026-09-06T10:00:00.000Z",
+      "updatedAt": "2026-09-06T10:00:00.000Z"
+    }
+  }
+}
+```
+
+`shelf` and `review` are independently `null` when the current reader has no corresponding record. No user credentials or session fields are returned. Invalid UUID/query input returns 400, missing/invalid/revoked credentials return 401, and an unknown book returns 404. The read uses a consistent transaction snapshot. Use this endpoint to initialize editing forms: neither a paginated shelf nor a public review page can establish that personal data is absent. Existing POST shelf/review contracts remain unchanged.

@@ -45,6 +45,16 @@ See [API examples](docs/API.md) for the refresh → profile → shelves flow and
 
 Use authenticated `PUT /api/reviews/:id/like` to ensure a like exists and `DELETE /api/reviews/:id/like` to ensure it is absent. Both return 200 with `{ "data": { "reviewId": "...", "liked": true, "likesCount": 1 } }` (with `liked: false` for DELETE). Repeating the same command preserves that reader's desired state, including concurrent retries. The previous POST toggle now returns 405 with `Allow: PUT, DELETE`; frontend callers must use the new methods. See [like contracts and retry examples](docs/API.md#shelves-and-reviews).
 
+## React frontend
+
+The reading app lives in `frontend/` and uses React, Vite, Tailwind CSS and React Router. It includes discovery, book details, personal shelves, reviews, likes, login and signup. Follow [frontend setup and verification](frontend/README.md) to run both applications.
+
+With the backend configured as above, run `npm run dev` in the project root. In another terminal, run `npm ci --prefix frontend` and `npm run dev --prefix frontend`, then open **http://localhost:5173**. The default API is `http://localhost:3000/api`; configure `VITE_API_BASE_URL` in `frontend/.env` when needed. Use the same browser hostname consistently and keep `CLIENT_ORIGIN` aligned with the frontend origin.
+
+The frontend displays the real catalog, including an empty state when there are no books. No sample books are injected into the development database.
+
+For reliable editing, authenticated `GET /api/user-books/:bookId` returns the reader's exact shelf and review, independently of list pagination. Both are `null` when absent; an unknown book returns 404. See [API contracts](docs/API.md).
+
 ## Database design
 
 Target: Node.js, Express, PostgreSQL, Prisma ORM 7. Prisma field names are camelCase; `@map` / `@@map` expose snake_case database columns and tables. UUIDs identify entities; join tables use compound primary keys. All timestamps include time zones.

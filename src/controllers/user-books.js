@@ -1,5 +1,8 @@
 import { saveShelf } from '../services/ratings.js';
-import { listShelves } from '../services/user-books.js';
+import { listShelves, personalBook } from '../services/user-books.js';
+export async function detail(req, res) {
+  res.set('Cache-Control', 'no-store').json(await personalBook(req.auth.userId, req.validated.params.bookId));
+}
 export async function list(req, res) {
   res.set('Cache-Control', 'no-store').json(await listShelves(req.auth.userId, req.validated.query));
 }
