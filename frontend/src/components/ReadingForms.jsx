@@ -1,11 +1,12 @@
 import { useId, useState } from 'react';
 import { api } from '../lib/api.js';
 import { ErrorNotice, Icon, statuses } from './shared.jsx';
+import { useDraftValue } from '../hooks/useDraftValue.js';
 
 export function ShelfForm({ personal, onSaved }) {
   const id = useId();
-  const [status, setStatus] = useState(personal.shelf?.status ?? 'want_to_read');
-  const [rating, setRating] = useState(personal.shelf?.userRating?.toString() ?? '');
+  const [status, setStatus] = useDraftValue(personal.shelf?.status ?? 'want_to_read');
+  const [rating, setRating] = useDraftValue(personal.shelf?.userRating?.toString() ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   async function save(event) {
@@ -20,14 +21,15 @@ export function ShelfForm({ personal, onSaved }) {
 
 export function ReviewForm({ personal, onSaved }) {
   const id = useId();
-  const [rating, setRating] = useState((personal.review?.rating ?? personal.shelf?.userRating)?.toString() ?? '');
-  const [text, setText] = useState(personal.review?.reviewText ?? '');
+  const [rating, setRating] = useDraftValue((personal.review?.rating ?? personal.shelf?.userRating)?.toString() ?? '');
+  const [text, setText] = useDraftValue(personal.review?.reviewText ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   async function save(event) {
     event.preventDefault(); setBusy(true); setError(null);
     try {
-      await api('/reviews', { method: 'POST', auth: 'required', body: { bookId: personal.bookId, rating: Number(rating), reviewText: text.trim() || null } });
+      const result = await api('/reviews', { method: 'POST', auth: 'required', body: { bookId: personal.bookId, rating: Number(rating), reviewText: text.trim() || null } });
+      setText(result.data.reviewText ?? '');
       onSaved('Your review has been saved.');
     } catch (error) { setError(error); } finally { setBusy(false); }
   }

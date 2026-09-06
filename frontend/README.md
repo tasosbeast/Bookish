@@ -17,6 +17,7 @@ Open http://localhost:5173. The API defaults to http://localhost:3000/api. Copy 
 
 - Discovery keeps `q`, `genre`, `sort`, `order` and `page` in the URL; search submits with Enter or the search button. Changing filters resets pagination. Genre labels come directly from API books and link to filtering; there is no fabricated genre catalog. Requests are cancelled and stale results discarded on navigation/filter changes.
 - Details use the public paginated reviews and authenticated `GET /api/user-books/:bookId` for exact personal data. Missing entries on a list page never mean the reader has no review. Shelf and review writes refetch affected data; clearing a rating is disabled when a review exists. Likes use PUT and DELETE only.
+- Detail forms remain mounted during likes, review pagination and refresh failures. Edited fields retain their drafts; untouched fields follow refreshed server values. Drafts are scoped to the current book and reader and are not persisted across leaving the page or reloading the browser.
 - My books provides all three statuses and All, with bounded pagination and exact personal reads before editing. There is no unsupported delete-review or remove-book action.
 - Empty catalogs and missing covers are represented honestly. No fixtures or sample success responses are embedded in the application.
 
@@ -34,6 +35,8 @@ npm run build --prefix frontend
 ```
 
 Tests cover within-tab coalescing, shared-lock serialization, cross-tab logout, memory-only credentials, refresh failures, one-retry limits, account changes and cancellation. The root integration suite covers real PostgreSQL, including the focused personal-book read addition. See the root README for the dedicated `_test` database commands; never run integration fixtures against development or production. CI runs both frontend checks and the backend suites.
+
+The mounted React regression test also checks draft retention through delayed likes, review pagination, shelf writes, failed refreshes and retries, including field synchronization and account/book isolation. It uses jsdom with mocked HTTP responses and does not require or modify a database.
 
 `npm run preview --prefix frontend` previews the production bundle at port 5173 after building (stop the dev server first). Vite's preview server is for local verification, not production hosting.
 
