@@ -172,6 +172,12 @@
 @media (max-width: 760px) {
   .detail-copy .reading-form { margin-left: 0; }
   .detail-copy .form-grid { grid-template-columns: 1fr; }
+  .genre, .like-button, .text-button, .button.compact, .back-link, .login-link {
+    min-height: 44px;
+    min-width: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
 }
 @media (max-width: 480px) {
   .shelf-row-main { display: grid; grid-template-columns: 80px minmax(0, 1fr); }

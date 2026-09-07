@@ -32,7 +32,7 @@ test('book forms preserve drafts through likes, review pages, shelf saves and fa
   let user = { id: 'reader-a', username: 'reader' };
   let personal = { bookId, shelf: { status: 'want_to_read', userRating: 4, updatedAt: stamp },
     review: { id: 'own', rating: 4, reviewText: 'Saved text', updatedAt: stamp } };
-  let hold = false, liked = false, pending = [], writes = [];
+  let hold = false, liked = false, failWrite = false, pending = [], writes = [];
   const response = (data, status = 200) => new Response(JSON.stringify(data), { status });
   const read = url => {
     if (url.pathname.startsWith('/api/user-books/')) return { data: personal };
@@ -48,6 +48,10 @@ test('book forms preserve drafts through likes, review pages, shelf saves and fa
       accessToken: `header.${btoa(JSON.stringify({ exp: Date.now() / 1000 + 900 }))}.signature`, expiresIn: 900 });
     if (options.method === 'PUT') { liked = true; return response({ data: { liked: true } }); }
     if (options.method === 'POST') {
+      if (failWrite) {
+        failWrite = false;
+        return response({ error: { code: 'UNAVAILABLE', message: 'Please retry' } }, 503);
+      }
       const body = JSON.parse(options.body); writes.push({ path: url.pathname, body });
       if (url.pathname === '/api/user-books') {
         personal = { ...personal, shelf: { ...personal.shelf, ...body, updatedAt: 'changed-shelf' },
@@ -118,7 +122,14 @@ test('book forms preserve drafts through likes, review pages, shelf saves and fa
   assert.equal(writes[0].body.status, 'currently_reading');
   await click('Previous'); preserved(); await flush(true); preserved();
   await click('Try again'); await flush(); preserved();
+  failWrite = true;
+  const successfulWrites = writes.length;
+  await click('Save review'); preserved();
+  assert.equal(writes.length, successfulWrites, 'failed save must not pretend to persist a review');
+  assert.equal(reviewForm.querySelector('fieldset').disabled, false, 'failed save unlocks the form');
+  assert.ok(reviewForm.querySelector('[role="alert"]').textContent.includes('Please retry'));
   await click('Save review'); await flush();
+  assert.equal(reviewForm.querySelector('[role="alert"]'), null, 'successful retry clears the error');
   assert.equal(writes.at(-1).body.reviewText, draft);
   assert.equal(writes.at(-1).body.rating, 2);
   assert.equal(shelfForm.querySelectorAll('select')[1].value, '2', 'clean shelf rating follows a saved review');
