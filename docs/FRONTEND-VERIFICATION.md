@@ -7,9 +7,9 @@
 | `npm test --prefix frontend` | 9 passed, 0 failed, 0 skipped |
 | `npm run build --prefix frontend` | Production bundle built successfully |
 | `npm test` | 14 passed, 0 failed, 0 skipped |
-| `npm run test:integration` | Failed: 0 passed, 8 failed, 0 skipped; PostgreSQL connection refused |
+| `npm run test:integration` | Retry after Docker repair: 16 passed, 0 failed, 0 skipped |
 
-The integration attempt explicitly targeted `bookish_test` on port 55433. Docker Desktop could not start its Linux engine: its log reports failure to access/rename `Docker/run/sailor-ingest.sock`. The database was unavailable, and setup failures prevented the full nested test suite from running. **Current PostgreSQL integration verification is incomplete.** The earlier milestone's 16 passing integration tests are historical results, not a pass for this run. No development or production database was reset or used for fixtures.
+The integration retry explicitly targeted `bookish_test` on port 55433 after Docker was repaired. The dedicated container passed its health check, and `prisma migrate deploy` confirmed there were no pending migrations. All 16 integration tests passed with no skips. The initial connection-refused attempt remains a historical infrastructure failure; current PostgreSQL integration verification is complete. No development or production database was reset or used for fixtures.
 
 The frontend tests use controlled HTTP responses and browser-lock fixtures. The mounted React regression covers draft retention during refetches, account/book isolation, and now a failed review save: the draft survives, the form unlocks, and a successful retry clears the error. These are automated component/client checks, not real-browser end-to-end tests.
 
@@ -39,10 +39,9 @@ The harness now provides two genres, 20 books, 13 shelf entries and an existing 
 
 ## Remaining verification and recovery
 
-- Restore Docker Desktop, start `compose.test.yaml`, apply committed migrations to the dedicated test database and rerun the integration suite. Do not reset Docker volumes or use a development database as a fallback.
 - Finish manual book-to-book draft isolation, the Want to read filter, narrow My Books layout, keyboard/focus inspection and the final desktop/mobile visual pass. Book/account isolation already has automated regression coverage; the unfinished manual book-switch check is not reported as passed.
-- The interrupted browser harness run `2147c0c2` could not clean up after the database became unavailable. Its disposable fixtures remain pending cleanup: genres `browser-fiction-2147c0c2` and `browser-essays-2147c0c2`, their books, and identities `ui_2147c0c2@example.com`, `new_2147c0c2@example.com`, and `critic_2147c0c2_1@example.com` through `critic_2147c0c2_12@example.com`. After restoring the test database, delete only those exact fixtures (books first, then users and genres). Do not broadly clear tables. The run's temporary control file is `bookish-browser-2147c0c2.control` in the Windows temporary directory; its server is no longer running.
+- After Docker recovery, the exact fixtures from interrupted run `2147c0c2` were removed from the dedicated test database: 20 books, 14 users and 2 genres. No broad table cleanup was used.
 - Docker recovery attempts backed up inactive runtime socket directories to `Docker/run.bookish-backup-20260907230259` and `docker-secrets-engine.bookish-backup-20260907230448` under Local AppData. This did not reset database volumes and did not restore engine availability.
 - No Safari/Firefox or physical-device verification was performed. HTTPS, same-site API hosting, CORS and production configuration still need deployment-environment verification. Nothing was deployed or published.
 
-This milestone remains partially verified until the service blocker and the checks above are resolved.
+The Docker/PostgreSQL blocker is resolved. The remaining manual browser checks above still need completion before this milestone is fully verified.
