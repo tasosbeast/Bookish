@@ -48,7 +48,9 @@ test('My Books confirms removal, explains review conflicts and refreshes the she
   await session.authenticate('login', {});
   root = createRoot(document.getElementById('root'));
   await act(async () => root.render(h(MemoryRouter, { initialEntries: ['/my-books'] }, h(MyBooks))));
-  await click('Update reading');
+  const update = [...document.querySelectorAll('button')].find(button => button.textContent.trim() === `Update reading for ${book.title}`);
+  assert.ok(update, 'the shelf editor control identifies its book');
+  await act(async () => update.click());
   await click('Remove from My Books');
   assert.equal(confirmations, 1); assert.equal(removals, 1);
   assert.ok(document.body.textContent.includes('Remove your review before removing this book from My Books'));

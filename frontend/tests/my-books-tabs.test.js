@@ -43,9 +43,12 @@ test('My Books keeps the loaded shelf visible while a status tab reloads', { tim
   root = createRoot(document.getElementById('root'));
   await act(async () => root.render(h(MemoryRouter, { initialEntries: ['/my-books'] }, h(MyBooks))));
   assert.ok(document.body.textContent.includes(allBook.title));
+  assert.equal([...document.querySelectorAll('.shelf-tabs button')].find(button => button.textContent.trim() === 'All books').getAttribute('aria-pressed'), 'true');
   const initialList = document.querySelector('.shelf-list');
   await act(async () => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Want to read').click());
   assert.equal(document.querySelector('.shelf-tabs button.selected').textContent, 'Want to read');
+  assert.equal([...document.querySelectorAll('.shelf-tabs button')].find(button => button.textContent.trim() === 'Want to read').getAttribute('aria-pressed'), 'true');
+  assert.equal([...document.querySelectorAll('.shelf-tabs button')].find(button => button.textContent.trim() === 'All books').getAttribute('aria-pressed'), 'false');
   assert.equal(document.querySelector('.shelf-list'), initialList);
   assert.ok(document.body.textContent.includes(allBook.title));
   assert.ok(!document.body.textContent.includes('Finding your next chapter…'));

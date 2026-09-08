@@ -56,6 +56,7 @@ test('Discover defaults to newest published and clearing search preserves explic
   assert.deepEqual([...document.querySelectorAll('.active-filter-label')].map(label => label.textContent), ['mistake', 'Fantasy', 'Jane Austen']);
   const clearAuthor = [...document.querySelectorAll('.active-filter')].find(button => button.textContent.includes('Jane Austen'));
   assert.ok(clearAuthor, 'active author has a visible clear action');
+  assert.equal(clearAuthor.getAttribute('aria-label'), 'Clear author filter: Jane Austen');
   await act(async () => clearAuthor.click());
   assert.equal(document.querySelector('#location').textContent, '?q=mistake&genre=fantasy&sort=publicationYear&order=asc');
   await act(async () => genreButton('Romance').click());
@@ -67,6 +68,7 @@ test('Discover defaults to newest published and clearing search preserves explic
   assert.ok(genreButton('All').classList.contains('active'));
   const clear = [...document.querySelectorAll('button')].find(button => button.textContent.includes('mistake'));
   assert.ok(clear, 'active search has a visible clear action');
+  assert.equal(clear.getAttribute('aria-label'), 'Clear search filter: mistake');
   await act(async () => clear.click());
   assert.equal(document.querySelector('#location').textContent, '?sort=publicationYear&order=asc');
   assert.equal(document.querySelector('#book-search').value, '');
