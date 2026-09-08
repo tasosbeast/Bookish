@@ -20,7 +20,7 @@ export default function Layout() {
       <Link to="/" className="brand" aria-label="Bookish home"><Icon size={29} /><span>bookish<span className="brand-dot">.</span></span></Link>
       <nav className="main-nav" aria-label="Main navigation"><NavLink to="/" end>Discover</NavLink><NavLink to="/my-books">My books</NavLink></nav>
       <div className="account-nav">{auth.status === 'restoring' ? <span className="muted small">Opening your bookshelf…</span> : auth.user ? <>
-        <span className="reader-name" title={auth.user.username}><span className="avatar">{auth.user.username.slice(0, 1).toUpperCase()}</span><span>{auth.user.username}</span></span>
+        <Link className="reader-name" to="/account" title="View account"><span className="avatar">{auth.user.username.slice(0, 1).toUpperCase()}</span><span>{auth.user.username}</span></Link>
         <button className="text-button" disabled={busy} onClick={logout}>Sign out</button>
       </> : <><Link className="login-link" to="/login">Log in</Link><Link className="button compact" to="/signup">Join Bookish</Link></>}</div>
     </div></header>
