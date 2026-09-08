@@ -193,6 +193,10 @@
   .discover-page .active-filter { min-height: 44px; flex: 1 1 auto; }
 }
 @media (max-width: 480px) {
-  .shelf-row-main { display: grid; grid-template-columns: 80px minmax(0, 1fr); }
-  .shelf-personal { grid-column: 2; margin: 0; min-width: 0; }
+  .my-books-page .shelf-tabs { gap: 12px; margin: 28px 0 18px; overscroll-behavior-x: contain; scroll-snap-type: x proximity; scrollbar-width: thin; }
+  .my-books-page .shelf-tabs button { min-height: 44px; padding-inline: 4px; scroll-snap-align: start; }
+  .my-books-page .shelf-row { padding: 22px 0; }
+  .my-books-page .shelf-row-main { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 14px; }
+  .my-books-page .shelf-cover { width: 88px; }
+  .my-books-page .shelf-personal { grid-column: 2; margin: 0; min-width: 0; }
 }
