@@ -27,6 +27,7 @@ test('auth endpoints enforce CSRF and validation before database access', async 
 });
 test('protected routes reject missing and malformed bearer tokens', async () => {
   await request(app).post('/api/user-books').send({}).expect(401);
+  await request(app).delete(`/api/user-books/${randomUUID()}`).expect(401);
   await request(app).post('/api/reviews').set('Authorization', 'Bearer invalid').send({}).expect(401);
 });
 test('explicit like writes require authentication', async () => {

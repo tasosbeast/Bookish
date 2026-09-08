@@ -134,6 +134,10 @@ The nested book also includes its other existing scalar fields (description, ISB
 
 Supply `status` and/or `userRating`. Status is `want_to_read`, `currently_reading` or `read`; a new entry defaults to `want_to_read` if omitted. Rating is an integer 1–5 or null. Omitted fields retain previous values. A status-only update never clears a rating. Clearing a rating while a review exists returns 409. An updated rating is copied to any existing review in the same transaction.
 
+`DELETE /api/user-books/:bookId`
+
+Removes only the authenticated reader's shelf entry and returns `{ "data": { "bookId": "...", "removed": true } }`. The Book and every other reader's data remain unchanged. A missing personal shelf entry returns `404 SHELF_NOT_FOUND`. If the reader has a review for the book, removal returns `409 REVIEW_BLOCKS_SHELF_REMOVAL`; the review must be handled before its required rating/shelf entry can be removed. When the removed entry has a rating, the book's average and rating count are recomputed in the same serializable transaction.
+
 `POST /api/reviews`
 
 ```json

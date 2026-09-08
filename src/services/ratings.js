@@ -31,6 +31,20 @@ export async function saveShelf(userId, { bookId, status, userRating }) {
     return shelf;
   });
 }
+export async function removeShelf(userId, bookId) {
+  return serializable(prisma, async tx => {
+    await requireBook(tx, bookId);
+    const key = { userId_bookId: { userId, bookId } };
+    const shelf = await tx.userBook.findUnique({ where: key, select: { userRating: true } });
+    if (!shelf) throw new AppError(404, 'SHELF_NOT_FOUND', 'This book is not in your books');
+    if (await tx.review.findUnique({ where: key, select: { id: true } })) {
+      throw new AppError(409, 'REVIEW_BLOCKS_SHELF_REMOVAL', 'Remove your review before removing this book from My Books');
+    }
+    await tx.userBook.delete({ where: key });
+    if (shelf.userRating !== null) await refreshRating(tx, bookId);
+    return { bookId, removed: true };
+  });
+}
 export async function saveReview(userId, { bookId, rating, reviewText }) {
   return serializable(prisma, async tx => {
     await requireBook(tx, bookId);

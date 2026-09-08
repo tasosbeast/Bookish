@@ -134,6 +134,7 @@
   .form-title { font: 24px var(--font-serif); margin-bottom: 19px; }
   .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
   .reading-form .button { margin-top: 18px; }
+  .reading-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; }.reading-actions .danger-button { margin-top: 18px; color: #894a32; }
   .field-help { margin: 7px 0 13px; color: #767f6c; font-size: 11px; }
   .join-note { background: #ecefe3; padding: 25px; border-radius: 8px; }
   .join-note h2 { font-size: 24px; }.join-note p { font-size: 13px; color: #737d68; margin: 10px 0 18px; }
