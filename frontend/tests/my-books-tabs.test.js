@@ -14,7 +14,7 @@ test('My Books keeps the loaded shelf visible while a status tab reloads', { tim
   }
   Object.defineProperty(navigator, 'locks', { value: { request: (_key, _options, work) => work() } });
   const nativeFetch = globalThis.fetch;
-  let server, root, session, resolveWanted;
+  let server, root, session, resolveWanted, rejectWanted;
   const allBook = { id: 'book-all', title: 'A book already on the shelf', author: 'An author', coverImageUrl: null, averageRating: 4, genres: [] };
   const wantedBook = { id: 'book-wanted', title: 'A book to read next', author: 'Another author', coverImageUrl: null, averageRating: 4, genres: [] };
   const entry = (book, status) => ({ bookId: book.id, status, userRating: null, book });
@@ -29,7 +29,7 @@ test('My Books keeps the loaded shelf visible while a status tab reloads', { tim
     const url = new URL(input);
     if (url.pathname === '/api/auth/login') return response({ user: { id: 'reader', username: 'reader' }, accessToken: `header.${btoa(JSON.stringify({ exp: Date.now() / 1000 + 900 }))}.signature`, expiresIn: 900 });
     if (url.pathname === '/api/user-books' && url.searchParams.get('status') === 'want_to_read') {
-      return new Promise(resolve => { resolveWanted = () => resolve(shelfResponse([entry(wantedBook, 'want_to_read')])); });
+      return new Promise((resolve, reject) => { resolveWanted = () => resolve(shelfResponse([entry(wantedBook, 'want_to_read')])); rejectWanted = () => reject(new TypeError('network unavailable')); });
     }
     return shelfResponse([entry(allBook, 'read')]);
   };
@@ -49,6 +49,12 @@ test('My Books keeps the loaded shelf visible while a status tab reloads', { tim
   assert.equal(document.querySelector('.shelf-list'), initialList);
   assert.ok(document.body.textContent.includes(allBook.title));
   assert.ok(!document.body.textContent.includes('Finding your next chapter…'));
+  assert.ok(document.body.textContent.includes('Updating shelf…'));
+  await act(async () => rejectWanted());
+  assert.ok(document.querySelector('[role="alert"]'));
+  assert.ok(document.body.textContent.includes('Showing previous shelf.'));
+  assert.ok(document.body.textContent.includes(allBook.title));
+  await act(async () => [...document.querySelectorAll('button')].find(button => button.textContent === 'Try again').click());
   await act(async () => resolveWanted());
   assert.ok(document.body.textContent.includes(wantedBook.title));
   assert.ok(!document.body.textContent.includes(allBook.title));
