@@ -6,6 +6,7 @@ import { createServer } from 'vite';
 
 test('book forms preserve drafts through likes, review pages, shelf saves and failed refreshes', { timeout: 60000 }, async t => {
   const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost:5173' });
+  dom.window.confirm = () => true;
   const original = new Map();
   for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document,
     navigator: dom.window.navigator, BroadcastChannel: undefined, IS_REACT_ACT_ENVIRONMENT: true })) {
@@ -32,7 +33,7 @@ test('book forms preserve drafts through likes, review pages, shelf saves and fa
   let user = { id: 'reader-a', username: 'reader' };
   let personal = { bookId, shelf: { status: 'want_to_read', userRating: 4, updatedAt: stamp },
     review: { id: 'own', rating: 4, reviewText: 'Saved text', updatedAt: stamp } };
-  let hold = false, liked = false, failWrite = false, pending = [], writes = [];
+  let hold = false, liked = false, failWrite = false, pending = [], writes = [], deletions = [];
   const response = (data, status = 200) => new Response(JSON.stringify(data), { status });
   const read = url => {
     if (url.pathname.startsWith('/api/user-books/')) return { data: personal };
@@ -47,6 +48,12 @@ test('book forms preserve drafts through likes, review pages, shelf saves and fa
     if (url.pathname === '/api/auth/login') return response({ user,
       accessToken: `header.${btoa(JSON.stringify({ exp: Date.now() / 1000 + 900 }))}.signature`, expiresIn: 900 });
     if (options.method === 'PUT') { liked = true; return response({ data: { liked: true } }); }
+    if (options.method === 'DELETE') {
+      deletions.push(url.pathname);
+      if (url.pathname.startsWith('/api/reviews/')) personal = { ...personal, review: null };
+      if (url.pathname.startsWith('/api/user-books/')) personal = { ...personal, shelf: null };
+      return response({ data: { deleted: true } });
+    }
     if (options.method === 'POST') {
       if (failWrite) {
         failWrite = false;
@@ -136,6 +143,16 @@ test('book forms preserve drafts through likes, review pages, shelf saves and fa
   await change(shelfForm.querySelectorAll('select')[1], '3');
   await click('Save changes'); await flush(); preserved();
   assert.equal(reviewForm.querySelector('select').value, '3', 'clean review rating follows a saved shelf');
+
+  await click('Delete review'); await flush();
+  assert.deepEqual(deletions, ['/api/reviews/own']);
+  assert.equal(document.querySelector('.review-form legend').textContent, 'What stayed with you?');
+  assert.equal(document.querySelector('.review-form textarea').value, '');
+  assert.equal(document.querySelectorAll('.reading-form select')[1].value, '3', 'deleting a review keeps the shelf rating');
+  assert.equal([...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Delete review'), false);
+  await click('Remove from My Books'); await flush();
+  assert.deepEqual(deletions, ['/api/reviews/own', `/api/user-books/${bookId}`]);
+  assert.ok(document.querySelector('.reading-form').textContent.includes('Add to my books'));
 
   // Retained personal data and drafts must not leak into another account.
   hold = false;

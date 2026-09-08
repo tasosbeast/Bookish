@@ -13,3 +13,4 @@ reviewsRouter.all('/:id/like', validate(likeSchema), (req, res) => {
     code: 'METHOD_NOT_ALLOWED', message: 'Use PUT to like or DELETE to unlike',
   } });
 });
+reviewsRouter.delete('/:id', validate(likeSchema), controller.remove);

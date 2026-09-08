@@ -56,6 +56,14 @@ export async function saveReview(userId, { bookId, rating, reviewText }) {
     return review;
   });
 }
+export async function removeReview(userId, reviewId) {
+  return serializable(prisma, async tx => {
+    const result = await tx.review.deleteMany({ where: { id: reviewId, userId } });
+    if (result.count === 0) throw new AppError(404, 'REVIEW_NOT_FOUND', 'Review not found');
+    // UserBook.userRating is canonical and remains unchanged, so the book aggregate also remains unchanged.
+    return { reviewId, deleted: true };
+  });
+}
 export async function setReviewLike(userId, reviewId, liked) {
   return serializable(prisma, async tx => {
     if (!await tx.review.findUnique({ where: { id: reviewId }, select: { id: true } })) {

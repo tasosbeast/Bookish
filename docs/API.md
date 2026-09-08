@@ -146,6 +146,10 @@ Removes only the authenticated reader's shelf entry and returns `{ "data": { "bo
 
 Upserts the user's unique review and canonical shelf rating together, preserving an existing shelf status. Text is optional, nullable and at most 10000 characters; omit to preserve it, send null to clear it. Review writes and shelf rating writes recompute `Book.averageRating` and `ratingsCount` from all non-null shelf ratings, counting each reader once. No ratings produces a null average and zero count.
 
+`DELETE /api/reviews/:id`
+
+Deletes the review only when it belongs to the authenticated reader and returns `{ "data": { "reviewId": "...", "deleted": true } }`. A missing review or a review owned by another reader returns `404 REVIEW_NOT_FOUND`. The reader's `UserBook`, shelf status and canonical `userRating` remain unchanged, so the book's `averageRating` and `ratingsCount` also remain unchanged. Likes attached to the deleted review are removed by the existing database cascade.
+
 Likes use explicit, idempotent state-setting commands (no request body):
 
 | Endpoint | Effect | Response |
