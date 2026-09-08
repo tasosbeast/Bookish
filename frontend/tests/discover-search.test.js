@@ -53,6 +53,7 @@ test('Discover defaults to newest published and clearing search preserves explic
   assert.equal(document.querySelector('#location').textContent, '?q=mistake&genre=fantasy&sort=publicationYear&order=asc&author=Jane+Austen');
   assert.ok(requests.some(url => url.searchParams.get('author') === 'Jane Austen'));
   assert.ok(document.querySelector('h2').textContent.includes('Books by “Jane Austen”'));
+  assert.deepEqual([...document.querySelectorAll('.active-filter-label')].map(label => label.textContent), ['mistake', 'Fantasy', 'Jane Austen']);
   const clearAuthor = [...document.querySelectorAll('.active-filter')].find(button => button.textContent.includes('Jane Austen'));
   assert.ok(clearAuthor, 'active author has a visible clear action');
   await act(async () => clearAuthor.click());
