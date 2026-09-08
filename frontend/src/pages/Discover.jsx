@@ -8,7 +8,8 @@ export default function Discover() {
   const q = params.get('q') ?? '';
   const genre = params.get('genre') ?? '';
   const page = pageNumber(params.get('page'));
-  const sort = params.get('sort') === 'publicationYear' ? 'publicationYear' : 'rating';
+  const hasExplicitSort = params.has('sort') || params.has('order');
+  const sort = params.get('sort') === 'publicationYear' ? 'publicationYear' : hasExplicitSort ? 'rating' : 'publicationYear';
   const order = params.get('order') === 'asc' ? 'asc' : 'desc';
   const [search, setSearch] = useState(q);
   useEffect(() => setSearch(q), [q]);

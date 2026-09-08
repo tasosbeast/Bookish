@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
 import { createServer } from 'vite';
 
-test('clearing a Discover search preserves other URL filters and resets the page', { timeout: 60000 }, async t => {
+test('Discover defaults to newest published and clearing search preserves explicit filters', { timeout: 60000 }, async t => {
   const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost:5173' });
   const original = new Map();
   for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document,
@@ -34,7 +34,12 @@ test('clearing a Discover search preserves other URL filters and resets the page
   function Location() { return h('output', { id: 'location' }, useLocation().search); }
   await session.authenticate('login', {});
   root = createRoot(document.getElementById('root'));
+  await act(async () => root.render(h(MemoryRouter, { initialEntries: ['/'] }, h(Discover))));
+  assert.equal(document.querySelector('#book-sort').value, 'publicationYear:desc');
+  await act(async () => root.unmount());
+  root = createRoot(document.getElementById('root'));
   await act(async () => root.render(h(MemoryRouter, { initialEntries: ['/?q=mistake&genre=fantasy&sort=publicationYear&order=asc&page=3'] }, h(Discover), h(Location))));
+  assert.equal(document.querySelector('#book-sort').value, 'publicationYear:asc');
   const clear = [...document.querySelectorAll('button')].find(button => button.textContent.includes('mistake'));
   assert.ok(clear, 'active search has a visible clear action');
   await act(async () => clear.click());
