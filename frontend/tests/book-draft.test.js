@@ -144,15 +144,21 @@ test('book forms preserve drafts through likes, review pages, shelf saves and fa
   await click('Save changes'); await flush(); preserved();
   assert.equal(reviewForm.querySelector('select').value, '3', 'clean review rating follows a saved shelf');
 
-  await click('Delete review'); await flush();
+  await click('Delete review');
   assert.deepEqual(deletions, ['/api/reviews/own']);
   assert.equal(document.querySelector('.review-form legend').textContent, 'What stayed with you?');
   assert.equal(document.querySelector('.review-form textarea').value, '');
   assert.equal(document.querySelectorAll('.reading-form select')[1].value, '3', 'deleting a review keeps the shelf rating');
   assert.equal([...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Delete review'), false);
-  await click('Remove from My Books'); await flush();
+  await flush(true);
+  assert.equal(document.querySelector('.review-form legend').textContent, 'What stayed with you?', 'a failed reconciliation cannot restore a deleted review');
+  assert.equal([...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Delete review'), false);
+  await click('Remove from My Books');
   assert.deepEqual(deletions, ['/api/reviews/own', `/api/user-books/${bookId}`]);
   assert.ok(document.querySelector('.reading-form').textContent.includes('Add to my books'));
+  await flush(true);
+  assert.ok(document.querySelector('.reading-form').textContent.includes('Add to my books'));
+  assert.equal([...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Remove from My Books'), false);
 
   // Retained personal data and drafts must not leak into another account.
   hold = false;

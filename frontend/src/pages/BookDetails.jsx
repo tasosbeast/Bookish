@@ -22,19 +22,30 @@ export default function BookDetails() {
   const [params, setParams] = useSearchParams();
   const auth = useAuth();
   const [notice, setNotice] = useState('');
-  useEffect(() => setNotice(''), [id, auth.user?.id]);
+  const [removed, setRemoved] = useState({});
+  const [reconcilingDeletion, setReconcilingDeletion] = useState(false);
+  useEffect(() => { setNotice(''); setRemoved({}); setReconcilingDeletion(false); }, [id, auth.user?.id]);
   const book = useResource(`/books/${id}?page=${pageNumber(params.get('page'))}&limit=10`, 'optional', id);
   const personal = useResource(auth.user ? `/user-books/${id}` : null, 'required', id);
   const path = `/books/${id}`;
-  function saved(message) { setNotice(message); book.reload(); personal.reload(); }
+  useEffect(() => {
+    if (!reconcilingDeletion || book.loading || personal.loading || book.error || personal.error) return;
+    setRemoved({}); setReconcilingDeletion(false);
+  }, [reconcilingDeletion, book.loading, book.error, personal.loading, personal.error]);
+  function saved(message, deletion) {
+    if (deletion) { setRemoved(current => ({ ...current, ...deletion })); setReconcilingDeletion(true); }
+    setNotice(message); book.reload(); personal.reload();
+  }
   if (book.loading && !book.data) return <div className="container page-space"><Loading /></div>;
   if (book.error && !book.data) return <div className="container page-space"><Link className="back-link" to="/">← Back to discover</Link><ErrorNotice error={book.error} retry={book.reload} /></div>;
   const data = book.data.data;
+  const personalData = personal.data && { ...personal.data.data, ...(removed.shelf && { shelf: null }), ...(removed.reviewId && { review: null }) };
+  const reviews = removed.reviewId ? { ...data.reviews, data: data.reviews.data.filter(review => review.id !== removed.reviewId) } : data.reviews;
   return <div className="container details-page"><Link className="back-link" to="/">← Back to discover</Link><ErrorNotice error={book.error} retry={book.reload} /><section className="book-detail-grid"><div className="detail-cover-wrap"><Cover book={data} className="detail-cover" /><span className="cover-caption">A place on your bookshelf.</span></div><div className="detail-copy"><p className="eyebrow">Between the covers</p><h1>{data.title}</h1><p className="detail-author">by {data.author}</p><Rating value={data.averageRating} count={data.ratingsCount} /><Genres genres={data.genres} /><p className="book-description">{data.description || 'There isn’t a description for this book yet.'}</p><dl className="book-facts">{data.publicationYear && <div><dt>Published</dt><dd>{data.publicationYear}</dd></div>}{data.isbn && <div><dt>ISBN</dt><dd>{data.isbn}</dd></div>}</dl>
       {notice && <p className="success-notice" role="status"><Icon name="check" size={18} />{notice}</p>}
-      {auth.user ? <><ErrorNotice error={personal.error} retry={personal.reload} />{personal.data ? <ShelfForm key={`${id}-${auth.user.id}`} personal={personal.data.data} onSaved={saved} /> : personal.loading ? <Loading /> : null}</> : <div className="join-note"><h2>Make it part of your story.</h2><p>Keep track of your reading and share your thoughts.</p><Link className="button" to={`/login?next=${encodeURIComponent(path)}`}>Log in to add this book <Icon name="arrow" size={17} /></Link></div>}
+      {auth.user ? <><ErrorNotice error={personal.error} retry={personal.reload} />{personalData ? <ShelfForm key={`${id}-${auth.user.id}`} personal={personalData} onSaved={saved} /> : personal.loading ? <Loading /> : null}</> : <div className="join-note"><h2>Make it part of your story.</h2><p>Keep track of your reading and share your thoughts.</p><Link className="button" to={`/login?next=${encodeURIComponent(path)}`}>Log in to add this book <Icon name="arrow" size={17} /></Link></div>}
     </div></section>
     {book.loading && <p className="muted small" role="status">Updating book and reviews…</p>}
-    <section className="reviews-layout" aria-labelledby="reviews-heading"><div><div className="section-heading"><div><p className="eyebrow">From one reader to another</p><h2 id="reviews-heading">Reader reviews</h2></div><span className="muted small">{data.reviews.pagination.total} total</span></div>{data.reviews.data.length ? data.reviews.data.map(review => <Review key={review.id} review={review} canLike={Boolean(auth.user)} onSaved={book.reload} next={path} />) : <div className="quiet-empty">{data.reviews.pagination.total ? 'No reviews on this page. Choose an earlier page to keep reading.' : 'No reviews yet. Your perspective could be the first.'}</div>}<Pagination pagination={data.reviews.pagination} onPage={page => setParams({ page })} /></div><aside className="review-editor">{auth.user && personal.data ? <ReviewForm key={`${id}-${auth.user.id}`} personal={personal.data.data} onSaved={saved} /> : <div className="reader-note"><Icon size={30} /><h3>Stories are better shared.</h3><p>Every reading experience is a little different. Yours belongs here, too.</p></div>}</aside></section>
+    <section className="reviews-layout" aria-labelledby="reviews-heading"><div><div className="section-heading"><div><p className="eyebrow">From one reader to another</p><h2 id="reviews-heading">Reader reviews</h2></div><span className="muted small">{reviews.pagination.total} total</span></div>{reviews.data.length ? reviews.data.map(review => <Review key={review.id} review={review} canLike={Boolean(auth.user)} onSaved={book.reload} next={path} />) : <div className="quiet-empty">{reviews.pagination.total ? 'No reviews on this page. Choose an earlier page to keep reading.' : 'No reviews yet. Your perspective could be the first.'}</div>}<Pagination pagination={reviews.pagination} onPage={page => setParams({ page })} /></div><aside className="review-editor">{auth.user && personalData ? <ReviewForm key={`${id}-${auth.user.id}`} personal={personalData} onSaved={saved} /> : <div className="reader-note"><Icon size={30} /><h3>Stories are better shared.</h3><p>Every reading experience is a little different. Yours belongs here, too.</p></div>}</aside></section>
   </div>;
 }
