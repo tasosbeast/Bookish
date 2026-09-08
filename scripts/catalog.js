@@ -8,6 +8,8 @@ export function isbn13(value) {
   return isbn;
 }
 const text = value => typeof value === 'string' && value.trim() ? value.trim() : null;
+const REQUEST_ATTEMPTS = 3;
+const RETRY_BACKOFF_MS = 250;
 const vocabulary = {
   Fantasy: ['fantasy', 'fantasy fiction'],
   'Science Fiction': ['science fiction'],
@@ -69,12 +71,20 @@ function isGoogleBooksCover(value) {
 export function openLibrary({ fetchImpl = fetch, sleep = delay, timeout = 10000 } = {}) {
   let first = true;
   async function request(url) {
-    if (!first) await sleep(1100);
-    first = false;
-    return fetchImpl(url, {
-      headers: { 'User-Agent': 'BookishCatalogImporter/1.0 (explicit local catalog import)', Accept: 'application/json' },
-      signal: AbortSignal.timeout(timeout), redirect: 'manual',
-    });
+    for (let attempt = 1; attempt <= REQUEST_ATTEMPTS; attempt++) {
+      if (!first) await sleep(1100);
+      first = false;
+      try {
+        const response = await fetchImpl(url, {
+          headers: { 'User-Agent': 'BookishCatalogImporter/1.0 (explicit local catalog import)', Accept: 'application/json' },
+          signal: AbortSignal.timeout(timeout), redirect: 'manual',
+        });
+        if (attempt === REQUEST_ATTEMPTS || response.status !== 429 && response.status < 500) return response;
+      } catch (error) {
+        if (attempt === REQUEST_ATTEMPTS) throw error;
+      }
+      await sleep(RETRY_BACKOFF_MS);
+    }
   }
   async function get(path, redirects = 0) {
     const response = await request(`https://openlibrary.org${path}.json`);

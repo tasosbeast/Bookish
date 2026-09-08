@@ -33,8 +33,55 @@ test('catalog HTTP requests are constrained, paced and handle malformed/network 
   assert.equal((await resolve(isbn)).title, edition.title); assert.equal(urls.length,2); assert.deepEqual(sleeps,[1100]);
   assert.ok(urls.every(url => !url.includes('googleapis.com')));
   await assert.rejects(() => resolve('bad')); assert.equal(urls.length,2);
-  for (const fetchImpl of [async()=>{throw new Error('offline')},async()=>new Response('broken'),async()=>Response.json([]),async()=>new Response('',{status:429})]) await assert.rejects(openLibrary({fetchImpl})(isbn));
+  for (const fetchImpl of [async()=>{throw new Error('offline')},async()=>new Response('broken'),async()=>Response.json([]),async()=>new Response('',{status:429})]) await assert.rejects(openLibrary({fetchImpl,sleep:async()=>{}})(isbn));
   assert.equal(await openLibrary({fetchImpl:async()=>new Response('',{status:404})})(isbn),null);
+});
+test('catalog retries only bounded transient requests while preserving pacing', async () => {
+  const resolver = ({ transient, noCover = false }) => {
+    const sleeps = [], calls = [];
+    const resolve = openLibrary({ sleep: async ms => sleeps.push(ms), fetchImpl: async url => {
+      calls.push(url);
+      if (calls.length === 1 && transient) return transient instanceof Error ? Promise.reject(transient) : new Response('', { status: transient });
+      if (url.includes('/isbn/')) return Response.json({ ...edition, covers: noCover ? [] : edition.covers, authors: [{ key: '/authors/OL1A' }] });
+      if (url.includes('/authors/')) return Response.json({ name: 'Jane Austen' });
+      if (url.includes('googleapis.com')) return Response.json({ items: [{ volumeInfo: { industryIdentifiers: [{ type: 'ISBN_13', identifier: isbn }], imageLinks: { large: 'https://books.google.com/books/content?id=cover' } } }] });
+      throw new Error('Unexpected request');
+    }});
+    return { resolve, sleeps, calls };
+  };
+  const timeout = Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+  for (const transient of [timeout, 429, 503]) {
+    const { resolve, sleeps, calls } = resolver({ transient });
+    assert.equal((await resolve(isbn)).title, edition.title);
+    assert.equal(calls.length, 3);
+    assert.deepEqual(sleeps, [250, 1100, 1100]);
+  }
+  let notFoundCalls = 0;
+  assert.equal(await openLibrary({ sleep: async () => {}, fetchImpl: async () => { notFoundCalls++; return new Response('', { status: 404 }); } })(isbn), null);
+  assert.equal(notFoundCalls, 1);
+  let malformedCalls = 0;
+  await assert.rejects(openLibrary({ sleep: async () => {}, fetchImpl: async () => { malformedCalls++; return Response.json([]); } })(isbn));
+  assert.equal(malformedCalls, 1);
+});
+test('catalog retries Google Books covers without blocking valid metadata', async () => {
+  const noCover = { ...edition, covers: [], authors: [{ key: '/authors/OL1A' }] };
+  const run = google => {
+    let googleCalls = 0;
+    const resolve = openLibrary({ sleep: async () => {}, fetchImpl: async url => {
+      if (url.includes('/isbn/')) return Response.json(noCover);
+      if (url.includes('/authors/')) return Response.json({ name: 'Jane Austen' });
+      googleCalls++;
+      return google(googleCalls);
+    }});
+    return { resolve, googleCalls: () => googleCalls };
+  };
+  const cover = { items: [{ volumeInfo: { industryIdentifiers: [{ type: 'ISBN_13', identifier: isbn }], imageLinks: { large: 'https://books.google.com/books/content?id=cover' } } }] };
+  const retry = run(calls => calls === 1 ? new Response('', { status: 429 }) : Response.json(cover));
+  assert.equal((await retry.resolve(isbn)).coverImageUrl, 'https://books.google.com/books/content?id=cover');
+  assert.equal(retry.googleCalls(), 2);
+  const repeatedFailure = run(() => new Response('', { status: 503 }));
+  assert.equal((await repeatedFailure.resolve(isbn)).coverImageUrl, null);
+  assert.equal(repeatedFailure.googleCalls(), 3);
 });
 test('catalog uses an exact-ISBN Google Books cover only when Open Library has none', async () => {
   const noCover = { ...edition, covers: [], authors: [{ key: '/authors/OL1A' }] };
