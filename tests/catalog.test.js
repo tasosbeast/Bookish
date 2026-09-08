@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { isbn13, mapEdition, mapGenres, openLibrary, importCatalog } from '../scripts/catalog.js';
+import { isbn13, mapEdition, mapGenres, openLibrary, saveMetadata, importCatalog } from '../scripts/catalog.js';
 const isbn = '9780141439518';
 const edition = { title: 'Pride and Prejudice', isbn_13: [isbn], publish_date: 'January 1, 2003', covers: [-1, 123], subjects: [' Fiction ', 'FICTION', 'Fantasy fiction', 'noise'] };
 test('catalog ISBN checksum and committed manifest', () => {
@@ -31,9 +31,38 @@ test('catalog HTTP requests are constrained, paced and handle malformed/network 
     return Response.json(url.includes('/isbn/') ? {...edition,authors:[{key:'/authors/OL1A'}]} : {name:'Jane Austen'});
   }});
   assert.equal((await resolve(isbn)).title, edition.title); assert.equal(urls.length,2); assert.deepEqual(sleeps,[1100]);
+  assert.ok(urls.every(url => !url.includes('googleapis.com')));
   await assert.rejects(() => resolve('bad')); assert.equal(urls.length,2);
   for (const fetchImpl of [async()=>{throw new Error('offline')},async()=>new Response('broken'),async()=>Response.json([]),async()=>new Response('',{status:429})]) await assert.rejects(openLibrary({fetchImpl})(isbn));
   assert.equal(await openLibrary({fetchImpl:async()=>new Response('',{status:404})})(isbn),null);
+});
+test('catalog uses an exact-ISBN Google Books cover only when Open Library has none', async () => {
+  const noCover = { ...edition, covers: [], authors: [{ key: '/authors/OL1A' }] };
+  const resolve = google => openLibrary({ sleep: async () => {}, fetchImpl: async url => {
+    const parsed = new URL(url);
+    if (parsed.hostname === 'openlibrary.org') return Response.json(parsed.pathname.startsWith('/isbn/') ? noCover : { name: 'Jane Austen' });
+    assert.equal(parsed.hostname, 'www.googleapis.com');
+    assert.equal(parsed.searchParams.get('q'), `isbn:${isbn}`);
+    return typeof google === 'function' ? google() : google;
+  }});
+  const exact = imageLinks => ({ items: [{ volumeInfo: { industryIdentifiers: [{ type: 'ISBN_13', identifier: isbn }], imageLinks } }] });
+  const covered = await resolve(Response.json(exact({ large: 'http://books.google.com/books/content?id=cover&printsec=frontcover' })))(isbn);
+  assert.equal(covered.coverImageUrl, 'https://books.google.com/books/content?id=cover&printsec=frontcover');
+  assert.equal((await resolve(Response.json(exact({ thumbnail: 'https://books.google.com/placeholder.jpg' })))(isbn)).coverImageUrl, null);
+  assert.equal((await resolve(() => { throw new Error('Google Books unavailable'); })(isbn)).coverImageUrl, null);
+  const mismatched = { items: [{ volumeInfo: { industryIdentifiers: [{ type: 'ISBN_13', identifier: '9780140435962' }], imageLinks: { large: 'https://books.google.com/books/content?id=wrong' } } }] };
+  assert.equal((await resolve(Response.json(mismatched))(isbn)).coverImageUrl, null);
+});
+test('catalog does not replace a stored Open Library cover with a Google Books fallback', async () => {
+  const metadata = { ...mapEdition(isbn, { ...edition, covers: [] }, ['Jane Austen']), coverImageUrl: 'https://books.google.com/books/content?id=google-cover' };
+  const existing = { ...metadata, coverImageUrl: 'https://covers.openlibrary.org/b/id/123-L.jpg?default=false', bookGenres: metadata.genres.map(genre => ({ genre })) };
+  let upserts = 0;
+  const db = { $transaction: work => work({
+    book: { findUnique: async () => existing, upsert: async () => { upserts++; } },
+    genre: { upsert: async () => {} }, bookGenre: { upsert: async () => {} },
+  }) };
+  assert.equal(await saveMetadata(db, metadata, true), 'unchanged');
+  assert.equal(upserts, 0);
 });
 test('catalog follows only a bounded same-origin edition redirect', async () => {
   const resolver = openLibrary({ sleep: async () => {}, fetchImpl: async url => {

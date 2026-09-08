@@ -43,15 +43,41 @@ export function mapEdition(isbn, edition, authors, work = {}) {
     coverImageUrl: cover ? `https://covers.openlibrary.org/b/id/${cover}-L.jpg?default=false` : null,
     genres: mapGenres([...(Array.isArray(edition.subjects) ? edition.subjects : []), ...(Array.isArray(work.subjects) ? work.subjects : [])]) };
 }
+function googleCoverUrl(imageLinks) {
+  for (const size of ['extraLarge', 'large', 'medium', 'small', 'thumbnail', 'smallThumbnail']) {
+    try {
+      const url = new URL(imageLinks?.[size]);
+      if (!['books.google.com', 'books.googleusercontent.com', 'lh3.googleusercontent.com'].includes(url.hostname) || !['http:', 'https:'].includes(url.protocol) || /(?:placeholder|no[-_ ]?cover|not[-_ ]?found|blank)/i.test(url.pathname)) continue;
+      url.protocol = 'https:';
+      return url.toString();
+    } catch { /* Try the next advertised image size. */ }
+  }
+  return null;
+}
+function hasIsbn13(item, isbn) {
+  return Array.isArray(item?.volumeInfo?.industryIdentifiers) && item.volumeInfo.industryIdentifiers.some(identifier => {
+    if (identifier?.type !== 'ISBN_13') return false;
+    try { return isbn13(identifier.identifier) === isbn; } catch { return false; }
+  });
+}
+function isOpenLibraryCover(value) {
+  try { return new URL(value).hostname === 'covers.openlibrary.org'; } catch { return false; }
+}
+function isGoogleBooksCover(value) {
+  try { return ['books.google.com', 'books.googleusercontent.com', 'lh3.googleusercontent.com'].includes(new URL(value).hostname); } catch { return false; }
+}
 export function openLibrary({ fetchImpl = fetch, sleep = delay, timeout = 10000 } = {}) {
   let first = true;
-  async function get(path, redirects = 0) {
+  async function request(url) {
     if (!first) await sleep(1100);
     first = false;
-    const response = await fetchImpl(`https://openlibrary.org${path}.json`, {
+    return fetchImpl(url, {
       headers: { 'User-Agent': 'BookishCatalogImporter/1.0 (explicit local catalog import)', Accept: 'application/json' },
       signal: AbortSignal.timeout(timeout), redirect: 'manual',
     });
+  }
+  async function get(path, redirects = 0) {
+    const response = await request(`https://openlibrary.org${path}.json`);
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const target = new URL(response.headers.get('location'), 'https://openlibrary.org');
       if (redirects >= 2 || target.origin !== 'https://openlibrary.org' || !/^\/books\/OL\d+M\.json$/.test(target.pathname) || target.search) throw new Error('Unexpected metadata redirect');
@@ -62,6 +88,15 @@ export function openLibrary({ fetchImpl = fetch, sleep = delay, timeout = 10000 
     const data = await response.json();
     if (!data || Array.isArray(data) || typeof data !== 'object') throw new Error('Malformed metadata');
     return data;
+  }
+  async function googleCover(isbn) {
+    try {
+      const response = await request(`https://www.googleapis.com/books/v1/volumes?q=isbn:${encodeURIComponent(isbn)}`);
+      if (!response.ok) return null;
+      const data = await response.json();
+      if (!data || Array.isArray(data) || typeof data !== 'object' || !Array.isArray(data.items)) return null;
+      return data.items.filter(item => hasIsbn13(item, isbn)).map(item => googleCoverUrl(item.volumeInfo.imageLinks)).find(Boolean) ?? null;
+    } catch { return null; }
   }
   return async value => {
     const isbn = isbn13(value);
@@ -77,7 +112,9 @@ export function openLibrary({ fetchImpl = fetch, sleep = delay, timeout = 10000 
     let work = {};
     const key = edition.works?.[0]?.key;
     if (/^\/works\/OL\d+W$/.test(key)) work = await get(key) ?? {};
-    return mapEdition(isbn, edition, authors, work);
+    const metadata = mapEdition(isbn, edition, authors, work);
+    if (metadata && !metadata.coverImageUrl) metadata.coverImageUrl = await googleCover(isbn);
+    return metadata;
   };
 }
 export async function saveMetadata(db, metadata, apply) {
@@ -85,7 +122,7 @@ export async function saveMetadata(db, metadata, apply) {
     const { genres, ...fields } = metadata;
     const existing = await tx.book.findUnique({ where: { isbn: fields.isbn }, include: { bookGenres: { include: { genre: true } } } });
     // Missing optional metadata is not evidence that an existing value should be erased.
-    const changes = Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== null));
+    const changes = Object.fromEntries(Object.entries(fields).filter(([key, value]) => value !== null && !(key === 'coverImageUrl' && isGoogleBooksCover(value) && isOpenLibraryCover(existing?.coverImageUrl))));
     const existingSlugs = new Set(existing?.bookGenres.map(row => row.genre.slug) ?? []);
     const additions = genres.filter(g => !existingSlugs.has(g.slug));
     const outcome = !existing ? 'created' : Object.entries(changes).some(([key, value]) => existing[key] !== value) || additions.length ? 'updated' : 'unchanged';
