@@ -69,6 +69,27 @@ The SQL supplement is already included in the committed initial migration. Keep 
 
 The Express runtime uses `@prisma/adapter-pg` and `pg`; the generated Prisma client is initialized with the PostgreSQL adapter.
 
+## Catalog import
+
+`scripts/catalog.json` is a committed, curated manifest of 30 ISBN-13 editions. The importer is an explicit local command: application startup, migrations, API requests and tests never contact Open Library. It validates every ISBN-13 checksum before it makes a request, then resolves one edition at a time over HTTPS with a short timeout and an identifiable User-Agent. It uses the Open Library edition, author and work JSON endpoints only; it neither scrapes HTML nor downloads cover files.
+
+Run a no-write resolution first:
+
+```powershell
+node scripts/import-catalog.js --dry-run
+# Equivalent npm command: npm run catalog:import -- --dry-run
+```
+
+Write only after reviewing that output:
+
+```powershell
+node scripts/import-catalog.js --apply
+```
+
+The concise summary has `created`, `updated`, `unchanged`, `skipped`, `failed` and `resolved` counts. A network problem, invalid response, missing edition or incomplete author metadata is reported per ISBN and does not stop later entries; a run with failures exits nonzero. `--apply` upserts only bibliographic fields and missing controlled genre links by ISBN. It does not delete books or overwrite Bookish user ratings, rating aggregates, shelves, reviews, likes, users or sessions. Re-running the same manifest is idempotent. `--smoke` resolves just the first manifest ISBN and performs no database writes.
+
+Cover IDs become Open Library Covers API URLs with `?default=false`; no image files are copied into this repository. The UI footer credits [Open Library](https://openlibrary.org/), whose cover documentation asks public users for a courtesy link. Genre assignment is intentionally limited to a normalized mapping for Fiction, Fantasy, Science Fiction, Mystery, Romance, History, Biography, Science, Philosophy, Poetry and Children. Imported ratings always begin empty: Bookish ratings come only from Bookish readers.
+
 ## Relations and semantics
 
 - A user has many reviews and shelf entries; a book has many reviews and shelf entries. Each user/book pair has at most one review and one shelf entry.
