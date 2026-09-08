@@ -115,6 +115,7 @@ test('book forms preserve drafts through likes, review pages, shelf saves and fa
   await change(reviewForm.querySelector('select'), '2');
   hold = true;
   await click('Like0'); preserved();
+  assert.ok(document.body.textContent.includes('Updating book and reviews…'));
   // Users can continue typing even while the network response is pending.
   await change(textarea, draft + ' More');
   await flush();
@@ -124,10 +125,13 @@ test('book forms preserve drafts through likes, review pages, shelf saves and fa
   assert.ok(document.body.textContent.includes('Public page 2'));
   await change(shelfForm.querySelectorAll('select')[0], 'currently_reading');
   await change(shelfForm.querySelectorAll('select')[1], '5');
-  await click('Save changes'); preserved(); await flush(); preserved();
+  await click('Save changes'); preserved();
+  assert.ok(document.body.textContent.includes('Updating your reading data…'));
+  await flush(); preserved();
   assert.equal(reviewForm.querySelector('select').value, '2', 'dirty rating survives synchronized shelf rating');
   assert.equal(writes[0].body.status, 'currently_reading');
   await click('Previous'); preserved(); await flush(true); preserved();
+  assert.ok(document.body.textContent.includes('Showing previously loaded book and reviews.'));
   await click('Try again'); await flush(); preserved();
   failWrite = true;
   const successfulWrites = writes.length;
@@ -153,12 +157,14 @@ test('book forms preserve drafts through likes, review pages, shelf saves and fa
   await flush(true);
   assert.equal(document.querySelector('.review-form legend').textContent, 'What stayed with you?', 'a failed reconciliation cannot restore a deleted review');
   assert.equal([...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Delete review'), false);
+  assert.ok(document.body.textContent.includes('Showing previously loaded reading data.'));
   await click('Remove from My Books');
   assert.deepEqual(deletions, ['/api/reviews/own', `/api/user-books/${bookId}`]);
   assert.ok(document.querySelector('.reading-form').textContent.includes('Add to my books'));
   await flush(true);
   assert.ok(document.querySelector('.reading-form').textContent.includes('Add to my books'));
   assert.equal([...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Remove from My Books'), false);
+  assert.ok(document.body.textContent.includes('Showing previously loaded reading data.'));
 
   // Retained personal data and drafts must not leak into another account.
   hold = false;
