@@ -73,4 +73,5 @@ test('JWT verification rejects wrong token type, tampering, expiration and algor
 });
 test('search escapes PostgreSQL LIKE metacharacters', () => {
   assert.equal(bookFilter({ q: '50%_\\' }).OR[0].title.contains, '50\\%\\_\\\\');
+  assert.equal(bookFilter({ author: 'A%_\\' }).author.contains, 'A\\%\\_\\\\');
 });

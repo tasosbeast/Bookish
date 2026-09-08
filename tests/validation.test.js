@@ -21,7 +21,8 @@ test('shelf validation distinguishes omitted rating and explicit null', () => {
 });
 test('pagination is bounded and sort fields are allowlisted', () => {
   assert.deepEqual(booksSchema.parse({ query: {} }).query, { page: 1, limit: 20, sort: 'rating', order: 'desc' });
-  for (const query of [{ page: 0 }, { limit: 101 }, { sort: 'passwordHash' }, { q: ['a', 'b'] }]) {
+  assert.equal(booksSchema.parse({ query: { author: ' Jane Austen ' } }).query.author, 'Jane Austen');
+  for (const query of [{ page: 0 }, { limit: 101 }, { sort: 'passwordHash' }, { q: ['a', 'b'] }, { author: '' }]) {
     assert.equal(booksSchema.safeParse({ query }).success, false);
   }
 });

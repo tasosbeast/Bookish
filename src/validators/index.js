@@ -17,6 +17,7 @@ export const booksSchema = z.object({ query: z.object({
   ...pagination,
   genre: z.string().trim().min(1).max(100).optional(),
   q: z.string().trim().min(1).max(200).optional(),
+  author: z.string().trim().min(1).max(200).optional(),
   sort: z.enum(['rating', 'publicationYear']).default('rating'),
   order: z.enum(['asc', 'desc']).default('desc'),
 }).strict() });

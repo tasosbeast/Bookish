@@ -15,6 +15,7 @@ test('Discover defaults to newest published and clearing search preserves explic
   Object.defineProperty(navigator, 'locks', { value: { request: (_key, _options, work) => work() } });
   const nativeFetch = globalThis.fetch;
   let server, root, session;
+  const requests = [];
   t.after(async () => {
     if (root) { const { act } = await import('react'); await act(async () => root.unmount()); }
     session?.destroy(); await server?.close(); dom.window.close(); globalThis.fetch = nativeFetch;
@@ -23,7 +24,8 @@ test('Discover defaults to newest published and clearing search preserves explic
   globalThis.fetch = async input => {
     const url = new URL(input);
     if (url.pathname === '/api/auth/login') return Response.json({ user: { id: 'reader', username: 'reader' }, accessToken: `header.${btoa(JSON.stringify({ exp: Date.now() / 1000 + 900 }))}.signature`, expiresIn: 900 });
-    return Response.json({ data: [], pagination: { page: 2, limit: 18, total: 0, totalPages: 0 } });
+    requests.push(url);
+    return Response.json({ data: [{ id: 'book-id', title: 'A book', author: 'Jane Austen', coverImageUrl: null, averageRating: null, genres: [] }], pagination: { page: 2, limit: 18, total: 1, totalPages: 1 } });
   };
   server = await createServer({ root: fileURLToPath(new URL('..', import.meta.url)), server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] } });
   const { default: Discover } = await server.ssrLoadModule('/src/pages/Discover.jsx');
@@ -34,7 +36,7 @@ test('Discover defaults to newest published and clearing search preserves explic
   function Location() { return h('output', { id: 'location' }, useLocation().search); }
   await session.authenticate('login', {});
   root = createRoot(document.getElementById('root'));
-  await act(async () => root.render(h(MemoryRouter, { initialEntries: ['/'] }, h(Discover))));
+  await act(async () => root.render(h(MemoryRouter, { initialEntries: ['/'] }, h(Discover), h(Location))));
   assert.equal(document.querySelector('#book-sort').value, 'publicationYear:desc');
   assert.deepEqual([...document.querySelectorAll('.genre-filter')].map(button => button.textContent), ['All', 'Fiction', 'Fantasy', 'Science Fiction', 'Mystery', 'Romance', 'History', 'Biography', 'Science', 'Philosophy', 'Poetry', 'Children']);
   assert.equal([...document.querySelectorAll('.genre-filter')].find(button => button.textContent === 'All').getAttribute('aria-pressed'), 'true');
@@ -45,6 +47,16 @@ test('Discover defaults to newest published and clearing search preserves explic
   const genreButton = name => [...document.querySelectorAll('.genre-filter')].find(button => button.textContent === name);
   assert.equal(genreButton('Fantasy').getAttribute('aria-pressed'), 'true');
   assert.ok(genreButton('Fantasy').classList.contains('active'));
+  const author = document.querySelector('.book-card .author-filter');
+  assert.equal(author.textContent, 'Jane Austen');
+  await act(async () => author.click());
+  assert.equal(document.querySelector('#location').textContent, '?q=mistake&genre=fantasy&sort=publicationYear&order=asc&author=Jane+Austen');
+  assert.ok(requests.some(url => url.searchParams.get('author') === 'Jane Austen'));
+  assert.ok(document.querySelector('h2').textContent.includes('Books by “Jane Austen”'));
+  const clearAuthor = [...document.querySelectorAll('.active-filter')].find(button => button.textContent.includes('Jane Austen'));
+  assert.ok(clearAuthor, 'active author has a visible clear action');
+  await act(async () => clearAuthor.click());
+  assert.equal(document.querySelector('#location').textContent, '?q=mistake&genre=fantasy&sort=publicationYear&order=asc');
   await act(async () => genreButton('Romance').click());
   assert.equal(document.querySelector('#location').textContent, '?q=mistake&genre=romance&sort=publicationYear&order=asc');
   assert.equal(genreButton('Romance').getAttribute('aria-pressed'), 'true');

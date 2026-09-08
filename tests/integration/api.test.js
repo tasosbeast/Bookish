@@ -99,6 +99,9 @@ test('PostgreSQL: authentication, search, rating synchronization and concurrent 
     const search = await request(app).get('/api/books').query({ genre: tag, q: '50%_', limit: 1 }).expect(200);
     assert.equal(search.body.data[0].id, bookId);
     assert.equal(search.body.pagination.total, 1);
+    const author = await request(app).get('/api/books').query({ genre: tag, author: 'Test Author' }).expect(200);
+    assert.equal(author.body.pagination.total, 2);
+    assert.ok(author.body.data.every(row => row.author === 'Test Author'));
     const sorted = await request(app).get('/api/books').query({ genre: tag, sort: 'publicationYear', order: 'asc' }).expect(200);
     assert.deepEqual(sorted.body.data.map(row => row.id), bookIds);
     const details = await request(app).get(`/api/books/${bookId}?limit=1`).expect(200);

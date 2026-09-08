@@ -8,12 +8,14 @@ export function serializeBook(book) {
   return { ...fields, averageRating: book.averageRating === null ? null : Number(book.averageRating),
     genres: bookGenres.map(row => row.genre) };
 }
-export function bookFilter({ q, genre }) {
+export function bookFilter({ q, genre, author }) {
   // Prisma parameterizes contains + insensitive as PostgreSQL ILIKE.
   // Escape LIKE metacharacters so the user's query is a literal substring.
   const search = q?.replace(/[\\%_]/g, '\\$&');
+  const authorSearch = author?.replace(/[\\%_]/g, '\\$&');
   return {
     ...(genre && { bookGenres: { some: { genre: { slug: genre } } } }),
+    ...(authorSearch && { author: { contains: authorSearch, mode: 'insensitive' } }),
     ...(search && { OR: ['title', 'author'].map(field => ({ [field]: { contains: search, mode: 'insensitive' } })) }),
   };
 }

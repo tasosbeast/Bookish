@@ -66,10 +66,11 @@ const shelves = await shelvesResponse.json();
 
 ## Books
 
-`GET /api/books?page=1&limit=20&genre=fantasy&sort=rating&order=desc&q=hobbit`
+`GET /api/books?page=1&limit=20&genre=fantasy&author=Jane%20Austen&sort=rating&order=desc&q=hobbit`
 
 - `page`: 1–10000; `limit`: 1–100 (default 20).
 - `genre`: exact genre slug.
+- `author`: literal case-insensitive substring of the author display string, 1–200 characters. It is combined with `q` and `genre` when supplied.
 - `sort`: `rating` (default) or `publicationYear`; `order`: `asc` or `desc` (default).
 - `q`: literal case-insensitive substring of title or author, 1–200 characters. `%`, `_` and backslash are escaped; Prisma uses parameterized PostgreSQL ILIKE, supported by the migration's GIN trigram indexes. Very short searches may still scan.
 - Both sorts place null values last and use ID as a deterministic tie-breaker. Pagination is bounded **offset pagination** for this API; use cursor pagination if large-catalog navigation becomes necessary. Concurrent changes between separate requests can move results between pages.
