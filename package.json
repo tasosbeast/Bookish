@@ -10,6 +10,8 @@
     "catalog:import": "node scripts/import-catalog.js",
     "catalog:resolve": "node scripts/resolve-catalog.js",
     "catalog:status": "node scripts/catalog-status.js",
+    "catalog:snapshot-build": "node scripts/snapshot-build.js",
+    "catalog:snapshot-status": "node scripts/snapshot-status.js",
     "test": "node --test tests/*.test.js",
     "test:integration": "node --test --test-concurrency=1 tests/integration/*.test.js",
     "db:generate": "prisma generate",

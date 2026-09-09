@@ -105,7 +105,16 @@ The Express runtime uses `@prisma/adapter-pg` and `pg`; the generated Prisma cli
 
 ## Catalog import
 
-`scripts/catalog-source.json` is the Catalog Pipeline v2 curated source. `preferredIsbn13` is a scoring preference and may resolve to another eligible edition. `pinnedIsbn13` is reserved for the 30 existing production books: a different selected ISBN becomes `needs_review` so the ISBN-based database identity cannot change silently.
+`scripts/catalog-source.json` is the curated source. In the v3 canonical policy, `preferredIsbn13` is a scoring preference and `allowAlternateIsbn` defaults to `false`, so a different ISBN requires review; set it to `true` only when a source may safely use another edition. `pinnedIsbn13` is reserved for the 30 existing production books, forbids alternates, and prevents the ISBN-based database identity from changing silently.
+
+Catalog Pipeline v3 can build a local, offline canonical snapshot index from NDJSON canonical candidate records. The generated index is cache data under `scripts/catalog-cache/` and is excluded from version control. It does not contact providers or PostgreSQL:
+
+```powershell
+npm run catalog:snapshot-build -- --input path/to/snapshot.ndjson --output scripts/catalog-cache/canonical-snapshot-index --source-name open-library-bulk --snapshot-id 2026-09
+npm run catalog:snapshot-status -- --index scripts/catalog-cache/canonical-snapshot-index
+```
+
+The snapshot index is not yet wired into resolved-artifact production. Database import remains artifact-only.
 
 `catalog:import` reads only the validated Catalog Pipeline v2 artifact at `scripts/catalog-resolved.json`; it never contacts Open Library or Google Books. Use `--artifact <path>` to inspect or import another resolved artifact. Provider resolution is a separate step and production database writes never depend on live metadata services.
 
