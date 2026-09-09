@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   CATALOG_ARTIFACT_VERSION,
   CATALOG_RESOLVER_VERSION,
+  CatalogContractError,
   detectSourceDuplicates,
   sourceFingerprint,
   validateResolvedArtifact,
@@ -34,10 +35,12 @@ test('v2 source contract rejects malformed and unexpected values', () => {
   assert.throws(() => validateSourceManifest({ entries: [source] }));
 });
 
-test('v2 fingerprints are deterministic and react only to meaningful source changes', () => {
+test('v2 fingerprints are deterministic and track curated display fields', () => {
   assert.equal(fingerprint, sourceFingerprint({ author: 'Jane Austen', preferredIsbn13: '9780141439518', title: 'Pride and Prejudice', key: source.key }));
   assert.equal(fingerprint, sourceFingerprint({ ...source, title: '  Pride and Prejudice  ' }));
-  assert.notEqual(fingerprint, sourceFingerprint({ ...source, author: 'Charlotte Brontë' }));
+  assert.notEqual(fingerprint, sourceFingerprint({ ...source, title: 'Pride & Prejudice' }));
+  assert.notEqual(fingerprint, sourceFingerprint({ ...source, title: 'pride and prejudice' }));
+  assert.notEqual(fingerprint, sourceFingerprint({ ...source, author: 'JANE AUSTEN' }));
   const { preferredIsbn13, ...withoutPreference } = source;
   assert.notEqual(fingerprint, sourceFingerprint(withoutPreference));
 });
@@ -74,4 +77,29 @@ test('v2 non-resolved artifact entries require diagnostics and no importable met
     assert.throws(() => validateResolvedEntry({ ...entry, metadata: resolved.metadata }));
     assert.throws(() => validateResolvedEntry({ ...entry, diagnostic: { ...diagnostic, attempts: -1 } }));
   }
+});
+
+test('v2 resolved artifact rejects duplicate resolved ISBNs only', () => {
+  const artifact = entries => ({ artifactVersion: CATALOG_ARTIFACT_VERSION, resolverVersion: CATALOG_RESOLVER_VERSION, entries });
+  const otherResolved = { ...resolved, key: 'sense-and-sensibility-jane-austen' };
+
+  assert.throws(
+    () => validateResolvedArtifact(artifact([resolved, otherResolved])),
+    error => error instanceof CatalogContractError && error.code === 'duplicate_resolved_isbn',
+  );
+
+  const nonResolvedEntries = ['needs_review', 'failed'].map((status, index) => ({
+    key: `unresolved-book-${index}`,
+    sourceFingerprint: fingerprint,
+    resolverVersion: CATALOG_RESOLVER_VERSION,
+    status,
+    diagnostic,
+  }));
+  assert.doesNotThrow(() => validateResolvedArtifact(artifact([resolved, ...nonResolvedEntries])));
+
+  const distinctResolved = {
+    ...otherResolved,
+    metadata: { ...resolved.metadata, isbn: '9780451524935' },
+  };
+  assert.doesNotThrow(() => validateResolvedArtifact(artifact([resolved, distinctResolved])));
 });

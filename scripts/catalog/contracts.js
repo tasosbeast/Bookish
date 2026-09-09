@@ -62,8 +62,8 @@ export function sourceFingerprint(value) {
   const entry = validateSourceEntry(value);
   const meaningful = {
     key: entry.key,
-    title: normalizeTitle(entry.title),
-    author: normalizeAuthorName(entry.author),
+    title: entry.title,
+    author: entry.author,
     preferredIsbn13: entry.preferredIsbn13 ?? null,
   };
   return `sha256:${createHash('sha256').update(JSON.stringify(meaningful)).digest('hex')}`;
@@ -186,5 +186,7 @@ export function validateResolvedArtifact(value) {
   const entries = artifact.entries.map(validateResolvedEntry);
   const keys = duplicateGroups(entries.map(entry => entry.key), 'key');
   if (keys.length) fail('duplicate_key', `Duplicate artifact key ${keys[0].key}`);
+  const resolvedIsbns = duplicateGroups(entries.filter(entry => entry.status === 'resolved').map(entry => entry.metadata.isbn), 'isbn');
+  if (resolvedIsbns.length) fail('duplicate_resolved_isbn', `Duplicate resolved ISBN ${resolvedIsbns[0].isbn}`);
   return { artifactVersion: artifact.artifactVersion, resolverVersion: artifact.resolverVersion, entries };
 }
