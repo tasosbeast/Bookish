@@ -1,6 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { signupSchema, shelfSchema, booksSchema, shelvesQuerySchema } from '../src/validators/index.js';
+import { parseEnv } from '../src/config/env.js';
+
+test('production configuration requires an explicit HTTPS frontend origin', () => {
+  const source = {
+    NODE_ENV: 'production',
+    DATABASE_URL: 'postgresql://bookish:password@db.example.com:5432/bookish',
+    JWT_ACCESS_SECRET: 'access-secret-'.repeat(5),
+    JWT_REFRESH_SECRET: 'refresh-secret-'.repeat(5),
+  };
+  assert.throws(() => parseEnv(source), /CLIENT_ORIGIN is required/);
+  assert.throws(() => parseEnv({ ...source, CLIENT_ORIGIN: 'http://app.example.com' }), /must use HTTPS/);
+  assert.equal(parseEnv({ ...source, CLIENT_ORIGIN: 'https://app.example.com' }).CLIENT_ORIGIN, 'https://app.example.com');
+});
 
 test('signup normalizes identity but preserves password and enforces bcrypt byte limit', () => {
   const body = { username: '  Reader_1 ', email: ' READER@example.com ', password: '  strong password  ' };

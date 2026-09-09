@@ -179,7 +179,7 @@ These writes use serializable transactions and bounded exponential retry with ji
 
 Errors have `{ "error": { "code": "...", "message": "..." } }`. Validation errors add `details` with field paths; unexpected errors include a request ID but no internal stack or SQL. Status codes include 400 validation, 401 authentication, 403 CSRF, 404 missing resource, 409 conflict, 413 oversized body, 429 rate limiting and 503 exhausted transaction contention.
 
-`GET /health` is a liveness check. The server connects to the database at startup and drains HTTP connections on SIGINT/SIGTERM. Rate limits currently use per-process memory: use a shared store and deployment-level controls before running multiple replicas. Configure `TRUST_PROXY_HOPS` only for the actual trusted proxy topology. Do not expose the sample database credentials outside local development.
+`GET /health` is a process liveness check. `GET /ready` verifies PostgreSQL connectivity and returns `200 { "status": "ready" }` or `503 { "status": "unavailable" }` without exposing connection details. The server executes a database probe before listening and drains HTTP connections on SIGINT/SIGTERM. Rate limits currently use per-process memory: use a shared store and deployment-level controls before running multiple replicas. Configure `TRUST_PROXY_HOPS` only for the actual trusted proxy topology. Do not expose the sample database credentials outside local development.
 
 The Prisma generator uses `prisma-client-js` to produce JavaScript for the requested plain `.js` Express backend. Prisma 7's PostgreSQL driver adapter is configured in `src/lib/prisma.js`. Tooling dependency overrides pin patched `deepmerge-ts` and `mysql2` versions; recheck them when upgrading Prisma.
 

@@ -16,6 +16,10 @@ export function parseEnv(source) {
   if (new URL(config.CLIENT_ORIGIN).origin !== config.CLIENT_ORIGIN) {
     throw new Error('CLIENT_ORIGIN must be an origin without a path or trailing slash');
   }
+  if (config.NODE_ENV === 'production') {
+    if (!source.CLIENT_ORIGIN) throw new Error('CLIENT_ORIGIN is required in production');
+    if (new URL(config.CLIENT_ORIGIN).protocol !== 'https:') throw new Error('CLIENT_ORIGIN must use HTTPS in production');
+  }
   return config;
 }
 

@@ -55,6 +55,40 @@ The frontend displays the real catalog, including an empty state when there are 
 
 For reliable editing, authenticated `GET /api/user-books/:bookId` returns the reader's exact shelf and review, independently of list pagination. Both are `null` when absent; an unknown book returns 404. See [API contracts](docs/API.md).
 
+## Production deployment
+
+Bookish requires Node.js 22.12+ and PostgreSQL with the `pg_trgm` extension available to the migration role. Configure these backend environment variables in the hosting platform; do not commit a production `.env` file:
+
+| Variable | Required production value |
+| --- | --- |
+| `NODE_ENV` | `production` |
+| `PORT` | The port assigned to the API process; defaults to `3000` |
+| `DATABASE_URL` | The production PostgreSQL connection URL, including the provider's required TLS options |
+| `JWT_ACCESS_SECRET` | A unique random secret of at least 48 characters |
+| `JWT_REFRESH_SECRET` | A different unique random secret of at least 48 characters |
+| `CLIENT_ORIGIN` | Exact public HTTPS frontend origin, with no path or trailing slash |
+| `TRUST_PROXY_HOPS` | Exact number of trusted reverse proxies between the client and Express; `0` only when traffic reaches Express directly |
+
+Build and release the backend from the repository root. `npm ci` must include dev dependencies for the Prisma CLI during this release phase because the generated client is intentionally not committed:
+
+```sh
+npm ci
+npm run db:generate
+npm run db:validate
+npm run db:deploy
+npm start
+```
+
+Build the frontend with its public API URL, including `/api`:
+
+```powershell
+$env:VITE_API_BASE_URL='https://api.example.com/api'
+npm ci --prefix frontend
+npm run build --prefix frontend
+```
+
+Serve `frontend/dist` as static files with SPA fallback to `index.html`. The frontend and API may use separate origins, but they must remain on the same HTTPS site for the Strict refresh cookie, such as `app.example.com` and `api.example.com`. Set `CLIENT_ORIGIN=https://app.example.com`; only that one origin receives credentialed CORS access. The API verifies PostgreSQL before opening its port. `/health` is the process liveness probe and `/ready` checks PostgreSQL, returning 503 if connectivity is later lost. Configure shutdown grace for at least 10 seconds. The current in-memory rate limiter assumes one API replica; add a shared rate-limit store before scaling to multiple replicas.
+
 ## Database design
 
 Target: Node.js, Express, PostgreSQL, Prisma ORM 7. Prisma field names are camelCase; `@map` / `@@map` expose snake_case database columns and tables. UUIDs identify entities; join tables use compound primary keys. All timestamps include time zones.

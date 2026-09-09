@@ -13,6 +13,8 @@ npm run dev --prefix frontend
 
 Open http://localhost:5173. The API defaults to http://localhost:3000/api. Copy `frontend/.env.example` to `frontend/.env` to override `VITE_API_BASE_URL` and restart Vite. This variable is public build configuration, never a secret. Set the backend's `CLIENT_ORIGIN` to the exact frontend origin. Keep localhost/127.0.0.1 consistent: the refresh cookie uses SameSite=Strict. Production requires HTTPS, compatible same-site API hosting, configured CORS, and SPA fallback to `index.html` for client routes.
 
+Production builds fail when `VITE_API_BASE_URL` is missing, preventing a deployed bundle from silently using the localhost development API. Set it to the public HTTPS API URL including `/api` before running `npm run build --prefix frontend`.
+
 ## Behavior
 
 - Discovery keeps `q`, `genre`, `sort`, `order` and `page` in the URL; search submits with Enter or the search button. Changing filters resets pagination. Genre labels come directly from API books and link to filtering; there is no fabricated genre catalog. Requests are cancelled and stale results discarded on navigation/filter changes.

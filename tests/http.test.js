@@ -11,12 +11,25 @@ import { bookFilter } from '../src/services/books.js';
 
 after(() => prisma.$disconnect());
 test('health, unknown routes, malformed JSON and invalid pagination', async () => {
-  await request(app).get('/health').expect(200);
+  const health = await request(app).get('/health').expect(200);
+  assert.equal(health.headers['cache-control'], 'no-store');
   await request(app).get('/missing').expect(404);
   await request(app).get('/api/books?limit=101').expect(400);
   await request(app).get('/api/books/not-a-uuid').expect(400);
   const response = await request(app).post('/api/auth/signup').set('Content-Type', 'application/json').send('{').expect(400);
   assert.equal(response.body.error.code, 'INVALID_JSON');
+});
+test('readiness reflects PostgreSQL availability without exposing connection details', async () => {
+  const query = prisma.$queryRaw;
+  try {
+    prisma.$queryRaw = async () => [{ '?column?': 1 }];
+    const ready = await request(app).get('/ready').expect(200, { status: 'ready' });
+    assert.equal(ready.headers['cache-control'], 'no-store');
+    prisma.$queryRaw = async () => { throw new Error('database connection contains sensitive details'); };
+    await request(app).get('/ready').expect(503, { status: 'unavailable' });
+  } finally {
+    prisma.$queryRaw = query;
+  }
 });
 test('auth endpoints enforce CSRF and validation before database access', async () => {
   await request(app).post('/api/auth/login').send({}).expect(403);
