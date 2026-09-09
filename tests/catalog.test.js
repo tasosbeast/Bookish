@@ -11,6 +11,12 @@ test('catalog ISBN checksum and committed manifest', () => {
   assert.equal(entries.length, 250);
   assert.equal(new Set(entries.map(e => isbn13(e.isbn))).size, 250);
 });
+test('catalog accepts the curated 250-entry manifest and retains a bounded size', async () => {
+  const entries = JSON.parse(readFileSync(new URL('../scripts/catalog.json', import.meta.url)));
+  const summary = await importCatalog(entries, { resolve: async () => null, save: async () => 'unchanged' });
+  assert.equal(summary.skipped, 250);
+  await assert.rejects(importCatalog([...entries, ...entries, entries[0]], { resolve: async () => null, save: async () => 'unchanged' }), /1–500/);
+});
 test('catalog maps edition metadata conservatively and genres predictably', () => {
   const data = mapEdition(isbn, edition, [' Jane Austen ', 'Jane Austen'], { description: { value: 'Description' } });
   assert.equal(data.author, 'Jane Austen'); assert.equal(data.publicationYear, 2003);

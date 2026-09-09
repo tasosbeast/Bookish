@@ -146,7 +146,7 @@ export async function saveMetadata(db, metadata, apply) {
   });
 }
 export async function importCatalog(manifest, { resolve, save, report = () => {} }) {
-  if (!Array.isArray(manifest) || !manifest.length || manifest.length > 100) throw new Error('Manifest must contain 1–100 entries');
+  if (!Array.isArray(manifest) || !manifest.length || manifest.length > 500) throw new Error('Manifest must contain 1–500 entries');
   const summary = { created: 0, updated: 0, unchanged: 0, skipped: 0, failed: 0, resolved: 0 };
   const seen = new Set();
   // Validate all entries before the first request or write.
