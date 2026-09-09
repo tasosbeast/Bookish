@@ -9,6 +9,7 @@ import {
 import { validateCanonicalCandidate } from './canonical-source.js';
 import { normalizeAuthorName, normalizeTitle } from './normalize.js';
 import { SnapshotRecordError } from './snapshot-reader.js';
+import { DEFAULT_MAX_OPEN_RUNS, DEFAULT_SORT_CHUNK_SIZE, DEFAULT_WRITE_BUFFER_BYTES, externalSortNdjson, readNdjson, stableJson } from './external-sort.js';
 
 export const SNAPSHOT_INDEX_VERSION = 1;
 export const SNAPSHOT_INDEX_SHARD_COUNT = 64;
@@ -29,12 +30,6 @@ function text(value, name) {
 function exactKeys(value, allowed, name) {
   if (!plainObject(value)) fail('invalid_snapshot_index', `${name} must be an object`);
   for (const key of Object.keys(value)) if (!allowed.includes(key)) fail('invalid_snapshot_index', `${name} contains unexpected field ${key}`);
-}
-
-function stableJson(value) {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
-  if (plainObject(value)) return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
-  return JSON.stringify(value);
 }
 
 function hash(value) {
@@ -66,6 +61,10 @@ function candidateOrder(left, right) {
 
 function pointerOrder(left, right) {
   return left.key.localeCompare(right.key) || left.recordKey.localeCompare(right.recordKey);
+}
+
+function recordKeyOrder(left, right) {
+  return left.recordKey.localeCompare(right.recordKey);
 }
 
 function emptyStats() {
@@ -138,25 +137,98 @@ async function append(handles, directory, shard, value) {
   let handle = handles.get(path);
   if (!handle) {
     await fs.mkdir(dirname(path), { recursive: true });
-    handle = await fs.open(path, 'a');
+    handle = { file: await fs.open(path, 'a'), buffer: '' };
     handles.set(path, handle);
   }
-  await handle.writeFile(`${stableJson(value)}\n`, 'utf8');
+  handle.buffer += `${stableJson(value)}\n`;
+  if (handle.buffer.length >= DEFAULT_WRITE_BUFFER_BYTES) {
+    await handle.file.writeFile(handle.buffer, 'utf8');
+    handle.buffer = '';
+  }
 }
 
 async function closeAll(handles) {
-  await Promise.all([...handles.values()].map(handle => handle.close()));
+  await Promise.all([...handles.values()].map(async handle => {
+    if (handle.buffer) await handle.file.writeFile(handle.buffer, 'utf8');
+    await handle.file.close();
+  }));
 }
 
-async function sortShardDirectory(directory, comparator) {
-  let files;
-  try { files = await fs.readdir(directory); }
-  catch (error) { if (error.code === 'ENOENT') return; throw error; }
-  for (const file of files.sort()) {
-    const path = join(directory, file);
-    const rows = (await fs.readFile(path, 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse).sort(comparator);
-    await fs.writeFile(path, `${rows.map(stableJson).join('\n')}\n`, 'utf8');
+async function reduceRecordShard({ sortedPath, tempPath, handles, stats }) {
+  let previousKey = null;
+  for await (const record of readNdjson(sortedPath)) {
+    if (!plainObject(record) || typeof record.recordKey !== 'string' || !own(record, 'candidate')) fail('corrupt_snapshot_index', 'Malformed sorted canonical record');
+    if (record.recordKey === previousKey) {
+      stats.duplicateRecords += 1;
+      continue;
+    }
+    previousKey = record.recordKey;
+    const candidate = validateCanonicalCandidate(record.candidate);
+    stats.accepted += 1;
+    const titleKey = titleAuthorKey(candidate);
+    const recordShard = shardFor(titleKey);
+    await append(handles, join(tempPath, 'records-source'), recordShard, { recordKey: record.recordKey, candidate });
+    await append(handles, join(tempPath, 'title-source'), recordShard, { key: titleKey, recordKey: record.recordKey, recordShard });
   }
+}
+
+async function reduceIsbnShard({ sortedPath, outputPath, stats }) {
+  const output = await fs.open(outputPath, 'w');
+  let buffer = '';
+  let isbn = null;
+  let total = 0;
+  let lastRecordKey = null;
+  let distinct = 0;
+  const completeGroup = () => {
+    if (total > 1) stats.duplicateIsbnGroups += 1;
+    if (distinct > 1) stats.conflictingDuplicateIsbnGroups += 1;
+  };
+  try {
+    for await (const pointer of readNdjson(sortedPath)) {
+      if (!plainObject(pointer) || typeof pointer.key !== 'string' || typeof pointer.recordKey !== 'string' || !Number.isInteger(pointer.recordShard)) fail('corrupt_snapshot_index', 'Malformed sorted ISBN pointer');
+      if (isbn !== null && pointer.key !== isbn) {
+        completeGroup();
+        total = 0;
+        lastRecordKey = null;
+        distinct = 0;
+      }
+      isbn = pointer.key;
+      total += 1;
+      if (pointer.recordKey !== lastRecordKey) {
+        distinct += 1;
+        lastRecordKey = pointer.recordKey;
+        buffer += `${stableJson(pointer)}\n`;
+        if (buffer.length >= DEFAULT_WRITE_BUFFER_BYTES) {
+          await output.writeFile(buffer, 'utf8');
+          buffer = '';
+        }
+      }
+    }
+    if (isbn !== null) completeGroup();
+    if (buffer) await output.writeFile(buffer, 'utf8');
+  } finally {
+    await output.close();
+  }
+}
+
+async function validateBuiltIndex(path, metadata) {
+  validateSnapshotIndexMetadata(metadata);
+  let recordCount = 0;
+  for (let shard = 0; shard < metadata.shardCount; shard++) {
+    const recordsPath = join(path, 'records', shardName(shard));
+    try {
+      for await (const record of readNdjson(recordsPath)) {
+        if (!plainObject(record) || typeof record.recordKey !== 'string' || !own(record, 'candidate')) fail('corrupt_snapshot_index', 'Malformed final canonical record');
+        const candidate = validateCanonicalCandidate(record.candidate);
+        if (candidate.sourceName !== metadata.sourceName || candidate.snapshotId !== metadata.snapshotId) fail('snapshot_identity_mismatch', 'Final canonical record does not match index metadata');
+        if (record.recordKey !== recordKey(candidate)) fail('corrupt_snapshot_index', 'Final canonical record key is invalid');
+        recordCount += 1;
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
+  if (recordCount !== metadata.recordCount) fail('corrupt_snapshot_index', 'Final canonical record count does not match metadata');
 }
 
 async function replaceDirectory(tempPath, outputPath) {
@@ -177,16 +249,24 @@ async function replaceDirectory(tempPath, outputPath) {
   if (movedExisting) await fs.rm(backupPath, { recursive: true, force: true });
 }
 
-export async function buildSnapshotIndex({ records, outputPath, sourceName, snapshotId, generatedAt = new Date().toISOString() }) {
+export async function buildSnapshotIndex({
+  records,
+  outputPath,
+  sourceName,
+  snapshotId,
+  generatedAt = new Date().toISOString(),
+  sortChunkSize = DEFAULT_SORT_CHUNK_SIZE,
+  maxOpenRuns = DEFAULT_MAX_OPEN_RUNS,
+  onSortRun = null,
+}) {
   if (!records || typeof records[Symbol.asyncIterator] !== 'function') fail('invalid_snapshot_reader', 'records must be an async iterable');
   sourceName = text(sourceName, 'sourceName');
   snapshotId = text(snapshotId, 'snapshotId');
   outputPath = resolve(outputPath);
   const tempPath = `${outputPath}.building-${process.pid}-${Date.now()}`;
   const stats = emptyStats();
-  const handles = new Map();
-  const seenRecordKeys = new Set();
-  const isbnGroups = new Map();
+  let handles = new Map();
+  const sortOptions = { chunkSize: sortChunkSize, maxOpenRuns, onRun: onSortRun };
   try {
     await fs.rm(tempPath, { recursive: true, force: true });
     await fs.mkdir(join(tempPath, 'records'), { recursive: true });
@@ -209,33 +289,46 @@ export async function buildSnapshotIndex({ records, outputPath, sourceName, snap
         continue;
       }
       const key = recordKey(candidate);
-      const group = isbnGroups.get(candidate.isbn13) ?? { total: 0, recordKeys: new Set() };
-      group.total += 1;
-      group.recordKeys.add(key);
-      isbnGroups.set(candidate.isbn13, group);
-      if (seenRecordKeys.has(key)) {
-        stats.duplicateRecords += 1;
-        continue;
-      }
-      seenRecordKeys.add(key);
-      stats.accepted += 1;
       const titleKey = titleAuthorKey(candidate);
       const recordShard = shardFor(titleKey);
       const record = { recordKey: key, candidate };
-      await append(handles, join(tempPath, 'records'), recordShard, record);
-      await append(handles, join(tempPath, 'lookup-isbn'), shardFor(candidate.isbn13), { key: candidate.isbn13, recordKey: key, recordShard });
-      await append(handles, join(tempPath, 'lookup-title-author'), recordShard, { key: titleKey, recordKey: key, recordShard });
+      await append(handles, join(tempPath, 'dedupe-source'), shardFor(key), record);
+      await append(handles, join(tempPath, 'isbn-source'), shardFor(candidate.isbn13), { key: candidate.isbn13, recordKey: key, recordShard });
     }
     await closeAll(handles);
-    for (const group of isbnGroups.values()) {
-      if (group.total > 1) stats.duplicateIsbnGroups += 1;
-      if (group.recordKeys.size > 1) stats.conflictingDuplicateIsbnGroups += 1;
+    handles = new Map();
+    for (let shard = 0; shard < SNAPSHOT_INDEX_SHARD_COUNT; shard++) {
+      const sourcePath = join(tempPath, 'dedupe-source', shardName(shard));
+      const sortedPath = join(tempPath, 'dedupe-sorted', shardName(shard));
+      await externalSortNdjson({ inputPath: sourcePath, outputPath: sortedPath, compare: recordKeyOrder, runDirectory: join(tempPath, 'runs', `dedupe-${shard}`), ...sortOptions });
+      try { await reduceRecordShard({ sortedPath, tempPath, handles, stats }); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
     }
-    await sortShardDirectory(join(tempPath, 'records'), candidateOrder);
-    await sortShardDirectory(join(tempPath, 'lookup-isbn'), pointerOrder);
-    await sortShardDirectory(join(tempPath, 'lookup-title-author'), pointerOrder);
+    await closeAll(handles);
+    handles = new Map();
+    for (let shard = 0; shard < SNAPSHOT_INDEX_SHARD_COUNT; shard++) {
+      const name = shardName(shard);
+      await externalSortNdjson({ inputPath: join(tempPath, 'records-source', name), outputPath: join(tempPath, 'records', name), compare: candidateOrder, runDirectory: join(tempPath, 'runs', `records-${shard}`), ...sortOptions });
+      await externalSortNdjson({ inputPath: join(tempPath, 'title-source', name), outputPath: join(tempPath, 'lookup-title-author', name), compare: pointerOrder, runDirectory: join(tempPath, 'runs', `title-${shard}`), ...sortOptions });
+      const isbnSortedPath = join(tempPath, 'isbn-sorted', name);
+      await externalSortNdjson({ inputPath: join(tempPath, 'isbn-source', name), outputPath: isbnSortedPath, compare: pointerOrder, runDirectory: join(tempPath, 'runs', `isbn-${shard}`), ...sortOptions });
+      try {
+        await fs.mkdir(join(tempPath, 'lookup-isbn'), { recursive: true });
+        await reduceIsbnShard({ sortedPath: isbnSortedPath, outputPath: join(tempPath, 'lookup-isbn', name), stats });
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    await fs.rm(join(tempPath, 'runs'), { recursive: true, force: true });
+    await Promise.all([
+      'dedupe-source',
+      'dedupe-sorted',
+      'isbn-source',
+      'isbn-sorted',
+      'records-source',
+      'title-source',
+    ].map(directory => fs.rm(join(tempPath, directory), { recursive: true, force: true })));
     const metadata = metadataFor({ sourceName, snapshotId, generatedAt, stats });
     await fs.writeFile(join(tempPath, 'index.json'), `${stableJson(metadata)}\n`, 'utf8');
+    await validateBuiltIndex(tempPath, metadata);
     await replaceDirectory(tempPath, outputPath);
     return validateSnapshotIndexMetadata(metadata);
   } catch (error) {

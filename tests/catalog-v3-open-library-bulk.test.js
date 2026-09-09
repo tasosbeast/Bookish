@@ -58,7 +58,7 @@ test('Open Library edition dump maps local author keys and edition-only metadata
   const directory = await temporaryDirectory();
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const { metadata, lookup } = await authorLookup(directory);
-  assert.deepEqual(metadata.statistics, { input: 3, accepted: 2, rejected: 1, conflicts: 0 });
+  assert.deepEqual(metadata.statistics, { input: 3, accepted: 2, rejected: 1, duplicates: 0, conflicts: 0 });
   const records = await collect(readOpenLibraryEditionCandidates({ inputPath: fileURLToPath(EDITIONS), snapshotId: SNAPSHOT_ID, authorLookup: lookup }));
   const candidates = records.filter(record => !(record instanceof SnapshotRecordError));
   const errors = records.filter(record => record instanceof SnapshotRecordError);

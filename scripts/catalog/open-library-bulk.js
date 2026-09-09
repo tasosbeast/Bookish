@@ -9,9 +9,10 @@ import { validateCanonicalCandidate } from './canonical-source.js';
 import { normalizeIsbn10ToIsbn13, normalizeIsbn13 } from './normalize.js';
 import { selectEditionPublicationYear } from './resolve.js';
 import { SnapshotRecordError } from './snapshot-reader.js';
+import { DEFAULT_MAX_OPEN_RUNS, DEFAULT_SORT_CHUNK_SIZE, DEFAULT_WRITE_BUFFER_BYTES, externalSortNdjson, readNdjson, stableJson } from './external-sort.js';
 
 export const OPEN_LIBRARY_BULK_SOURCE = 'open-library-bulk';
-export const OPEN_LIBRARY_AUTHOR_INDEX_VERSION = 1;
+export const OPEN_LIBRARY_AUTHOR_INDEX_VERSION = 2;
 const AUTHOR_INDEX_FORMAT = 'bookish-open-library-author-index';
 const AUTHOR_SHARD_COUNT = 64;
 
@@ -36,12 +37,6 @@ function shardFor(value) {
 
 function shardName(shard) {
   return `${String(shard).padStart(2, '0')}.ndjson`;
-}
-
-function stableJson(value) {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
-  if (plainObject(value)) return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
-  return JSON.stringify(value);
 }
 
 function dumpColumns(line) {
@@ -249,7 +244,7 @@ function validateAuthorIndexMetadata(value) {
   if (!text(value.snapshotId) || typeof value.generatedAt !== 'string' || Number.isNaN(Date.parse(value.generatedAt)) || !plainObject(value.statistics)) {
     fail('invalid_author_index', 'Author index metadata is malformed');
   }
-  for (const field of ['input', 'accepted', 'rejected', 'conflicts']) if (!Number.isSafeInteger(value.statistics[field]) || value.statistics[field] < 0) fail('invalid_author_index', `statistics.${field} is invalid`);
+  for (const field of ['input', 'accepted', 'rejected', 'duplicates', 'conflicts']) if (!Number.isSafeInteger(value.statistics[field]) || value.statistics[field] < 0) fail('invalid_author_index', `statistics.${field} is invalid`);
   return value;
 }
 
@@ -258,24 +253,75 @@ async function appendAuthor(handles, directory, key, value) {
   let handle = handles.get(path);
   if (!handle) {
     await fs.mkdir(dirname(path), { recursive: true });
-    handle = await fs.open(path, 'a');
+    handle = { file: await fs.open(path, 'a'), buffer: '' };
     handles.set(path, handle);
   }
-  await handle.writeFile(`${stableJson(value)}\n`, 'utf8');
+  handle.buffer += `${stableJson(value)}\n`;
+  if (handle.buffer.length >= DEFAULT_WRITE_BUFFER_BYTES) {
+    await handle.file.writeFile(handle.buffer, 'utf8');
+    handle.buffer = '';
+  }
 }
 
 async function closeHandles(handles) {
-  await Promise.all([...handles.values()].map(handle => handle.close()));
+  await Promise.all([...handles.values()].map(async handle => {
+    if (handle.buffer) await handle.file.writeFile(handle.buffer, 'utf8');
+    await handle.file.close();
+  }));
 }
 
-async function sortAuthorShards(path) {
-  const files = await fs.readdir(path);
-  for (const file of files.sort()) {
-    const shard = join(path, file);
-    const rows = (await fs.readFile(shard, 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse)
-      .sort((left, right) => left.key.localeCompare(right.key) || left.name.localeCompare(right.name));
-    await fs.writeFile(shard, `${rows.map(stableJson).join('\n')}\n`, 'utf8');
+function authorOrder(left, right) {
+  return left.key.localeCompare(right.key) || left.name.localeCompare(right.name);
+}
+
+async function reduceAuthorShard({ sortedPath, outputPath, statistics }) {
+  const output = await fs.open(outputPath, 'w');
+  let buffer = '';
+  let key = null;
+  let lastName = null;
+  let distinctNames = 0;
+  try {
+    for await (const row of readNdjson(sortedPath)) {
+      if (!plainObject(row) || typeof row.key !== 'string' || !text(row.name)) fail('invalid_author_index', 'Malformed sorted author row');
+      if (key !== row.key) {
+        key = row.key;
+        lastName = null;
+        distinctNames = 0;
+      }
+      if (row.name === lastName) {
+        statistics.duplicates += 1;
+        continue;
+      }
+      if (distinctNames > 0) statistics.conflicts += 1;
+      distinctNames += 1;
+      lastName = row.name;
+      statistics.accepted += 1;
+      buffer += `${stableJson({ key: row.key, name: text(row.name) })}\n`;
+      if (buffer.length >= DEFAULT_WRITE_BUFFER_BYTES) {
+        await output.writeFile(buffer, 'utf8');
+        buffer = '';
+      }
+    }
+    if (buffer) await output.writeFile(buffer, 'utf8');
+  } finally {
+    await output.close();
   }
+}
+
+async function validateBuiltAuthorIndex(path, metadata) {
+  validateAuthorIndexMetadata(metadata);
+  let count = 0;
+  for (let shard = 0; shard < AUTHOR_SHARD_COUNT; shard++) {
+    try {
+      for await (const row of readNdjson(join(path, 'authors', shardName(shard)))) {
+        if (!plainObject(row) || typeof row.key !== 'string' || !text(row.name)) fail('invalid_author_index', 'Malformed final author row');
+        count += 1;
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
+  if (count !== metadata.statistics.accepted) fail('invalid_author_index', 'Final author count does not match metadata');
 }
 
 async function replaceDirectory(tempPath, outputPath) {
@@ -291,14 +337,21 @@ async function replaceDirectory(tempPath, outputPath) {
   if (moved) await fs.rm(backup, { recursive: true, force: true });
 }
 
-export async function buildOpenLibraryAuthorIndex({ inputPath, outputPath, snapshotId, generatedAt = new Date().toISOString() }) {
+export async function buildOpenLibraryAuthorIndex({
+  inputPath,
+  outputPath,
+  snapshotId,
+  generatedAt = new Date().toISOString(),
+  sortChunkSize = DEFAULT_SORT_CHUNK_SIZE,
+  maxOpenRuns = DEFAULT_MAX_OPEN_RUNS,
+  onSortRun = null,
+}) {
   snapshotId = text(snapshotId);
   if (!snapshotId) fail('invalid_author_index', 'snapshotId is required');
   outputPath = resolve(outputPath);
   const tempPath = `${outputPath}.building-${process.pid}-${Date.now()}`;
   const handles = new Map();
-  const seen = new Map();
-  const statistics = { input: 0, accepted: 0, rejected: 0, conflicts: 0 };
+  const statistics = { input: 0, accepted: 0, rejected: 0, duplicates: 0, conflicts: 0 };
   try {
     await fs.rm(tempPath, { recursive: true, force: true });
     await fs.mkdir(join(tempPath, 'authors'), { recursive: true });
@@ -314,18 +367,31 @@ export async function buildOpenLibraryAuthorIndex({ inputPath, outputPath, snaps
         statistics.rejected += 1;
         continue;
       }
-      const names = seen.get(key) ?? new Set();
-      if (names.has(name)) continue;
-      if (names.size) statistics.conflicts += 1;
-      names.add(name);
-      seen.set(key, names);
-      statistics.accepted += 1;
-      await appendAuthor(handles, join(tempPath, 'authors'), key, { key, name });
+      await appendAuthor(handles, join(tempPath, 'authors-source'), key, { key, name });
     }
     await closeHandles(handles);
-    await sortAuthorShards(join(tempPath, 'authors'));
+    for (let shard = 0; shard < AUTHOR_SHARD_COUNT; shard++) {
+      const name = shardName(shard);
+      const sortedPath = join(tempPath, 'authors-sorted', name);
+      await externalSortNdjson({
+        inputPath: join(tempPath, 'authors-source', name),
+        outputPath: sortedPath,
+        compare: authorOrder,
+        runDirectory: join(tempPath, 'runs', `authors-${shard}`),
+        chunkSize: sortChunkSize,
+        maxOpenRuns,
+        onRun: onSortRun,
+      });
+      try {
+        await fs.mkdir(join(tempPath, 'authors'), { recursive: true });
+        await reduceAuthorShard({ sortedPath, outputPath: join(tempPath, 'authors', name), statistics });
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    await fs.rm(join(tempPath, 'runs'), { recursive: true, force: true });
+    await Promise.all(['authors-source', 'authors-sorted'].map(directory => fs.rm(join(tempPath, directory), { recursive: true, force: true })));
     const metadata = authorIndexMetadata({ snapshotId, generatedAt, statistics });
     await fs.writeFile(join(tempPath, 'index.json'), `${stableJson(metadata)}\n`, 'utf8');
+    await validateBuiltAuthorIndex(tempPath, metadata);
     await replaceDirectory(tempPath, outputPath);
     return validateAuthorIndexMetadata(metadata);
   } catch (cause) {
