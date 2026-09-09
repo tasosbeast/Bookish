@@ -73,6 +73,8 @@ test('catalog source manifest is a deterministic, valid set of 250 unique works'
   assert.equal(normalized.length, 250);
   assert.equal(new Set(normalized.map(entry => entry.key)).size, 250);
   assert.equal(new Set(normalized.map(entry => entry.preferredIsbn13)).size, 250);
+  assert.equal(normalized.filter(entry => entry.pinnedIsbn13).length, 30);
+  assert.equal(normalized.filter(entry => !entry.pinnedIsbn13).length, 220);
   assert.equal(new Set(normalized.map(entry => `${normalizeTitle(entry.title)}\u0000${normalizeAuthorName(entry.author)}`)).size, 250);
   assert.deepEqual(normalized.slice(0, productionPins.length).map(entry => entry.key), productionPins.map(([key]) => key));
 });
@@ -81,7 +83,10 @@ test('all 30 production book identities remain pinned to their imported ISBNs', 
   const byKey = new Map(validateSourceManifest(sourceEntries()).map(entry => [entry.key, entry]));
 
   assert.equal(productionPins.length, 30);
-  for (const [key, isbn] of productionPins) assert.equal(byKey.get(key)?.preferredIsbn13, isbn, key);
+  for (const [key, isbn] of productionPins) {
+    assert.equal(byKey.get(key)?.preferredIsbn13, isbn, key);
+    assert.equal(byKey.get(key)?.pinnedIsbn13, isbn, key);
+  }
 });
 
 test('known later edition replacements cannot replace production ISBN pins', () => {
@@ -91,5 +96,6 @@ test('known later edition replacements cannot replace production ISBN pins', () 
   for (const [key, laterIsbn] of changedCurrentEditions) {
     assert.notEqual(productionIsbns.get(key), laterIsbn, `${key} must retain its production edition`);
     assert.equal(byKey.get(key)?.preferredIsbn13, productionIsbns.get(key), key);
+    assert.equal(byKey.get(key)?.pinnedIsbn13, productionIsbns.get(key), key);
   }
 });

@@ -105,6 +105,8 @@ The Express runtime uses `@prisma/adapter-pg` and `pg`; the generated Prisma cli
 
 ## Catalog import
 
+`scripts/catalog-source.json` is the Catalog Pipeline v2 curated source. `preferredIsbn13` is a scoring preference and may resolve to another eligible edition. `pinnedIsbn13` is reserved for the 30 existing production books: a different selected ISBN becomes `needs_review` so the ISBN-based database identity cannot change silently.
+
 `catalog:import` reads only the validated Catalog Pipeline v2 artifact at `scripts/catalog-resolved.json`; it never contacts Open Library or Google Books. Use `--artifact <path>` to inspect or import another resolved artifact. Provider resolution is a separate step and production database writes never depend on live metadata services.
 
 Run a no-write database classification first:

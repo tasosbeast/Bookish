@@ -161,6 +161,102 @@ test('preferred ISBN exact lookup remains subject to Task 3 eligibility', async 
   assert.equal(result.artifact.entries[0].diagnostic.code, 'no_matched_work');
 });
 
+test('normal preferred ISBN remains guidance and may resolve to another eligible edition', async () => {
+  const source = { ...baseSource, preferredIsbn13: ISBN_B };
+  const { clients } = providers({ openWorks: [work(source)], openEditions: [edition(source, ISBN_A)], exactGoogle: null });
+  const result = await resolveCatalog({ sources: [source], providers: clients });
+  const entry = result.artifact.entries[0];
+
+  assert.equal(entry.status, 'resolved');
+  assert.equal(entry.metadata.isbn, ISBN_A);
+});
+
+test('matching production pin resolves and a different selected ISBN requires review', async () => {
+  const matchingSource = { ...baseSource, preferredIsbn13: ISBN_A, pinnedIsbn13: ISBN_A };
+  let configured = providers({ openWorks: [work(matchingSource)], openEditions: [edition(matchingSource, ISBN_A)] });
+  let result = await resolveCatalog({ sources: [matchingSource], providers: configured.clients });
+  let entry = result.artifact.entries[0];
+  assert.equal(entry.status, 'resolved');
+  assert.equal(entry.metadata.isbn, matchingSource.pinnedIsbn13);
+
+  const mismatchedSource = { ...baseSource, preferredIsbn13: ISBN_B, pinnedIsbn13: ISBN_B };
+  configured = providers({ openWorks: [work(mismatchedSource)], openEditions: [edition(mismatchedSource, ISBN_A)], exactGoogle: null });
+  result = await resolveCatalog({ sources: [mismatchedSource], providers: configured.clients });
+  entry = result.artifact.entries[0];
+  assert.equal(entry.status, 'needs_review');
+  assert.equal(entry.diagnostic.code, 'pinned_isbn_mismatch');
+  assert.match(entry.diagnostic.message, new RegExp(`${ISBN_B}.*${ISBN_A}`));
+});
+
+test('validated exact-ISBN Google evidence can satisfy a production pin', async () => {
+  const source = { ...baseSource, preferredIsbn13: ISBN_B, pinnedIsbn13: ISBN_B };
+  const exactGoogle = googleVolume(source, ISBN_B, 'pinned-google');
+  const configured = providers({
+    openWorks: [work(source)],
+    openEditions: [edition(source, ISBN_A)],
+    googleVolumes: [],
+    exactGoogle,
+  });
+  const result = await resolveCatalog({ sources: [source], providers: configured.clients });
+  const entry = result.artifact.entries[0];
+
+  assert.equal(entry.status, 'resolved');
+  assert.equal(entry.metadata.isbn, ISBN_B);
+  assert.equal(entry.providerIds.googleBooksVolume, 'pinned-google');
+});
+
+test('preferred exact-ISBN evidence cannot bypass matching or pinned identity', async () => {
+  const source = { ...baseSource, preferredIsbn13: ISBN_B, pinnedIsbn13: ISBN_B };
+  const wrongExact = googleVolume(source, ISBN_B, 'wrong', { title: 'The Silmarillion', authors: ['J. R. R. Tolkien'] });
+  const configured = providers({
+    openWorks: [work(source)],
+    openEditions: [edition(source, ISBN_A)],
+    exactGoogle: wrongExact,
+  });
+  const result = await resolveCatalog({ sources: [source], providers: configured.clients });
+  const entry = result.artifact.entries[0];
+
+  assert.equal(entry.status, 'needs_review');
+  assert.equal(entry.diagnostic.code, 'pinned_isbn_mismatch');
+  assert.match(entry.diagnostic.message, new RegExp(`${ISBN_B}.*${ISBN_A}`));
+});
+
+test('wrong or missing pinned edition evidence never resolves automatically', async () => {
+  const { preferredIsbn13, ...withoutPreference } = baseSource;
+  const source = { ...withoutPreference, pinnedIsbn13: ISBN_B };
+  const wrongExact = googleVolume(source, ISBN_B, 'wrong', { title: 'Sense and Sensibility', authors: ['Different Author'] });
+  let configured = providers({ openWorks: [], openEditions: [], googleVolumes: [], exactGoogle: wrongExact });
+  let result = await resolveCatalog({ sources: [source], providers: configured.clients });
+  assert.equal(result.artifact.entries[0].status, 'needs_review');
+  assert.equal(result.artifact.entries[0].diagnostic.code, 'no_matched_work');
+  assert.equal(configured.calls.googleExact, 1);
+
+  configured = providers({ openWorks: [], openEditions: [], googleVolumes: [], exactGoogle: null });
+  result = await resolveCatalog({ sources: [source], providers: configured.clients });
+  assert.equal(result.artifact.entries[0].status, 'needs_review');
+  assert.equal(result.artifact.entries[0].diagnostic.code, 'no_matched_work');
+  assert.equal(configured.calls.googleExact, 1);
+});
+
+test('provider failure retains failed semantics when it prevents pinned resolution', async () => {
+  const source = { ...baseSource, preferredIsbn13: ISBN_B, pinnedIsbn13: ISBN_B };
+  const timeout = new CatalogProviderError({
+    provider: 'google_books', stage: 'isbn_lookup', code: 'timeout', status: null,
+    retryable: true, attempts: 3, message: 'Pinned ISBN lookup timed out',
+  });
+  const configured = providers({
+    openWorks: [work(source)],
+    openEditions: [edition(source, ISBN_A)],
+    errors: { googleExact: timeout },
+  });
+  const result = await resolveCatalog({ sources: [source], providers: configured.clients });
+  const entry = result.artifact.entries[0];
+
+  assert.equal(entry.status, 'failed');
+  assert.equal(entry.diagnostic.code, 'timeout');
+  assert.equal(entry.diagnostic.provider, 'google_books');
+});
+
 test('resolver returns needs_review for ambiguous works, editions and absent eligible editions', async () => {
   const ambiguousWorks = providers({ openWorks: [work(baseSource, 'OL1W'), work(baseSource, 'OL2W')], googleVolumes: [] });
   let result = await resolveCatalog({ sources: [baseSource], providers: ambiguousWorks.clients });

@@ -7,6 +7,7 @@ import {
   CATALOG_RESOLVER_VERSION,
   sourceFingerprint,
   validateResolvedArtifact,
+  validateResolvedEntryForSource,
   validateSourceManifest,
 } from './contracts.js';
 import { matchWork } from './match.js';
@@ -126,13 +127,25 @@ function mergedMetadata(source, { selected, isbn, openWork, exactGoogle }) {
 function resolvedEntry(source, selection, context) {
   const { metadata, provenance } = mergedMetadata(source, { selected: selection.selected, isbn: selection.isbn, openWork: context.openWork, exactGoogle: context.exactGoogle });
   const sourceName = selection.selected.provider === 'open_library' ? 'selected_open_library_edition' : 'selected_google_books_volume';
-  return entryBase(source, 'resolved', {
+  return validateResolvedEntryForSource(source, entryBase(source, 'resolved', {
     metadata,
     providerIds: providerIds({ selected: selection.selected, openWork: context.openWork, exactGoogle: context.exactGoogle }),
     provenance,
     selection: { score: selection.score, reasons: [...selection.reasons, sourceName, ...context.notes] },
     diagnostic: null,
-  });
+  }));
+}
+
+function resolvedOrPinnedReview(source, selection, context) {
+  if (source.pinnedIsbn13 && selection.isbn !== source.pinnedIsbn13) {
+    return reviewEntry(
+      source,
+      'pinned_isbn_mismatch',
+      `Pinned ISBN ${source.pinnedIsbn13} was required, but edition selection chose ${selection.isbn}`,
+      'edition_selection',
+    );
+  }
+  return resolvedEntry(source, selection, context);
 }
 
 function selectionReview(source, selection) {
@@ -150,6 +163,7 @@ async function invoke(context, client, method, argument) {
 async function resolveSource(source, context) {
   const notes = [];
   const errors = [];
+  let pinnedMismatchReview = null;
   let openWorks = [];
   let googleVolumes = [];
   let exactGoogle = null;
@@ -158,8 +172,9 @@ async function resolveSource(source, context) {
   catch (error) { errors.push(error); notes.push('open_library_search_failed'); }
   try { googleVolumes = await invoke(context, context.providers.googleBooks, 'searchVolumes', { title: source.title, author: source.author }); }
   catch (error) { errors.push(error); notes.push('google_books_search_failed'); }
-  if (source.preferredIsbn13) {
-    try { exactGoogle = await invoke(context, context.providers.googleBooks, 'lookupByIsbn', source.preferredIsbn13); }
+  const exactIsbn = source.pinnedIsbn13 ?? source.preferredIsbn13;
+  if (exactIsbn) {
+    try { exactGoogle = await invoke(context, context.providers.googleBooks, 'lookupByIsbn', exactIsbn); }
     catch (error) { errors.push(error); notes.push('google_books_exact_isbn_failed'); }
   }
 
@@ -184,7 +199,11 @@ async function resolveSource(source, context) {
     try {
       const editions = await invoke(context, context.providers.openLibrary, 'fetchEditionsForWork', openChoice.winner.candidate.providerIds.workId);
       const selection = selectEdition(source, editions, { workMatch: openChoice.winner.match });
-      if (selection.status === 'selected') return resolvedEntry(source, selection, { openWork, exactGoogle: usableExactGoogle, notes });
+      if (selection.status === 'selected') {
+        const finalized = resolvedOrPinnedReview(source, selection, { openWork, exactGoogle: usableExactGoogle, notes });
+        if (finalized.status === 'resolved') return finalized;
+        pinnedMismatchReview = finalized;
+      }
       if (selection.status === 'needs_review' && !errors.length) return selectionReview(source, selection);
     } catch (error) {
       errors.push(error);
@@ -194,11 +213,12 @@ async function resolveSource(source, context) {
 
   if (googleCandidates.length) {
     const selection = selectEdition(source, googleCandidates);
-    if (selection.status === 'selected') return resolvedEntry(source, selection, { openWork: null, exactGoogle: usableExactGoogle, notes });
+    if (selection.status === 'selected') return resolvedOrPinnedReview(source, selection, { openWork: null, exactGoogle: usableExactGoogle, notes });
     if (selection.status === 'needs_review' && !errors.length) return selectionReview(source, selection);
   }
 
   if (errors.length) return failedEntry(source, errors[0]);
+  if (pinnedMismatchReview) return pinnedMismatchReview;
   if (openChoice.status === 'selected') return reviewEntry(source, 'no_eligible_edition', 'The matched Open Library work has no eligible edition', 'edition_selection');
   return reviewEntry(source, 'no_matched_work', 'No provider work or volume strongly matched the curated source', 'work_matching');
 }

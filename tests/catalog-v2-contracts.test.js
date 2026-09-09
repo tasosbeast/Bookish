@@ -8,6 +8,7 @@ import {
   sourceFingerprint,
   validateResolvedArtifact,
   validateResolvedEntry,
+  validateResolvedEntryForSource,
   validateSourceEntry,
   validateSourceManifest,
 } from '../scripts/catalog/contracts.js';
@@ -28,6 +29,22 @@ test('v2 source contract accepts canonical entries and checks ISBN-13', () => {
   assert.deepEqual(validateSourceEntry(source), { ...source, preferredIsbn13: '9780141439518' });
   assert.equal(normalizeIsbn13('978-0-14-143951-8'), '9780141439518');
   for (const value of ['9780141439519', null, 9780141439518]) assert.throws(() => validateSourceEntry({ ...source, preferredIsbn13: value }));
+});
+
+test('production pins are validated, consistent with preferences and fingerprinted', () => {
+  const pinned = { ...source, pinnedIsbn13: source.preferredIsbn13 };
+  assert.deepEqual(validateSourceEntry(pinned), { ...source, preferredIsbn13: '9780141439518', pinnedIsbn13: '9780141439518' });
+  assert.throws(() => validateSourceEntry({ ...pinned, pinnedIsbn13: '9780141439519' }), /valid ISBN-13/);
+  assert.throws(
+    () => validateSourceEntry({ ...pinned, pinnedIsbn13: '9780451524935' }),
+    error => error instanceof CatalogContractError && error.code === 'pinned_preferred_mismatch',
+  );
+
+  const { preferredIsbn13, ...withoutPreference } = source;
+  assert.notEqual(
+    sourceFingerprint({ ...withoutPreference, pinnedIsbn13: '9780141439518' }),
+    sourceFingerprint({ ...withoutPreference, pinnedIsbn13: '9780451524935' }),
+  );
 });
 
 test('v2 source contract rejects malformed and unexpected values', () => {
@@ -61,6 +78,18 @@ test('v2 duplicate detection finds keys, ISBN preferences and normalized works',
   const { preferredIsbn13: sourceIsbn, ...withoutSourceIsbn } = source;
   const { preferredIsbn13: secondIsbn, ...withoutSecondIsbn } = second;
   assert.throws(() => validateSourceManifest([withoutSourceIsbn, withoutSecondIsbn]), /Duplicate normalized work/);
+});
+
+test('v2 source manifest rejects duplicate production pins', () => {
+  const { preferredIsbn13, ...withoutPreference } = source;
+  const entries = [
+    { ...withoutPreference, pinnedIsbn13: '9780141439518' },
+    { key: 'another-book-another-author', title: 'Another Book', author: 'Another Author', pinnedIsbn13: '9780141439518' },
+  ];
+  assert.throws(
+    () => validateSourceManifest(entries),
+    error => error instanceof CatalogContractError && error.code === 'duplicate_pinned_isbn',
+  );
 });
 
 test('v2 resolved artifact contract accepts resolved entries and rejects invalid metadata', () => {
@@ -102,4 +131,16 @@ test('v2 resolved artifact rejects duplicate resolved ISBNs only', () => {
     metadata: { ...resolved.metadata, isbn: '9780451524935' },
   };
   assert.doesNotThrow(() => validateResolvedArtifact(artifact([resolved, distinctResolved])));
+});
+
+test('source-specific resolved entry validation enforces pinned identity', () => {
+  const pinned = { ...source, pinnedIsbn13: source.preferredIsbn13 };
+  const matching = { ...resolved, sourceFingerprint: sourceFingerprint(pinned) };
+  assert.equal(validateResolvedEntryForSource(pinned, matching).metadata.isbn, '9780141439518');
+
+  const mismatched = { ...matching, metadata: { ...matching.metadata, isbn: '9780451524935' } };
+  assert.throws(
+    () => validateResolvedEntryForSource(pinned, mismatched),
+    error => error instanceof CatalogContractError && error.code === 'pinned_resolved_isbn_mismatch',
+  );
 });

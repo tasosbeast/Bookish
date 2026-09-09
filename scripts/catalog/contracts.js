@@ -47,7 +47,7 @@ function normalizedIsbn(value, name = 'preferredIsbn13') {
 
 export function validateSourceEntry(value) {
   const entry = object(value, 'Source entry');
-  exactKeys(entry, ['key', 'title', 'author', 'preferredIsbn13'], 'Source entry');
+  exactKeys(entry, ['key', 'title', 'author', 'preferredIsbn13', 'pinnedIsbn13'], 'Source entry');
   const rawKey = requiredText(entry.key, 'key');
   const key = normalizeStableKey(rawKey);
   if (!key || rawKey !== key) fail('invalid_key', 'key must be a stable lowercase kebab-case string');
@@ -55,6 +55,10 @@ export function validateSourceEntry(value) {
   const author = requiredText(entry.author, 'author');
   const normalized = { key, title, author };
   if (own(entry, 'preferredIsbn13')) normalized.preferredIsbn13 = normalizedIsbn(entry.preferredIsbn13);
+  if (own(entry, 'pinnedIsbn13')) normalized.pinnedIsbn13 = normalizedIsbn(entry.pinnedIsbn13, 'pinnedIsbn13');
+  if (normalized.preferredIsbn13 && normalized.pinnedIsbn13 && normalized.preferredIsbn13 !== normalized.pinnedIsbn13) {
+    fail('pinned_preferred_mismatch', 'pinnedIsbn13 and preferredIsbn13 must match when both are present');
+  }
   return normalized;
 }
 
@@ -66,6 +70,7 @@ export function sourceFingerprint(value) {
     author: entry.author,
     preferredIsbn13: entry.preferredIsbn13 ?? null,
   };
+  if (entry.pinnedIsbn13) meaningful.pinnedIsbn13 = entry.pinnedIsbn13;
   return `sha256:${createHash('sha256').update(JSON.stringify(meaningful)).digest('hex')}`;
 }
 
@@ -86,6 +91,7 @@ export function detectSourceDuplicates(entries) {
   return {
     keys: duplicateGroups(normalized.map(entry => entry.key), 'key'),
     preferredIsbn13: duplicateGroups(normalized.map(entry => entry.preferredIsbn13), 'isbn'),
+    pinnedIsbn13: duplicateGroups(normalized.map(entry => entry.pinnedIsbn13), 'isbn'),
     works: duplicateGroups(normalized.map(entry => `${normalizeTitle(entry.title)}\u0000${normalizeAuthorName(entry.author)}`), 'work'),
   };
 }
@@ -96,6 +102,7 @@ export function validateSourceManifest(entries) {
   const duplicates = detectSourceDuplicates(normalized);
   if (duplicates.keys.length) fail('duplicate_key', `Duplicate source key ${duplicates.keys[0].key}`);
   if (duplicates.preferredIsbn13.length) fail('duplicate_isbn', `Duplicate preferred ISBN ${duplicates.preferredIsbn13[0].isbn}`);
+  if (duplicates.pinnedIsbn13.length) fail('duplicate_pinned_isbn', `Duplicate pinned ISBN ${duplicates.pinnedIsbn13[0].isbn}`);
   if (duplicates.works.length) fail('duplicate_work', 'Duplicate normalized work');
   return normalized;
 }
@@ -175,6 +182,17 @@ export function validateResolvedEntry(value) {
     key, sourceFingerprint, resolverVersion, status: 'resolved', metadata: validateMetadata(entry.metadata),
     providerIds: validateProviderIds(entry.providerIds), provenance: validateProvenance(entry.provenance), selection: validateSelection(entry.selection), diagnostic: null,
   };
+}
+
+export function validateResolvedEntryForSource(sourceValue, entryValue) {
+  const source = validateSourceEntry(sourceValue);
+  const entry = validateResolvedEntry(entryValue);
+  if (entry.key !== source.key) fail('source_entry_mismatch', 'Resolved entry key does not match its source');
+  if (entry.sourceFingerprint !== sourceFingerprint(source)) fail('source_entry_mismatch', 'Resolved entry fingerprint does not match its source');
+  if (entry.status === 'resolved' && source.pinnedIsbn13 && entry.metadata.isbn !== source.pinnedIsbn13) {
+    fail('pinned_resolved_isbn_mismatch', `Resolved ISBN ${entry.metadata.isbn} does not match pinned ISBN ${source.pinnedIsbn13}`);
+  }
+  return entry;
 }
 
 export function validateResolvedArtifact(value) {
