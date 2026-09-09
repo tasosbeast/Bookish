@@ -1,32 +1,1002 @@
 [
- {"isbn":"9780140435962","label":"Pride and Prejudice"},
- {"isbn":"9798687166393","label":"Wuthering Heights"},
- {"isbn":"9780141441146","label":"Jane Eyre"},
- {"isbn":"9780593135204","label":"Project Hail Mary"},
- {"isbn":"9780743273565","label":"The Great Gatsby"},
- {"isbn":"9780061120084","label":"To Kill a Mockingbird"},
- {"isbn":"9780241436493","label":"Nineteen Eighty-Four"},
- {"isbn":"9780451510280","label":"Animal Farm"},
- {"isbn":"9780812415834","label":"The Hobbit"},
- {"isbn":"9780425064344","label":"Dune"},
- {"isbn":"9781473217379","label":"Neuromancer"},
- {"isbn":"9780735219090","label":"Where the Crawdads Sing"},
- {"isbn":"9780812532531","label":"Ender's Game"},
- {"isbn":"9781984822185","label":"Normal People"},
- {"isbn":"9780307743657","label":"The Shining"},
- {"isbn":"9781906141011","label":"And Then There Were None"},
- {"isbn":"9780061122415","label":"The Alchemist"},
- {"isbn":"9780060883287","label":"One Hundred Years of Solitude"},
- {"isbn":"9780307387899","label":"The Road (Oprah's Book Club)"},
- {"isbn":"9781408802953","label":"Handmaid's Tale"},
- {"isbn":"9780393417937","label":"Odyssey"},
- {"isbn":"9780593081501","label":"Count of Monte Cristo"},
- {"isbn":"9780140449334","label":"Meditations (Penguin Classics)"},
- {"isbn":"9780613074049","label":"A Brief History Of Time"},
- {"isbn":"9780062316103","label":"Sapiens"},
- {"isbn":"9780812981605","label":"The Power of Habit"},
- {"isbn":"9780385676533","label":"Thinking, Fast and Slow"},
- {"isbn":"9780613371896","label":"Matilda"},
- {"isbn":"9780140347227","label":"Charlotte's Web"},
- {"isbn":"9788490019023","label":"The Little Prince"}
+  {
+    "isbn": "9780140435962",
+    "label": "Pride and Prejudice"
+  },
+  {
+    "isbn": "9798687166393",
+    "label": "Wuthering Heights"
+  },
+  {
+    "isbn": "9780141441146",
+    "label": "Jane Eyre"
+  },
+  {
+    "isbn": "9780593135204",
+    "label": "Project Hail Mary"
+  },
+  {
+    "isbn": "9780743273565",
+    "label": "The Great Gatsby"
+  },
+  {
+    "isbn": "9780061120084",
+    "label": "To Kill a Mockingbird"
+  },
+  {
+    "isbn": "9780241436493",
+    "label": "Nineteen Eighty-Four"
+  },
+  {
+    "isbn": "9780451510280",
+    "label": "Animal Farm"
+  },
+  {
+    "isbn": "9780812415834",
+    "label": "The Hobbit"
+  },
+  {
+    "isbn": "9780425064344",
+    "label": "Dune"
+  },
+  {
+    "isbn": "9781473217379",
+    "label": "Neuromancer"
+  },
+  {
+    "isbn": "9780735219090",
+    "label": "Where the Crawdads Sing"
+  },
+  {
+    "isbn": "9780812532531",
+    "label": "Ender's Game"
+  },
+  {
+    "isbn": "9781984822185",
+    "label": "Normal People"
+  },
+  {
+    "isbn": "9780307743657",
+    "label": "The Shining"
+  },
+  {
+    "isbn": "9781906141011",
+    "label": "And Then There Were None"
+  },
+  {
+    "isbn": "9780061122415",
+    "label": "The Alchemist"
+  },
+  {
+    "isbn": "9780060883287",
+    "label": "One Hundred Years of Solitude"
+  },
+  {
+    "isbn": "9780307387899",
+    "label": "The Road (Oprah's Book Club)"
+  },
+  {
+    "isbn": "9781408802953",
+    "label": "Handmaid's Tale"
+  },
+  {
+    "isbn": "9780393417937",
+    "label": "Odyssey"
+  },
+  {
+    "isbn": "9780593081501",
+    "label": "Count of Monte Cristo"
+  },
+  {
+    "isbn": "9780140449334",
+    "label": "Meditations (Penguin Classics)"
+  },
+  {
+    "isbn": "9780613074049",
+    "label": "A Brief History Of Time"
+  },
+  {
+    "isbn": "9780062316103",
+    "label": "Sapiens"
+  },
+  {
+    "isbn": "9780812981605",
+    "label": "The Power of Habit"
+  },
+  {
+    "isbn": "9780385676533",
+    "label": "Thinking, Fast and Slow"
+  },
+  {
+    "isbn": "9780613371896",
+    "label": "Matilda"
+  },
+  {
+    "isbn": "9780140347227",
+    "label": "Charlotte's Web"
+  },
+  {
+    "isbn": "9788490019023",
+    "label": "The Little Prince"
+  },
+  {
+    "isbn": "9780439554930",
+    "label": "Harry Potter and the Philosopher's Stone"
+  },
+  {
+    "isbn": "9780618260300",
+    "label": "The Hobbit or There and Back Again"
+  },
+  {
+    "isbn": "9780060764890",
+    "label": "The Lion, the Witch and the Wardrobe"
+  },
+  {
+    "isbn": "9780142000670",
+    "label": "Of Mice and Men"
+  },
+  {
+    "isbn": "9780739326220",
+    "label": "Memoirs of a Geisha"
+  },
+  {
+    "isbn": "9780385732550",
+    "label": "The Giver"
+  },
+  {
+    "isbn": "9781416914280",
+    "label": "City of Bones"
+  },
+  {
+    "isbn": "9780060513030",
+    "label": "Where the Sidewalk Ends: The Poems and Drawings of Shel Silverstein"
+  },
+  {
+    "isbn": "9780439244190",
+    "label": "Holes"
+  },
+  {
+    "isbn": "9780141439600",
+    "label": "A Tale of Two Cities"
+  },
+  {
+    "isbn": "9780099408390",
+    "label": "Where the Wild Things Are"
+  },
+  {
+    "isbn": "9780307269980",
+    "label": "Flickan som lekte med elden"
+  },
+  {
+    "isbn": "9780684830490",
+    "label": "The Old Man and the Sea"
+  },
+  {
+    "isbn": "9780451525260",
+    "label": "Les Misérables"
+  },
+  {
+    "isbn": "9780525421030",
+    "label": "If I Stay"
+  },
+  {
+    "isbn": "9780452287020",
+    "label": "Girl with a Pearl Earring"
+  },
+  {
+    "isbn": "9780141382890",
+    "label": "The Titan's Curse"
+  },
+  {
+    "isbn": "9780964729230",
+    "label": "The Shack: Where Tragedy Confronts Eternity"
+  },
+  {
+    "isbn": "9780786817870",
+    "label": "Artemis Fowl"
+  },
+  {
+    "isbn": "9780066238500",
+    "label": "The Chronicles of Narnia"
+  },
+  {
+    "isbn": "9780553213690",
+    "label": "Die Verwandlung"
+  },
+  {
+    "isbn": "9780385721790",
+    "label": "Atonement"
+  },
+  {
+    "isbn": "9780061125270",
+    "label": "The Voyage of the Dawn Treader"
+  },
+  {
+    "isbn": "9780385738750",
+    "label": "The Scorch Trials"
+  },
+  {
+    "isbn": "9781400034680",
+    "label": "El amor en los tiempos del cólera"
+  },
+  {
+    "isbn": "9780552995870",
+    "label": "Como agua para chocolate"
+  },
+  {
+    "isbn": "9780786890750",
+    "label": "PS, I Love You"
+  },
+  {
+    "isbn": "9780525423270",
+    "label": "Anna and the French Kiss"
+  },
+  {
+    "isbn": "9781595141750",
+    "label": "Frostbite"
+  },
+  {
+    "isbn": "9780007202300",
+    "label": "Prince Caspian: The Return to Narnia"
+  },
+  {
+    "isbn": "9780307279460",
+    "label": "A Walk in the Woods"
+  },
+  {
+    "isbn": "9780449213940",
+    "label": "Im Westen nichts Neues"
+  },
+  {
+    "isbn": "9780140275360",
+    "label": "Ἰλιάς"
+  },
+  {
+    "isbn": "9780743477550",
+    "label": "The Tragedy of Othello, The Moor of Venice"
+  },
+  {
+    "isbn": "9780525421580",
+    "label": "Will Grayson, Will Grayson"
+  },
+  {
+    "isbn": "9780375869020",
+    "label": "Wonder"
+  },
+  {
+    "isbn": "9780670022410",
+    "label": "A Discovery of Witches"
+  },
+  {
+    "isbn": "9780689840920",
+    "label": "Hatchet"
+  },
+  {
+    "isbn": "9780590032490",
+    "label": "The Witches"
+  },
+  {
+    "isbn": "9780345505330",
+    "label": "Hotel on the Corner of Bitter and Sweet"
+  },
+  {
+    "isbn": "9780553212280",
+    "label": "The Tell-Tale Heart"
+  },
+  {
+    "isbn": "9780613371650",
+    "label": "The Princess Diaries"
+  },
+  {
+    "isbn": "9780060838720",
+    "label": "Bel Canto"
+  },
+  {
+    "isbn": "9780439321600",
+    "label": "Fantastic Beasts and Where to Find Them"
+  },
+  {
+    "isbn": "9780061120060",
+    "label": "Their Eyes Were Watching God"
+  },
+  {
+    "isbn": "9780142406250",
+    "label": "The Truth About Forever"
+  },
+  {
+    "isbn": "9781844080380",
+    "label": "Rebecca"
+  },
+  {
+    "isbn": "9780765346520",
+    "label": "Wizard's First Rule"
+  },
+  {
+    "isbn": "9780739467350",
+    "label": "Guns, Germs, and Steel: The Fates of Human Societies"
+  },
+  {
+    "isbn": "9780525951650",
+    "label": "Fall of Giants"
+  },
+  {
+    "isbn": "9780670024780",
+    "label": "The Invention of Wings"
+  },
+  {
+    "isbn": "9780141043760",
+    "label": "What Alice Forgot"
+  },
+  {
+    "isbn": "9780441014910",
+    "label": "Definitely Dead (Sookie Stackhouse, #6)"
+  },
+  {
+    "isbn": "9781406321340",
+    "label": "Clockwork Princess"
+  },
+  {
+    "isbn": "9780670241330",
+    "label": "Corduroy"
+  },
+  {
+    "isbn": "9780316013680",
+    "label": "The Absolutely True Diary of a Part-Time Indian"
+  },
+  {
+    "isbn": "9780385074070",
+    "label": "The Complete Tales of Edgar Allan Poe"
+  },
+  {
+    "isbn": "9780385336000",
+    "label": "Voyager"
+  },
+  {
+    "isbn": "9780743253970",
+    "label": "A Separate Peace"
+  },
+  {
+    "isbn": "9780345418920",
+    "label": "The Restaurant at the End of the Universe"
+  },
+  {
+    "isbn": "9780316769020",
+    "label": "Franny and Zooey"
+  },
+  {
+    "isbn": "9780375507250",
+    "label": "Cloud Atlas"
+  },
+  {
+    "isbn": "9780670011940",
+    "label": "Along for the Ride"
+  },
+  {
+    "isbn": "9781416912040",
+    "label": "Unwind"
+  },
+  {
+    "isbn": "9780140544510",
+    "label": "The True Story of the Three Little Pigs"
+  },
+  {
+    "isbn": "9781421501680",
+    "label": "デスノート #1 (Desu Nōto) Taikutsu (退屈)"
+  },
+  {
+    "isbn": "9780062409850",
+    "label": "Go Set a Watchman"
+  },
+  {
+    "isbn": "9780142437230",
+    "label": "Don Quijote de La Mancha"
+  },
+  {
+    "isbn": "9780618391110",
+    "label": "The Silmarillion"
+  },
+  {
+    "isbn": "9780061662690",
+    "label": "The Summoning"
+  },
+  {
+    "isbn": "9780099428640",
+    "label": "Der Prozeß"
+  },
+  {
+    "isbn": "9780545123280",
+    "label": "Linger"
+  },
+  {
+    "isbn": "9780786226740",
+    "label": "The Cider House Rules"
+  },
+  {
+    "isbn": "9780312348670",
+    "label": "Love the One You're With"
+  },
+  {
+    "isbn": "9780743272490",
+    "label": "The Constant Princess"
+  },
+  {
+    "isbn": "9780385335980",
+    "label": "Drums of Autumn (Outlander, #4)"
+  },
+  {
+    "isbn": "9780385739160",
+    "label": "Passion"
+  },
+  {
+    "isbn": "9780374158460",
+    "label": "Freedom"
+  },
+  {
+    "isbn": "9780380813810",
+    "label": "Lamb: The Gospel According to Biff, Christ's Childhood Pal"
+  },
+  {
+    "isbn": "9780446615860",
+    "label": "The Wedding"
+  },
+  {
+    "isbn": "9780142401200",
+    "label": "The Westing Game"
+  },
+  {
+    "isbn": "9780060652890",
+    "label": "A Grief Observed"
+  },
+  {
+    "isbn": "9780763625290",
+    "label": "The Tale of Despereaux"
+  },
+  {
+    "isbn": "9780671683900",
+    "label": "Lonesome Dove"
+  },
+  {
+    "isbn": "9780345419620",
+    "label": "The Queen of the Damned"
+  },
+  {
+    "isbn": "9780689707490",
+    "label": "Cloudy with a Chance of Meatballs"
+  },
+  {
+    "isbn": "9781569319000",
+    "label": "NARUTO -ナルト- 巻ノ一"
+  },
+  {
+    "isbn": "9780689865190",
+    "label": "Crank (Crank, #1)"
+  },
+  {
+    "isbn": "9780425227510",
+    "label": "Vision in White"
+  },
+  {
+    "isbn": "9781593081430",
+    "label": "The Age of Innocence"
+  },
+  {
+    "isbn": "9780375829130",
+    "label": "The Monster at the End of This Book"
+  },
+  {
+    "isbn": "9781933372600",
+    "label": "L'élégance du hérisson"
+  },
+  {
+    "isbn": "9780142421710",
+    "label": "Crossed"
+  },
+  {
+    "isbn": "9780061996160",
+    "label": "Unearthly"
+  },
+  {
+    "isbn": "9780345457370",
+    "label": "The Bonesetter's Daughter"
+  },
+  {
+    "isbn": "9780553213140",
+    "label": "Anne of Avonlea"
+  },
+  {
+    "isbn": "9781619636040",
+    "label": "Queen of Shadows"
+  },
+  {
+    "isbn": "9781860498800",
+    "label": "The Blind Assassin"
+  },
+  {
+    "isbn": "9780451222350",
+    "label": "Lover Unbound"
+  },
+  {
+    "isbn": "9781884365300",
+    "label": "The Jungle"
+  },
+  {
+    "isbn": "9780345484260",
+    "label": "Dragonflight"
+  },
+  {
+    "isbn": "9780330371230",
+    "label": "High Five"
+  },
+  {
+    "isbn": "9780517092910",
+    "label": "Eventyr og historier"
+  },
+  {
+    "isbn": "9782266079990",
+    "label": "Contact"
+  },
+  {
+    "isbn": "9781461091110",
+    "label": "Thoughtless"
+  },
+  {
+    "isbn": "9780743296410",
+    "label": "Handle with Care"
+  },
+  {
+    "isbn": "9780060566210",
+    "label": "The Ersatz Elevator"
+  },
+  {
+    "isbn": "9780670011100",
+    "label": "Wintergirls"
+  },
+  {
+    "isbn": "9780451528520",
+    "label": "The Invisible Man"
+  },
+  {
+    "isbn": "9780064410120",
+    "label": "The Carnivorous Carnival"
+  },
+  {
+    "isbn": "9781301347940",
+    "label": "Real"
+  },
+  {
+    "isbn": "9780316075800",
+    "label": "New Moon: The Complete Illustrated Movie Companion"
+  },
+  {
+    "isbn": "9780385733410",
+    "label": "Rebel Angels"
+  },
+  {
+    "isbn": "9780140282580",
+    "label": "Der Steppenwolf: Erzählung"
+  },
+  {
+    "isbn": "9780060278250",
+    "label": "Abhorsen"
+  },
+  {
+    "isbn": "9780141439730",
+    "label": "The Strange Case of Dr. Jekyll and Mr. Hyde and Other Tales of Terror"
+  },
+  {
+    "isbn": "9780684844770",
+    "label": "Stones from the River"
+  },
+  {
+    "isbn": "9780395401460",
+    "label": "Miss Nelson Is Missing!"
+  },
+  {
+    "isbn": "9780441627400",
+    "label": "The Once and Future King"
+  },
+  {
+    "isbn": "9780812550290",
+    "label": "The Path of Daggers"
+  },
+  {
+    "isbn": "9780517222850",
+    "label": "The Shell Seekers"
+  },
+  {
+    "isbn": "9781857988840",
+    "label": "The Sirens of Titan"
+  },
+  {
+    "isbn": "9780765330420",
+    "label": "The Alloy of Law"
+  },
+  {
+    "isbn": "9780452286030",
+    "label": "Bitten"
+  },
+  {
+    "isbn": "9780805093070",
+    "label": "Killing Lincoln: The Shocking Assassination that Changed America Forever"
+  },
+  {
+    "isbn": "9781617750250",
+    "label": "Go the Fuck to Sleep"
+  },
+  {
+    "isbn": "9780743264730",
+    "label": "Einstein. His Life and Universe"
+  },
+  {
+    "isbn": "9780486282220",
+    "label": "Pygmalion"
+  },
+  {
+    "isbn": "9780446696630",
+    "label": "2nd Chance"
+  },
+  {
+    "isbn": "9780156031660",
+    "label": "Those Who Save Us"
+  },
+  {
+    "isbn": "9788129115300",
+    "label": "Two States"
+  },
+  {
+    "isbn": "9780689832130",
+    "label": "Click, Clack, Moo: Cows That Type"
+  },
+  {
+    "isbn": "9780553565690",
+    "label": "Assassin's Quest"
+  },
+  {
+    "isbn": "9781594634710",
+    "label": "Big Magic: Creative Living Beyond Fear"
+  },
+  {
+    "isbn": "9780679736370",
+    "label": "Sophie's Choice"
+  },
+  {
+    "isbn": "9780441016150",
+    "label": "Cry Wolf"
+  },
+  {
+    "isbn": "9780312364120",
+    "label": "Winter Garden"
+  },
+  {
+    "isbn": "9780375822070",
+    "label": "Fantastic Mr Fox"
+  },
+  {
+    "isbn": "9780307959850",
+    "label": "Death Comes to Pemberley"
+  },
+  {
+    "isbn": "9780385340540",
+    "label": "The Broker"
+  },
+  {
+    "isbn": "9780061583070",
+    "label": "At Grave's End"
+  },
+  {
+    "isbn": "9780553119220",
+    "label": "Death on the Nile"
+  },
+  {
+    "isbn": "9780345503800",
+    "label": "The Painted Man"
+  },
+  {
+    "isbn": "9780785819110",
+    "label": "On the Origin of Species by Means of Natural Selection or the Preservation of Favoured Races in the Struggle for Life"
+  },
+  {
+    "isbn": "9780142401750",
+    "label": "Dreamland"
+  },
+  {
+    "isbn": "9781101904220",
+    "label": "Dark Matter"
+  },
+  {
+    "isbn": "9780060012380",
+    "label": "The Wee Free Men"
+  },
+  {
+    "isbn": "9781400043460",
+    "label": "My Life in France"
+  },
+  {
+    "isbn": "9780385339650",
+    "label": "The King of Torts"
+  },
+  {
+    "isbn": "9780307408860",
+    "label": "Dead Wake: The Last Crossing of the Lusitania"
+  },
+  {
+    "isbn": "9780062107060",
+    "label": "American Sniper: The Autobiography of the Most Lethal Sniper in U.S. Military History"
+  },
+  {
+    "isbn": "9780446698870",
+    "label": "The Black Dahlia"
+  },
+  {
+    "isbn": "9780312864590",
+    "label": "Crossroads of Twilight"
+  },
+  {
+    "isbn": "9780440235590",
+    "label": "Tara Road"
+  },
+  {
+    "isbn": "9781939045010",
+    "label": "The Secret of Ella and Micha"
+  },
+  {
+    "isbn": "9781932416640",
+    "label": "What Is the What: The Autobiography of Valentino Achak Deng"
+  },
+  {
+    "isbn": "9780062085610",
+    "label": "Sweet Evil"
+  },
+  {
+    "isbn": "9780440800460",
+    "label": "Ramona Quimby, Age 8"
+  },
+  {
+    "isbn": "9781416523710",
+    "label": "Leaves of Grass"
+  },
+  {
+    "isbn": "9780679763970",
+    "label": "Captain Corelli's Mandolin"
+  },
+  {
+    "isbn": "9781576737330",
+    "label": "The Prayer of Jabez:  Breaking Through to the Blessed Life"
+  },
+  {
+    "isbn": "9780689867040",
+    "label": "Tithe: A Modern Faerie Tale"
+  },
+  {
+    "isbn": "9780515114690",
+    "label": "Born in Fire"
+  },
+  {
+    "isbn": "9780743236010",
+    "label": "Sex, Drugs, and Cocoa Puffs: A Low Culture Manifesto"
+  },
+  {
+    "isbn": "9780553375930",
+    "label": "Girls in Pants: The Third Summer of the Sisterhood"
+  },
+  {
+    "isbn": "9781400034710",
+    "label": "Crónica de una muerte anunciada"
+  },
+  {
+    "isbn": "9780007151660",
+    "label": "The Man in the Brown Suit"
+  },
+  {
+    "isbn": "9780060572990",
+    "label": "Every Which Way But Dead"
+  },
+  {
+    "isbn": "9780802140180",
+    "label": "The Naked Lunch"
+  },
+  {
+    "isbn": "9781405258210",
+    "label": "Code Name Verity"
+  },
+  {
+    "isbn": "9780061092190",
+    "label": "Men at Arms"
+  },
+  {
+    "isbn": "9780060577360",
+    "label": "Flyte"
+  },
+  {
+    "isbn": "9780140620610",
+    "label": "The Turn of the Screw"
+  },
+  {
+    "isbn": "9781408852590",
+    "label": "The Assassin's Blade"
+  },
+  {
+    "isbn": "9780006498520",
+    "label": "Hide and Seek"
+  },
+  {
+    "isbn": "9780312367480",
+    "label": "Tikki Tikki Tembo"
+  },
+  {
+    "isbn": "9780373210510",
+    "label": "The Immortal Rules"
+  },
+  {
+    "isbn": "9781439199350",
+    "label": "The Boston Girl"
+  },
+  {
+    "isbn": "9780670026630",
+    "label": "A Tale for the Time Being"
+  },
+  {
+    "isbn": "9780312984830",
+    "label": "Dance with the Devil"
+  },
+  {
+    "isbn": "9780312590970",
+    "label": "Dark Flame"
+  },
+  {
+    "isbn": "9780060832810",
+    "label": "O Zahir"
+  },
+  {
+    "isbn": "9780749932770",
+    "label": "Dance Upon The Air"
+  },
+  {
+    "isbn": "9780062200570",
+    "label": "NOS4A2"
+  },
+  {
+    "isbn": "9781416534730",
+    "label": "A Connecticut Yankee in King Arthur's Court"
+  },
+  {
+    "isbn": "9780316910330",
+    "label": "Gossip Girl"
+  },
+  {
+    "isbn": "9780007157150",
+    "label": "Out of the Silent Planet"
+  },
+  {
+    "isbn": "9780007127740",
+    "label": "The Illustrated Man"
+  },
+  {
+    "isbn": "9781401323820",
+    "label": "Heat Wave"
+  },
+  {
+    "isbn": "9780805080490",
+    "label": "The Black Cauldron"
+  },
+  {
+    "isbn": "9781416947400",
+    "label": "He's Just Not That Into You: The No-Excuses Truth to Understanding Guys"
+  },
+  {
+    "isbn": "9780060747220",
+    "label": "Son of a Witch"
+  },
+  {
+    "isbn": "9780345466600",
+    "label": "When the Bough Breaks"
+  },
+  {
+    "isbn": "9781455561780",
+    "label": "Before the Fall"
+  },
+  {
+    "isbn": "9781857231380",
+    "label": "Consider Phlebas"
+  },
+  {
+    "isbn": "9780099448570",
+    "label": "国境の南、太陽の西 [Kokkyō no minami, taiyō no nishi]"
+  },
+  {
+    "isbn": "9780802720870",
+    "label": "Chain Reaction"
+  },
+  {
+    "isbn": "9781400044160",
+    "label": "Half of a Yellow Sun"
+  },
+  {
+    "isbn": "9780141441160",
+    "label": "A Passage to India"
+  },
+  {
+    "isbn": "9781600102370",
+    "label": "Welcome to Lovecraft"
+  },
+  {
+    "isbn": "9780142000700",
+    "label": "Travels with Charley: In Search of America"
+  },
+  {
+    "isbn": "9780061783180",
+    "label": "This Side of the Grave (Night Huntress, #5)"
+  },
+  {
+    "isbn": "9780425194850",
+    "label": "Undead and Unwed"
+  },
+  {
+    "isbn": "9780553804690",
+    "label": "The Republic of Thieves"
+  },
+  {
+    "isbn": "9781400063970",
+    "label": "The 19th Wife"
+  },
+  {
+    "isbn": "9780061020650",
+    "label": "Pyramids"
+  },
+  {
+    "isbn": "9781558611580",
+    "label": "The Yellow Wall-paper. A story"
+  },
+  {
+    "isbn": "9780060987510",
+    "label": "These Is My Words: The Diary of Sarah Agnes Prine, 1881-1901, Arizona Territories"
+  },
+  {
+    "isbn": "9780767903820",
+    "label": "Notes from a Big Country"
+  },
+  {
+    "isbn": "9780425192030",
+    "label": "Lightning"
+  },
+  {
+    "isbn": "9781573225120",
+    "label": "Prozac Nation"
+  },
+  {
+    "isbn": "9781557091550",
+    "label": "The Secret of the Old Clock (Nancy Drew Mystery Stories, #1)"
+  },
+  {
+    "isbn": "9780751530490",
+    "label": "Unnatural Exposure"
+  },
+  {
+    "isbn": "9780765340740",
+    "label": "The Pillars of Creation"
+  },
+  {
+    "isbn": "9780758216410",
+    "label": "Succubus Blues"
+  },
+  {
+    "isbn": "9781582404110",
+    "label": "The Legend of Sleepy Hollow"
+  },
+  {
+    "isbn": "9780140437690",
+    "label": "The Sketch Book of Geoffrey Crayon, Gent"
+  },
+  {
+    "isbn": "9780156004800",
+    "label": "All the King’s Men"
+  },
+  {
+    "isbn": "9780670062270",
+    "label": "The Two Pearls of Wisdom"
+  },
+  {
+    "isbn": "9780553271980",
+    "label": "The Odessa File"
+  }
 ]

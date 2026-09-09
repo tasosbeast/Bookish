@@ -8,8 +8,8 @@ test('catalog ISBN checksum and committed manifest', () => {
   assert.equal(isbn13('978-0-14-143951-8'), isbn);
   for (const value of ['9780141439519', '978014143951', null, 9780141439518, '1234567890128']) assert.throws(() => isbn13(value));
   const entries = JSON.parse(readFileSync(new URL('../scripts/catalog.json', import.meta.url)));
-  assert.equal(entries.length, 30);
-  assert.equal(new Set(entries.map(e => isbn13(e.isbn))).size, 30);
+  assert.equal(entries.length, 250);
+  assert.equal(new Set(entries.map(e => isbn13(e.isbn))).size, 250);
 });
 test('catalog maps edition metadata conservatively and genres predictably', () => {
   const data = mapEdition(isbn, edition, [' Jane Austen ', 'Jane Austen'], { description: { value: 'Description' } });
