@@ -32,11 +32,11 @@ test('PostgreSQL: catalog reimport preserves user data and works with existing A
     return result;
   };
   const dry=await importCatalog(manifest,{resolve,save:data=>saveMetadata(prisma,data,false)});
-  assert.equal(dry.created,30); assert.equal(await prisma.book.count({where:{isbn:{in:manifest.map(e=>e.isbn)}}}),0);
+  assert.equal(dry.created,manifest.length); assert.equal(await prisma.book.count({where:{isbn:{in:manifest.map(e=>e.isbn)}}}),0);
   const importMessages=[];
   const firstImport=await importCatalog(manifest,{resolve,save,report:message=>importMessages.push(message)});
   assert.deepEqual(importMessages,[]);
-  assert.equal(firstImport.created,30);
+  assert.equal(firstImport.created,manifest.length);
   const tag=randomUUID().slice(0,8);
   const auth=await request(app).post('/api/auth/signup').set('X-Bookish-CSRF','1').send({username:`catalog_${tag}`,email:`catalog_${tag}@example.com`,password:'catalog fixture password'}).expect(201);
   users.push(auth.body.user.id); const token=auth.body.accessToken, bookId=books[0];
@@ -46,7 +46,7 @@ test('PostgreSQL: catalog reimport preserves user data and works with existing A
   await request(app).put(`/api/reviews/${review.body.data.id}/like`).auth(token,{type:'bearer'}).expect(200);
   const snapshot=async()=>({book:await prisma.book.findUnique({where:{id:bookId}}),review:await prisma.review.findUnique({where:{id:review.body.data.id}}),shelves:await prisma.userBook.findMany({where:{userId:users[0]}}),likes:await prisma.reviewLike.findMany({where:{userId:users[0]}}),user:await prisma.user.findUnique({where:{id:users[0]}}),sessions:await prisma.refreshSession.findMany({where:{userId:users[0]}})});
   const before=await snapshot();
-  assert.equal((await importCatalog(manifest,{resolve,save})).unchanged,30);
+  assert.equal((await importCatalog(manifest,{resolve,save})).unchanged,manifest.length);
   assert.deepEqual(await snapshot(),before);
   const changed={...await resolve(manifest[0].isbn),title:'Updated catalog title'};
   assert.equal(await save(changed),'updated');
@@ -58,5 +58,5 @@ test('PostgreSQL: catalog reimport preserves user data and works with existing A
   assert.equal(detail.body.data.reviews.data[0].likedByMe,true);
   assert.equal(detail.body.data.averageRating,4);
   await request(app).get('/api/user-books?status=read').auth(token,{type:'bearer'}).expect(200);
-  assert.equal(await prisma.book.count({where:{isbn:{in:manifest.map(e=>e.isbn)}}}),30);
+  assert.equal(await prisma.book.count({where:{isbn:{in:manifest.map(e=>e.isbn)}}}),manifest.length);
 });

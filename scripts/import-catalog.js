@@ -1,19 +1,33 @@
 import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
-import { importCatalog, openLibrary, saveMetadata } from './catalog.js';
+import { resolve } from 'node:path';
+import { importResolvedCatalog, validateImportArtifact } from './catalog/import.js';
 
 let db;
 try {
   const args = process.argv.slice(2);
-  if (args.some(arg => !['--apply', '--dry-run', '--smoke'].includes(arg)) || args.includes('--apply') && (args.includes('--dry-run') || args.includes('--smoke'))) throw new Error('Options: --dry-run OR --apply; --smoke resolves only the first ISBN without a database');
-  const manifest = JSON.parse(await readFile(new URL('./catalog.json', import.meta.url), 'utf8'));
-  const smoke = args.includes('--smoke');
-  if (!smoke) db = (await import('../src/lib/prisma.js')).prisma;
-  const apply = args.includes('--apply');
-  const summary = await importCatalog(smoke ? manifest.slice(0, 1) : manifest, {
-    resolve: openLibrary(), save: data => smoke ? 'unchanged' : saveMetadata(db, data, apply), report: console.log,
-  });
-  console.log(`${smoke ? 'Smoke (no writes)' : apply ? 'Applied' : 'Dry run (would change)'}: ${JSON.stringify(summary)}`);
+  const options = { artifact: resolve('scripts/catalog-resolved.json'), apply: null };
+  for (let index = 0; index < args.length; index++) {
+    const argument = args[index];
+    if (argument === '--apply' || argument === '--dry-run') {
+      if (options.apply !== null) throw new Error('Choose exactly one mode: --dry-run or --apply');
+      options.apply = argument === '--apply';
+    } else if (argument === '--artifact') {
+      const value = args[++index];
+      if (!value) throw new Error('--artifact requires a path');
+      options.artifact = resolve(value);
+    } else throw new Error(`Unknown argument ${argument}`);
+  }
+  if (options.apply === null) throw new Error('Choose exactly one mode: --dry-run or --apply');
+
+  const artifact = validateImportArtifact(JSON.parse(await readFile(options.artifact, 'utf8')));
+  db = (await import('../src/lib/prisma.js')).prisma;
+  const summary = await importResolvedCatalog(db, artifact, { apply: options.apply, report: console.error });
+  console.log(`${options.apply ? 'Applied' : 'Dry run (would change)'}: ${JSON.stringify(summary)}`);
   if (summary.failed) process.exitCode = 1;
-} catch { console.error('Import could not complete. Check options, manifest and local database configuration.'); process.exitCode = 1; }
-finally { await db?.$disconnect(); }
+} catch (error) {
+  console.error(`Catalog import could not complete: ${error?.message ?? String(error)}`);
+  process.exitCode = 1;
+} finally {
+  await db?.$disconnect();
+}

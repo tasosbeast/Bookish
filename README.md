@@ -105,24 +105,25 @@ The Express runtime uses `@prisma/adapter-pg` and `pg`; the generated Prisma cli
 
 ## Catalog import
 
-`scripts/catalog.json` is a committed, curated manifest of 30 ISBN-13 editions. The importer is an explicit local command: application startup, migrations, API requests and tests never contact Open Library. It validates every ISBN-13 checksum before it makes a request, then resolves one edition at a time over HTTPS with a short timeout and an identifiable User-Agent. It uses the Open Library edition, author and work JSON endpoints only; it neither scrapes HTML nor downloads cover files.
+`catalog:import` reads only the validated Catalog Pipeline v2 artifact at `scripts/catalog-resolved.json`; it never contacts Open Library or Google Books. Use `--artifact <path>` to inspect or import another resolved artifact. Provider resolution is a separate step and production database writes never depend on live metadata services.
 
-Run a no-write resolution first:
+Run a no-write database classification first:
 
 ```powershell
-node scripts/import-catalog.js --dry-run
-# Equivalent npm command: npm run catalog:import -- --dry-run
+npm run catalog:import -- --dry-run
+# Override the artifact when needed:
+npm run catalog:import -- --dry-run --artifact path/to/catalog-resolved.json
 ```
 
 Write only after reviewing that output:
 
 ```powershell
-node scripts/import-catalog.js --apply
+npm run catalog:import -- --apply
 ```
 
-The concise summary has `created`, `updated`, `unchanged`, `skipped`, `failed` and `resolved` counts. A network problem, invalid response, missing edition or incomplete author metadata is reported per ISBN and does not stop later entries; a run with failures exits nonzero. `--apply` upserts only bibliographic fields and missing controlled genre links by ISBN. It does not delete books or overwrite Bookish user ratings, rating aggregates, shelves, reviews, likes, users or sessions. Re-running the same manifest is idempotent. `--smoke` resolves just the first manifest ISBN and performs no database writes.
+Exactly one mode is required. `--dry-run` reads PostgreSQL and reports `created`, `updated`, `unchanged`, `skipped`, `failed` and `resolved` without writing. `--apply` updates or creates books by ISBN and adds missing controlled genre links. Invalid, stale or duplicate-ISBN artifacts are rejected before writes; `needs_review` and `failed` entries are skipped. Existing Book IDs, optional metadata when the artifact value is null, stronger Open Library covers, ratings, rating aggregates, shelves, reviews and likes are preserved. Re-running the same artifact is idempotent.
 
-Cover IDs become Open Library Covers API URLs with `?default=false`; no image files are copied into this repository. During an explicit import only, an otherwise valid Open Library edition without a cover makes a paced Google Books lookup by the exact ISBN-13. Each external request makes at most three attempts for network failures, timeouts, HTTP 429 and 5xx responses; malformed metadata and other 4xx responses are not retried. A Google cover is accepted only when its result repeats that ISBN-13; failures, missing covers and non-matches leave the book without a cover for the frontend fallback. No Google API key or configuration is required. The UI footer credits [Open Library](https://openlibrary.org/), whose cover documentation asks public users for a courtesy link. Genre assignment is intentionally limited to a normalized mapping for Fiction, Fantasy, Science Fiction, Mystery, Romance, History, Biography, Science, Philosophy, Poetry and Children. Imported ratings always begin empty: Bookish ratings come only from Bookish readers.
+The resolved artifact may contain Open Library or exact-ISBN Google Books cover URLs; no image files are copied into this repository. The UI footer credits [Open Library](https://openlibrary.org/). Genre assignment remains limited to Bookish's controlled mapping. Imported ratings always begin empty: Bookish ratings come only from Bookish readers.
 
 ## Relations and semantics
 
