@@ -26,14 +26,14 @@ const resolved = {
 };
 
 test('v2 source contract accepts canonical entries and checks ISBN-13', () => {
-  assert.deepEqual(validateSourceEntry(source), { ...source, preferredIsbn13: '9780141439518' });
+  assert.deepEqual(validateSourceEntry(source), { ...source, preferredIsbn13: '9780141439518', allowAlternateIsbn: false });
   assert.equal(normalizeIsbn13('978-0-14-143951-8'), '9780141439518');
   for (const value of ['9780141439519', null, 9780141439518]) assert.throws(() => validateSourceEntry({ ...source, preferredIsbn13: value }));
 });
 
 test('production pins are validated, consistent with preferences and fingerprinted', () => {
   const pinned = { ...source, pinnedIsbn13: source.preferredIsbn13 };
-  assert.deepEqual(validateSourceEntry(pinned), { ...source, preferredIsbn13: '9780141439518', pinnedIsbn13: '9780141439518' });
+  assert.deepEqual(validateSourceEntry(pinned), { ...source, preferredIsbn13: '9780141439518', pinnedIsbn13: '9780141439518', allowAlternateIsbn: false });
   assert.throws(() => validateSourceEntry({ ...pinned, pinnedIsbn13: '9780141439519' }), /valid ISBN-13/);
   assert.throws(
     () => validateSourceEntry({ ...pinned, pinnedIsbn13: '9780451524935' }),

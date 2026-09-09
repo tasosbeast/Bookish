@@ -9,7 +9,8 @@ import {
 } from './normalize.js';
 
 export const CATALOG_ARTIFACT_VERSION = 2;
-export const CATALOG_RESOLVER_VERSION = 3;
+export const CATALOG_RESOLVER_VERSION = 4;
+export const CANONICAL_SOURCE_CONTRACT_VERSION = 1;
 
 export class CatalogContractError extends Error {
   constructor(code, message) {
@@ -47,17 +48,21 @@ function normalizedIsbn(value, name = 'preferredIsbn13') {
 
 export function validateSourceEntry(value) {
   const entry = object(value, 'Source entry');
-  exactKeys(entry, ['key', 'title', 'author', 'preferredIsbn13', 'pinnedIsbn13'], 'Source entry');
+  exactKeys(entry, ['key', 'title', 'author', 'preferredIsbn13', 'pinnedIsbn13', 'allowAlternateIsbn'], 'Source entry');
   const rawKey = requiredText(entry.key, 'key');
   const key = normalizeStableKey(rawKey);
   if (!key || rawKey !== key) fail('invalid_key', 'key must be a stable lowercase kebab-case string');
   const title = requiredText(entry.title, 'title');
   const author = requiredText(entry.author, 'author');
-  const normalized = { key, title, author };
+  const normalized = { key, title, author, allowAlternateIsbn: entry.allowAlternateIsbn ?? false };
+  if (typeof normalized.allowAlternateIsbn !== 'boolean') fail('malformed_value', 'allowAlternateIsbn must be a boolean when present');
   if (own(entry, 'preferredIsbn13')) normalized.preferredIsbn13 = normalizedIsbn(entry.preferredIsbn13);
   if (own(entry, 'pinnedIsbn13')) normalized.pinnedIsbn13 = normalizedIsbn(entry.pinnedIsbn13, 'pinnedIsbn13');
   if (normalized.preferredIsbn13 && normalized.pinnedIsbn13 && normalized.preferredIsbn13 !== normalized.pinnedIsbn13) {
     fail('pinned_preferred_mismatch', 'pinnedIsbn13 and preferredIsbn13 must match when both are present');
+  }
+  if (normalized.pinnedIsbn13 && normalized.allowAlternateIsbn) {
+    fail('pinned_alternate_isbn', 'pinnedIsbn13 sources cannot allow alternate ISBNs');
   }
   return normalized;
 }
@@ -69,6 +74,7 @@ export function sourceFingerprint(value) {
     title: entry.title,
     author: entry.author,
     preferredIsbn13: entry.preferredIsbn13 ?? null,
+    allowAlternateIsbn: entry.allowAlternateIsbn,
   };
   if (entry.pinnedIsbn13) meaningful.pinnedIsbn13 = entry.pinnedIsbn13;
   return `sha256:${createHash('sha256').update(JSON.stringify(meaningful)).digest('hex')}`;
