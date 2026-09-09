@@ -11,6 +11,7 @@ import {
   validateSourceManifest,
 } from './contracts.js';
 import { matchWork } from './match.js';
+import { normalizeIsbn13 } from './normalize.js';
 import { selectEdition } from './score-editions.js';
 import { CatalogProviderError } from './providers/errors.js';
 
@@ -53,6 +54,71 @@ function candidateId(candidate) {
   return JSON.stringify(candidate?.providerIds ?? {});
 }
 
+function candidateValues(candidate, field) {
+  return Array.isArray(candidate?.[field]) ? candidate[field].filter(Boolean) : [];
+}
+
+function workMetadataQuality(candidate) {
+  return [
+    candidate?.providerIds?.editionId ? 2 : 0,
+    candidateValues(candidate, 'isbn13').length,
+    candidateValues(candidate, 'languages').length,
+    candidateValues(candidate, 'coverImageUrls').length,
+    candidateValues(candidate, 'subjects').length,
+    candidateValues(candidate, 'publicationYears').length,
+    candidateValues(candidate, 'descriptions').length,
+  ];
+}
+
+function compareWorkRepresentatives(left, right) {
+  const leftQuality = workMetadataQuality(left.candidate);
+  const rightQuality = workMetadataQuality(right.candidate);
+  for (let index = 0; index < leftQuality.length; index++) {
+    if (leftQuality[index] !== rightQuality[index]) return rightQuality[index] - leftQuality[index];
+  }
+  return candidateId(left.candidate).localeCompare(candidateId(right.candidate));
+}
+
+function hasOnlyKnownNonEnglishLanguages(candidate) {
+  const languages = candidateValues(candidate, 'languages').map(value => String(value).toLowerCase().replace('_', '-'));
+  const hasEnglish = languages.some(language => language === 'en' || language === 'eng' || language === 'english' || language.startsWith('en-'));
+  return languages.length > 0 && !hasEnglish;
+}
+
+function equivalentWorkKey(item) {
+  if (hasOnlyKnownNonEnglishLanguages(item.candidate)) return `non_english|${candidateId(item.candidate)}`;
+  const { match } = item;
+  return [
+    match.titleMatch.kind,
+    match.titleMatch.candidate,
+    match.authorMatch.candidate,
+  ].join('|');
+}
+
+export function consolidateEquivalentOpenLibraryWorks(source, candidates) {
+  const eligible = candidates.map(candidate => ({ candidate, match: matchWork(source, candidate) }))
+    .filter(item => item.match.eligible);
+  const grouped = new Map();
+  for (const item of eligible) {
+    const key = equivalentWorkKey(item);
+    const members = grouped.get(key) ?? [];
+    members.push(item);
+    grouped.set(key, members);
+  }
+  return [...grouped.entries()].map(([groupKey, members]) => {
+    const orderedMembers = [...members].sort(compareWorkRepresentatives);
+    const representative = orderedMembers[0];
+    const workIds = [...new Set(members.map(item => item.candidate?.providerIds?.workId).filter(Boolean))].sort();
+    return {
+      candidate: representative.candidate,
+      match: representative.match,
+      groupKey,
+      members: orderedMembers,
+      workIds,
+    };
+  });
+}
+
 function candidateYear(candidate) {
   return (Array.isArray(candidate?.publicationYears) ? candidate.publicationYears : [])
     .find(year => Number.isInteger(year) && year >= 1000 && year <= new Date().getFullYear() + 1) ?? null;
@@ -63,14 +129,60 @@ function firstValue(value) {
 }
 
 function workChoice(source, candidates) {
-  const matches = candidates.map(candidate => ({ candidate, match: matchWork(source, candidate) }))
-    .filter(item => item.match.eligible)
+  const matches = consolidateEquivalentOpenLibraryWorks(source, candidates)
     .sort((left, right) => right.match.score - left.match.score || candidateId(left.candidate).localeCompare(candidateId(right.candidate)));
   if (!matches.length) return { status: 'no_match', matches };
   const winner = matches[0];
   const runnerUp = matches[1] ?? null;
   if (runnerUp && winner.match.score - runnerUp.match.score < WORK_MATCH_MARGIN) return { status: 'ambiguous', winner, runnerUp, matches };
   return { status: 'selected', winner, runnerUp, matches };
+}
+
+function editionIdentity(candidate) {
+  const editionId = candidate?.providerIds?.editionId;
+  if (editionId) return `${candidate.provider ?? 'unknown'}:edition:${editionId}`;
+  const isbns = [];
+  for (const value of candidateValues(candidate, 'isbn13')) {
+    try { isbns.push(normalizeIsbn13(value)); } catch { /* Invalid provider identifiers cannot identify an edition. */ }
+  }
+  const isbn = [...new Set(isbns)].sort()[0];
+  if (isbn) return `${candidate.provider ?? 'unknown'}:isbn:${isbn}`;
+  return `${candidate.provider ?? 'unknown'}:candidate:${candidateId(candidate)}`;
+}
+
+function editionMetadataQuality(candidate) {
+  return [
+    candidateValues(candidate, 'authors').length,
+    candidateValues(candidate, 'languages').length,
+    candidateValues(candidate, 'publishers').length,
+    candidateValues(candidate, 'formats').length,
+    candidateValues(candidate, 'coverImageUrls').length,
+    candidateValues(candidate, 'descriptions').length,
+    candidateValues(candidate, 'publicationYears').length,
+    candidateValues(candidate, 'subjects').length,
+  ].reduce((total, count) => total + Number(Boolean(count)), 0);
+}
+
+export function deduplicateOpenLibraryEditions(candidates) {
+  const editions = new Map();
+  for (const candidate of candidates) {
+    const key = editionIdentity(candidate);
+    const existing = editions.get(key);
+    if (!existing
+      || editionMetadataQuality(candidate) > editionMetadataQuality(existing)
+      || editionMetadataQuality(candidate) === editionMetadataQuality(existing) && candidateId(candidate).localeCompare(candidateId(existing)) < 0) {
+      editions.set(key, candidate);
+    }
+  }
+  return [...editions.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([, candidate]) => candidate);
+}
+
+function equivalentWorkNotes(choice) {
+  if (choice.workIds.length < 2) return [];
+  return [
+    `open_library_equivalent_work_group:${choice.workIds.join(',')}`,
+    `open_library_equivalent_work_key:${choice.groupKey}`,
+  ];
 }
 
 function providerIds({ selected, openWork = null, exactGoogle = null }) {
@@ -192,22 +304,30 @@ async function resolveSource(source, context) {
 
   if (openChoice.status === 'selected') {
     let openWork = openChoice.winner.candidate;
+    notes.push(...equivalentWorkNotes(openChoice.winner));
     if (typeof context.providers.openLibrary.fetchWork === 'function') {
       try { openWork = await invoke(context, context.providers.openLibrary, 'fetchWork', openWork.providerIds.workId) ?? openWork; }
       catch (error) { errors.push(error); notes.push('open_library_work_details_failed'); }
     }
-    try {
-      const editions = await invoke(context, context.providers.openLibrary, 'fetchEditionsForWork', openChoice.winner.candidate.providerIds.workId);
-      const selection = selectEdition(source, editions, { workMatch: openChoice.winner.match });
+    const editions = [];
+    let editionFetchSucceeded = false;
+    for (const workId of openChoice.winner.workIds) {
+      try {
+        editions.push(...await invoke(context, context.providers.openLibrary, 'fetchEditionsForWork', workId));
+        editionFetchSucceeded = true;
+      } catch (error) {
+        errors.push(error);
+        notes.push(`open_library_editions_failed:${workId}`);
+      }
+    }
+    if (editionFetchSucceeded) {
+      const selection = selectEdition(source, deduplicateOpenLibraryEditions(editions), { workMatch: openChoice.winner.match });
       if (selection.status === 'selected') {
         const finalized = resolvedOrPinnedReview(source, selection, { openWork, exactGoogle: usableExactGoogle, notes });
         if (finalized.status === 'resolved') return finalized;
         pinnedMismatchReview = finalized;
       }
       if (selection.status === 'needs_review' && !errors.length) return selectionReview(source, selection);
-    } catch (error) {
-      errors.push(error);
-      notes.push('open_library_editions_failed');
     }
   }
 

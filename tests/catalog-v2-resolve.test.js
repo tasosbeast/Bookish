@@ -258,8 +258,12 @@ test('provider failure retains failed semantics when it prevents pinned resoluti
 });
 
 test('resolver returns needs_review for ambiguous works, editions and absent eligible editions', async () => {
-  const ambiguousWorks = providers({ openWorks: [work(baseSource, 'OL1W'), work(baseSource, 'OL2W')], googleVolumes: [] });
-  let result = await resolveCatalog({ sources: [baseSource], providers: ambiguousWorks.clients });
+  const ambiguousSource = { key: 'alpha-beta-gamma-delta-author-name', title: 'Alpha Beta Gamma Delta', author: 'Author Name' };
+  const ambiguousWorks = providers({
+    openWorks: [work(ambiguousSource, 'OL1W'), work(ambiguousSource, 'OL2W', { title: 'Gamma Beta Alpha Delta' })],
+    googleVolumes: [],
+  });
+  let result = await resolveCatalog({ sources: [ambiguousSource], providers: ambiguousWorks.clients });
   assert.equal(result.artifact.entries[0].diagnostic.code, 'ambiguous_work_match');
 
   const ambiguousEditions = providers({ openEditions: [edition(baseSource, ISBN_A, 'OL1M'), edition(baseSource, ISBN_B, 'OL2M', { coverImageUrls: [] })] });
