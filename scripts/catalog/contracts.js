@@ -106,7 +106,7 @@ function validateFingerprint(value) {
 }
 
 function validateVersion(value, name) {
-  if (value !== CATALOG_RESOLVER_VERSION) fail('invalid_version', `${name} must equal ${CATALOG_RESOLVER_VERSION}`);
+  if (!Number.isSafeInteger(value) || value < 1) fail('invalid_version', `${name} must be a positive safe integer`);
   return value;
 }
 

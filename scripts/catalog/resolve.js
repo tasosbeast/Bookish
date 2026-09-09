@@ -5,7 +5,6 @@ import { mapGenres } from '../catalog.js';
 import {
   CATALOG_ARTIFACT_VERSION,
   CATALOG_RESOLVER_VERSION,
-  CatalogContractError,
   sourceFingerprint,
   validateResolvedArtifact,
   validateSourceManifest,
@@ -205,24 +204,18 @@ async function resolveSource(source, context) {
 }
 
 function artifactFor(entries) {
-  return validateResolvedArtifact({ artifactVersion: CATALOG_ARTIFACT_VERSION, resolverVersion: CATALOG_RESOLVER_VERSION, entries });
+  const artifact = { artifactVersion: CATALOG_ARTIFACT_VERSION, resolverVersion: CATALOG_RESOLVER_VERSION, entries };
+  validateResolvedArtifact(artifact);
+  return artifact;
 }
 
 function readExistingArtifact(existingArtifact) {
   if (!existingArtifact) return { entries: new Map(), current: new Set() };
-  try {
-    const artifact = validateResolvedArtifact(existingArtifact);
-    return { entries: new Map(artifact.entries.map(entry => [entry.key, entry])), current: new Set(artifact.entries.map(entry => entry.key)) };
-  } catch (error) {
-    if (!(error instanceof CatalogContractError) || error.code !== 'invalid_version' || !Array.isArray(existingArtifact?.entries)) throw error;
-    const adjusted = {
-      ...existingArtifact,
-      resolverVersion: CATALOG_RESOLVER_VERSION,
-      entries: existingArtifact.entries.map(entry => ({ ...entry, resolverVersion: CATALOG_RESOLVER_VERSION })),
-    };
-    const artifact = validateResolvedArtifact(adjusted);
-    return { entries: new Map(artifact.entries.map((entry, index) => [entry.key, { ...entry, resolverVersion: existingArtifact.entries[index].resolverVersion }])), current: new Set() };
-  }
+  const artifact = validateResolvedArtifact(existingArtifact);
+  const current = artifact.resolverVersion === CATALOG_RESOLVER_VERSION
+    ? artifact.entries.filter(entry => entry.resolverVersion === CATALOG_RESOLVER_VERSION).map(entry => entry.key)
+    : [];
+  return { entries: new Map(existingArtifact.entries.map(entry => [entry.key, entry])), current: new Set(current) };
 }
 
 function reusable(source, existing, current, options) {
@@ -288,16 +281,13 @@ export async function resolveCatalog({
   const summary = { reused: 0, resolved: 0, needsReview: 0, failed: 0, attempted: 0, providerCalls: 0 };
   const resultEntries = new Map();
   for (const [existingKey, entry] of existing.entries) {
-    if (key !== null || sourceEntries.some(source => source.key === existingKey)) {
-      if (existing.current.has(existingKey)) resultEntries.set(existingKey, entry);
-    }
+    if (key !== null) resultEntries.set(existingKey, entry);
+    else if (sourceEntries.some(source => source.key === existingKey) && existing.current.has(existingKey)) resultEntries.set(existingKey, entry);
   }
 
   const outputEntries = () => {
     if (key !== null) {
-      const preserved = [...resultEntries.entries()].filter(([entryKey]) => entryKey !== key).map(([, entry]) => entry);
-      const selected = resultEntries.get(key);
-      return [...preserved, ...(selected ? [selected] : [])];
+      return [...resultEntries.values()];
     }
     return sourceEntries.map(source => resultEntries.get(source.key)).filter(Boolean);
   };

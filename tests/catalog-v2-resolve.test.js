@@ -102,12 +102,12 @@ function isbnAt(index) {
 
 function sourceAwareProviders(sources, { fixedIsbn = null, onSearch = null } = {}) {
   const byTitle = new Map(sources.map((source, index) => [source.title, { source, index, work: work(source, `OL${index + 1}W`), edition: edition(source, fixedIsbn ?? isbnAt(index), `OL${index + 1}M`) }]));
-  const calls = { openSearch: 0, openWork: 0, openEditions: 0, googleSearch: 0, googleExact: 0 };
+  const calls = { openSearch: 0, openSearchTitles: [], openWork: 0, openEditions: 0, googleSearch: 0, googleExact: 0 };
   return {
     calls,
     clients: {
       openLibrary: {
-        async searchWorks(input) { calls.openSearch++; await onSearch?.(); return [byTitle.get(input.title).work]; },
+        async searchWorks(input) { calls.openSearch++; calls.openSearchTitles.push(input.title); await onSearch?.(); return [byTitle.get(input.title).work]; },
         async fetchWork(id) { calls.openWork++; return [...byTitle.values()].find(item => item.work.providerIds.workId === id)?.work ?? null; },
         async fetchEditionsForWork(id) { calls.openEditions++; return [[...byTitle.values()].find(item => item.work.providerIds.workId === id)?.edition].filter(Boolean); },
       },
@@ -239,15 +239,59 @@ test('failed and review entries retry only when their explicit options are enabl
   assert.equal(retriedReview.calls.openSearch, 1);
 });
 
-test('key filters update only the requested source key and preserve other valid artifact entries', async () => {
+test('key filters preserve unrelated current artifact entries exactly', async () => {
   const second = sourceAt(2);
-  const existingArtifact = artifact([resolvedEntry(baseSource), resolvedEntry(second, isbnAt(2))]);
+  const third = sourceAt(3);
+  const existingArtifact = artifact([resolvedEntry(baseSource), resolvedEntry(second, isbnAt(2)), resolvedEntry(third, isbnAt(3))]);
   const { clients, calls } = providers();
-  const result = await resolveCatalog({ sources: [baseSource, second], existingArtifact, providers: clients, key: baseSource.key, refresh: true });
+  const result = await resolveCatalog({ sources: [baseSource, second, third], existingArtifact, providers: clients, key: baseSource.key, refresh: true });
   assert.equal(result.summary.attempted, 1);
   assert.equal(calls.openSearch, 1);
-  assert.equal(result.artifact.entries.length, 2);
-  assert.equal(result.artifact.entries.find(entry => entry.key === second.key).metadata.isbn, isbnAt(2));
+  assert.equal(result.artifact.entries.length, 3);
+  assert.deepEqual(result.artifact.entries.find(entry => entry.key === second.key), existingArtifact.entries[1]);
+  assert.deepEqual(result.artifact.entries.find(entry => entry.key === third.key), existingArtifact.entries[2]);
+});
+
+test('key filters preserve stale unrelated entries without making them reusable', async () => {
+  const second = sourceAt(2);
+  const third = sourceAt(3);
+  const existingArtifact = artifact([resolvedEntry(baseSource), resolvedEntry(second, isbnAt(2)), resolvedEntry(third, isbnAt(3))]);
+  existingArtifact.resolverVersion = CATALOG_RESOLVER_VERSION - 1;
+  for (const entry of existingArtifact.entries) entry.resolverVersion = CATALOG_RESOLVER_VERSION - 1;
+  existingArtifact.entries[0].metadata.title = ` ${existingArtifact.entries[0].metadata.title} `;
+  const { clients, calls } = sourceAwareProviders([baseSource, second, third]);
+  const result = await resolveCatalog({ sources: [baseSource, second, third], existingArtifact, providers: clients, key: second.key });
+  assert.equal(result.summary.attempted, 1);
+  assert.equal(calls.openSearch, 1);
+  assert.deepEqual(calls.openSearchTitles, [second.title]);
+  assert.deepEqual(result.artifact.entries.map(entry => entry.key), [baseSource.key, second.key, third.key]);
+  assert.deepEqual(result.artifact.entries.find(entry => entry.key === baseSource.key), existingArtifact.entries[0]);
+  assert.equal(result.artifact.entries.find(entry => entry.key === second.key).resolverVersion, CATALOG_RESOLVER_VERSION);
+  assert.equal(result.artifact.entries.find(entry => entry.key === third.key).resolverVersion, CATALOG_RESOLVER_VERSION - 1);
+  assert.doesNotThrow(() => validateResolvedArtifact(result.artifact));
+});
+
+test('failed key-filter checkpoint writes leave the original artifact intact', async () => {
+  await withTemporaryDirectory(async directory => {
+    const second = sourceAt(2);
+    const existingArtifact = artifact([resolvedEntry(baseSource), resolvedEntry(second, isbnAt(2))]);
+    const path = join(directory, 'catalog-resolved.json');
+    await fs.writeFile(path, `${JSON.stringify(existingArtifact)}\n`, 'utf8');
+    const { clients } = sourceAwareProviders([baseSource, second]);
+    await assert.rejects(
+      resolveCatalog({
+        sources: [baseSource, second],
+        existingArtifact,
+        providers: clients,
+        key: second.key,
+        refresh: true,
+        checkpointPath: path,
+        writeArtifact: async () => { throw new Error('simulated checkpoint failure'); },
+      }),
+      /simulated checkpoint failure/,
+    );
+    assert.deepEqual(JSON.parse(await fs.readFile(path, 'utf8')), existingArtifact);
+  });
 });
 
 test('checkpoints persist each completed entry and resume after an interruption', async () => {
