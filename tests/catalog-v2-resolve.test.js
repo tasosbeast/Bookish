@@ -434,16 +434,69 @@ test('checkpoints persist each completed entry and resume after an interruption'
   });
 });
 
-test('atomic checkpoint writes preserve the prior valid artifact when replacement fails', async () => {
+test('atomic checkpoint writes create and replace artifacts with exact JSON', async () => {
+  await withTemporaryDirectory(async directory => {
+    const path = join(directory, 'catalog-resolved.json');
+    const before = artifact([resolvedEntry(baseSource)]);
+    await writeArtifactAtomic(path, before);
+    assert.equal(await fs.readFile(path, 'utf8'), `${JSON.stringify(before, null, 2)}\n`);
+
+    const after = artifact([resolvedEntry(baseSource)]);
+    after.entries[0].selection.score = 61;
+    await writeArtifactAtomic(path, after);
+    assert.equal(await fs.readFile(path, 'utf8'), `${JSON.stringify(after, null, 2)}\n`);
+    assert.deepEqual((await fs.readdir(directory)).filter(name => /\.(tmp|bak)$/.test(name)), []);
+  });
+});
+
+test('atomic checkpoint replacement recovers from a first Windows EPERM rename', async () => {
   await withTemporaryDirectory(async directory => {
     const path = join(directory, 'catalog-resolved.json');
     const before = artifact([resolvedEntry(baseSource)]);
     await fs.writeFile(path, `${JSON.stringify(before)}\n`, 'utf8');
     const after = artifact([resolvedEntry(baseSource)]);
     after.entries[0].selection.score = 61;
-    const failingFs = { ...fs, rename: async () => { throw new Error('simulated rename failure'); } };
-    await assert.rejects(writeArtifactAtomic(path, after, { fsImpl: failingFs }), /simulated rename failure/);
+
+    let renameCalls = 0;
+    const windowsFs = {
+      ...fs,
+      rename: async (...args) => {
+        renameCalls++;
+        if (renameCalls === 1) throw Object.assign(new Error('simulated Windows destination lock'), { code: 'EPERM' });
+        return fs.rename(...args);
+      },
+    };
+    await writeArtifactAtomic(path, after, { fsImpl: windowsFs, platform: 'win32' });
+    assert.equal(renameCalls, 3);
+    assert.equal(await fs.readFile(path, 'utf8'), `${JSON.stringify(after, null, 2)}\n`);
+    assert.deepEqual((await fs.readdir(directory)).filter(name => /\.(tmp|bak)$/.test(name)), []);
+  });
+});
+
+test('failed Windows fallback restores the original artifact and cleans the temp file', async () => {
+  await withTemporaryDirectory(async directory => {
+    const path = join(directory, 'catalog-resolved.json');
+    const before = artifact([resolvedEntry(baseSource)]);
+    await fs.writeFile(path, `${JSON.stringify(before)}\n`, 'utf8');
+    const after = artifact([resolvedEntry(baseSource)]);
+    after.entries[0].selection.score = 61;
+
+    let renameCalls = 0;
+    const failingFs = {
+      ...fs,
+      rename: async (...args) => {
+        renameCalls++;
+        if (renameCalls === 1) throw Object.assign(new Error('simulated Windows destination lock'), { code: 'EACCES' });
+        if (renameCalls === 3) throw Object.assign(new Error('simulated replacement failure'), { code: 'EIO' });
+        return fs.rename(...args);
+      },
+    };
+    await assert.rejects(
+      writeArtifactAtomic(path, after, { fsImpl: failingFs, platform: 'win32' }),
+      /simulated replacement failure/,
+    );
     assert.deepEqual(JSON.parse(await fs.readFile(path, 'utf8')), before);
+    assert.deepEqual((await fs.readdir(directory)).filter(name => /\.(tmp|bak)$/.test(name)), []);
   });
 });
 
