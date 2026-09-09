@@ -195,7 +195,7 @@ export async function buildSnapshotIndex({ records, outputPath, sourceName, snap
     for await (const rawRecord of records) {
       stats.input += 1;
       if (rawRecord instanceof SnapshotRecordError) {
-        addRejection(stats, 'invalid_snapshot_record');
+        addRejection(stats, rawRecord.code);
         continue;
       }
       let candidate;

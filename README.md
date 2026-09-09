@@ -116,6 +116,17 @@ npm run catalog:snapshot-status -- --index scripts/catalog-cache/canonical-snaps
 
 The snapshot index is not yet wired into resolved-artifact production. Database import remains artifact-only.
 
+### Open Library bulk editions
+
+Download matching local editions and authors dumps manually from [Open Library's Data Dumps documentation](https://openlibrary.org/developers/dumps). The parser accepts the documented tab-separated dump rows (`type`, `key`, `revision`, `last_modified`, JSON payload) as either plain text or `.gz` files. Build the local author-key join first, then the editions index with the same local snapshot identifier:
+
+```powershell
+npm run catalog:ol-author-index-build -- --input path/to/ol_dump_authors.txt.gz --output scripts/catalog-cache/open-library-authors --snapshot-id local-snapshot-id
+npm run catalog:ol-snapshot-build -- --input path/to/ol_dump_editions.txt.gz --author-index scripts/catalog-cache/open-library-authors --output scripts/catalog-cache/open-library-index --snapshot-id local-snapshot-id
+```
+
+The editions parser emits one candidate for each valid ISBN-13 (including validated ISBN-10 conversions), retains Open Library cover IDs as references, and uses only edition-level publication metadata. It needs the local author index because edition rows normally carry author keys rather than trustworthy author names. These commands are entirely local: they do not download files, contact providers, or access PostgreSQL.
+
 `catalog:import` reads only the validated Catalog Pipeline v2 artifact at `scripts/catalog-resolved.json`; it never contacts Open Library or Google Books. Use `--artifact <path>` to inspect or import another resolved artifact. Provider resolution is a separate step and production database writes never depend on live metadata services.
 
 Run a no-write database classification first:

@@ -12,6 +12,8 @@
     "catalog:status": "node scripts/catalog-status.js",
     "catalog:snapshot-build": "node scripts/snapshot-build.js",
     "catalog:snapshot-status": "node scripts/snapshot-status.js",
+    "catalog:ol-author-index-build": "node scripts/ol-author-index-build.js",
+    "catalog:ol-snapshot-build": "node scripts/ol-snapshot-build.js",
     "test": "node --test tests/*.test.js",
     "test:integration": "node --test --test-concurrency=1 tests/integration/*.test.js",
     "db:generate": "prisma generate",

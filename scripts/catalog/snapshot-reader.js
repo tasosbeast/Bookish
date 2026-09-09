@@ -2,9 +2,10 @@ import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 
 export class SnapshotRecordError extends Error {
-  constructor(message, { lineNumber = null, cause = null } = {}) {
+  constructor(message, { code = 'invalid_snapshot_record', lineNumber = null, cause = null } = {}) {
     super(message, cause ? { cause } : undefined);
     this.name = 'SnapshotRecordError';
+    this.code = code;
     this.lineNumber = lineNumber;
   }
 }
@@ -19,7 +20,7 @@ export async function* readNdjsonSnapshot(path) {
     try {
       yield JSON.parse(line);
     } catch (error) {
-      yield new SnapshotRecordError(`Invalid JSON on line ${lineNumber}`, { lineNumber, cause: error });
+      yield new SnapshotRecordError(`Invalid JSON on line ${lineNumber}`, { code: 'invalid_json', lineNumber, cause: error });
     }
   }
 }

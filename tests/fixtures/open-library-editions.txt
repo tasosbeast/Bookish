@@ -1,0 +1,9 @@
+/type/edition	/books/OLPRIDE1M	1	2026-01-01T00:00:00.000000	{"title":"Pride and Prejudice","authors":[{"key":"/authors/OL1A"},{"key":"/authors/OL2A"}],"works":[{"key":"/works/OLPRIDEW"}],"isbn_13":["9780141439518","9780451524935","bad"],"publishers":["Fixture Press"],"publish_date":"2003-01-01","languages":[{"key":"/languages/eng"}],"physical_format":"Paperback","covers":[123],"description":{"value":"Short fixture description."},"subjects":["Fiction"]}
+/type/edition	/books/OLPRIDE10M	1	2026-01-01T00:00:00.000000	{"title":"Pride and Prejudice","authors":[{"key":"/authors/OL1A"}],"works":[{"key":"/works/OLPRIDEW"}],"isbn_10":["0141439513"],"publish_date":"2001","languages":["eng"],"physical_format":"Hardcover"}
+/type/edition	/books/OLMISSINGAUTHORM	1	2026-01-01T00:00:00.000000	{"title":"Missing Author","isbn_13":["9780000000002"]}
+/type/edition	/books/OLNONENM	1	2026-01-01T00:00:00.000000	{"title":"French Edition","authors":[{"key":"/authors/OL1A"}],"isbn_13":["9780000000019"],"languages":[{"key":"/languages/fre"}],"physical_format":"Paperback"}
+/type/edition	/books/OLAUDIOM	1	2026-01-01T00:00:00.000000	{"title":"Audio Edition","authors":[{"key":"/authors/OL1A"}],"isbn_13":["9780000000026"],"languages":["en"],"physical_format":"Audio CD"}
+/type/edition	/books/OLYEARCONFLICTM	1	2026-01-01T00:00:00.000000	{"title":"Year Conflict","authors":[{"key":"/authors/OL1A"}],"isbn_13":["9780000000033"],"publish_date":"2004 / 2025","first_publish_year":2025}
+/type/edition	/books/OLBADISBNM	1	2026-01-01T00:00:00.000000	{"title":"Bad ISBN","authors":[{"key":"/authors/OL1A"}],"isbn_13":["not-an-isbn"]}
+/type/work	/works/OLIGNOREW	1	2026-01-01T00:00:00.000000	{"title":"Ignored work"}
+/type/edition	/books/OLBROKENM	1	2026-01-01T00:00:00.000000	{not-json}

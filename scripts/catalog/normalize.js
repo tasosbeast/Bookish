@@ -29,6 +29,17 @@ export function normalizeIsbn13(value) {
   return isbn;
 }
 
+export function normalizeIsbn10ToIsbn13(value) {
+  if (typeof value !== 'string') throw new Error('ISBN-10 must be a string');
+  const isbn10 = value.replace(/[ -]/g, '').toUpperCase();
+  if (!/^\d{9}[\dX]$/.test(isbn10)) throw new Error('Invalid ISBN-10');
+  const checksum = [...isbn10].reduce((sum, character, index) => sum + (character === 'X' ? 10 : Number(character)) * (10 - index), 0);
+  if (checksum % 11) throw new Error('Invalid ISBN-10');
+  const firstTwelve = `978${isbn10.slice(0, 9)}`;
+  const check = (10 - ([...firstTwelve].reduce((sum, digit, index) => sum + Number(digit) * (index % 2 ? 3 : 1), 0) % 10)) % 10;
+  return normalizeIsbn13(`${firstTwelve}${check}`);
+}
+
 export function normalizeGenreName(value) {
   const normalized = text(value);
   if (!normalized) throw new Error('Genre name is required');
