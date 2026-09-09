@@ -51,7 +51,9 @@ function languageValues(value) {
 function candidate(source, { workId = null, editionId = null, sourceType }) {
   const authorData = authorValues(source.author_name ?? source.authors);
   const coverIds = numberValues(source.cover_i ?? source.covers);
-  const dates = dateValues(source.publish_date, source.published_date, source.publish_year, source.first_publish_year);
+  const dates = sourceType === 'edition'
+    ? dateValues(source.publish_date, source.published_date, source.publish_year)
+    : dateValues(source.publish_date, source.published_date, source.publish_year, source.first_publish_year);
   return {
     provider: PROVIDER,
     sourceType,

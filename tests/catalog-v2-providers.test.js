@@ -8,6 +8,7 @@ const isbn = '9780141439518';
 const openEdition = {
   title: 'Pride and Prejudice', subtitle: 'A Novel', isbn_13: [isbn], authors: [{ key: '/authors/OL1A', name: 'Jane Austen' }],
   languages: [{ key: '/languages/eng' }], publishers: ['Penguin Classics'], physical_format: 'Paperback', publish_date: '2003',
+  first_publish_year: 1813,
   covers: [123], description: { value: 'A classic novel.' }, subjects: ['Fiction'], works: [{ key: '/works/OL66554W' }],
 };
 const googleVolume = {
@@ -57,6 +58,7 @@ test('Open Library fetches work and edition details and treats 404 as no result'
   assert.deepEqual(work.authorKeys, ['OL1A']);
   const edition = await client.fetchEdition('OL7353617M');
   assert.deepEqual(edition.providerIds, { workId: 'OL66554W', editionId: 'OL7353617M' });
+  assert.deepEqual(edition.publicationYears, [2003]);
   assert.equal((await client.fetchEditionsForWork('OL66554W')).length, 1);
   assert.equal(await client.fetchWork('OL99999W'), null);
   assert.deepEqual(await client.searchWorks({ title: 'Missing', author: 'Nobody' }), []);

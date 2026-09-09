@@ -119,9 +119,39 @@ export function consolidateEquivalentOpenLibraryWorks(source, candidates) {
   });
 }
 
-function candidateYear(candidate) {
-  return (Array.isArray(candidate?.publicationYears) ? candidate.publicationYears : [])
-    .find(year => Number.isInteger(year) && year >= 1000 && year <= new Date().getFullYear() + 1) ?? null;
+function plausiblePublicationYear(value) {
+  return Number.isInteger(value) && value >= 1000 && value <= new Date().getFullYear() + 1;
+}
+
+function explicitPublicationDateYear(value) {
+  if (plausiblePublicationYear(value)) return value;
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  const patterns = [
+    /^(\d{4})$/,
+    /^(\d{4})-(?:0?[1-9]|1[0-2])(?:-(?:0?[1-9]|[12]\d|3[01]))?$/,
+    /^(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+\d{1,2},?)?\s+(\d{4})$/i,
+    /^\d{1,2}\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{4})$/i,
+  ];
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    const year = match ? Number(match[1]) : null;
+    if (plausiblePublicationYear(year)) return year;
+  }
+  return null;
+}
+
+export function selectEditionPublicationYear(candidate) {
+  const publicationDates = Array.isArray(candidate?.publicationDates) ? candidate.publicationDates : [];
+  const explicitYears = [...new Set(publicationDates
+    .map(explicitPublicationDateYear)
+    .filter(plausiblePublicationYear))];
+  if (explicitYears.length === 1) return explicitYears[0];
+  if (publicationDates.length > 0) return null;
+
+  const fallbackYears = [...new Set((Array.isArray(candidate?.publicationYears) ? candidate.publicationYears : [])
+    .filter(plausiblePublicationYear))].sort((left, right) => left - right);
+  return fallbackYears[0] ?? null;
 }
 
 function firstValue(value) {
@@ -214,7 +244,7 @@ function mergedMetadata(source, { selected, isbn, openWork, exactGoogle }) {
   const genreProvenance = genres.length
     ? openWork?.subjects?.length ? 'open_library_work' : selectedOpenLibrary ? 'open_library_edition' : 'google_books'
     : null;
-  const publicationYear = candidateYear(selected);
+  const publicationYear = selectEditionPublicationYear(selected);
   return {
     metadata: {
       title: source.title,

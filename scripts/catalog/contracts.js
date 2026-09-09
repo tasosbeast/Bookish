@@ -9,7 +9,7 @@ import {
 } from './normalize.js';
 
 export const CATALOG_ARTIFACT_VERSION = 2;
-export const CATALOG_RESOLVER_VERSION = 2;
+export const CATALOG_RESOLVER_VERSION = 3;
 
 export class CatalogContractError extends Error {
   constructor(code, message) {

@@ -10,7 +10,7 @@ import {
   sourceFingerprint,
   validateResolvedArtifact,
 } from '../scripts/catalog/contracts.js';
-import { resolveCatalog, writeArtifactAtomic } from '../scripts/catalog/resolve.js';
+import { resolveCatalog, selectEditionPublicationYear, writeArtifactAtomic } from '../scripts/catalog/resolve.js';
 import { CatalogProviderError } from '../scripts/catalog/providers/errors.js';
 
 const ISBN_A = '9780141439518';
@@ -141,6 +141,37 @@ test('resolver creates a valid resolved artifact from a clear Open Library work 
   assert.equal(entry.metadata.averageRating, undefined);
   assert.equal(entry.provenance.description, 'open_library_work');
   assert.deepEqual(calls, { openSearch: 1, openWork: 1, openEditions: 1, googleSearch: 0, googleExact: 0 });
+});
+
+test('selected edition publication years prefer explicit dates and conservatively normalize fallbacks', () => {
+  assert.equal(selectEditionPublicationYear({ publicationDates: ['2004'], publicationYears: [2025] }), 2004);
+  assert.equal(selectEditionPublicationYear({ publicationDates: [], publicationYears: [2025, 2004, 2025] }), 2004);
+  assert.equal(selectEditionPublicationYear({ publicationDates: ['2024'], publicationYears: [2024] }), 2024);
+  assert.equal(selectEditionPublicationYear({ publicationDates: ['unknown', '200x', '2001-2005'], publicationYears: [2001, 2005] }), null);
+  assert.equal(selectEditionPublicationYear({ publicationDates: ['2004', '2025'], publicationYears: [2004, 2025] }), null);
+  assert.equal(selectEditionPublicationYear({ publicationDates: [], publicationYears: [999, 9999, '2004'] }), null);
+});
+
+test('Beloved-shaped pinned edition uses its explicit edition date without changing identity fields', async () => {
+  const source = {
+    key: 'beloved-toni-morrison', title: 'Beloved', author: 'Toni Morrison',
+    preferredIsbn13: '9781400033416', pinnedIsbn13: '9781400033416',
+  };
+  const configured = providers({
+    openWorks: [work(source, 'OL50548W')],
+    openEditions: [edition(source, source.pinnedIsbn13, 'OL62486031M', {
+      publicationDates: ['2004'], publicationYears: [2025],
+    })],
+  });
+  const result = await resolveCatalog({ sources: [source], providers: configured.clients });
+  const entry = result.artifact.entries[0];
+
+  assert.equal(entry.status, 'resolved');
+  assert.equal(entry.metadata.title, source.title);
+  assert.equal(entry.metadata.author, source.author);
+  assert.equal(entry.metadata.isbn, source.pinnedIsbn13);
+  assert.equal(entry.metadata.publicationYear, 2004);
+  assert.equal(entry.providerIds.openLibraryEdition, 'OL62486031M');
 });
 
 test('resolver uses Google Books when Open Library has no matching work', async () => {
