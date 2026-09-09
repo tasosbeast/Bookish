@@ -129,7 +129,7 @@ test('resolver creates a valid resolved artifact from a clear Open Library work 
   const { clients, calls } = providers();
   const result = await resolveCatalog({ sources: [baseSource], providers: clients });
   assert.equal(result.summary.resolved, 1);
-  assert.equal(result.summary.providerCalls, 4);
+  assert.equal(result.summary.providerCalls, 3);
   assert.deepEqual(validateResolvedArtifact(result.artifact), result.artifact);
   const entry = result.artifact.entries[0];
   assert.equal(entry.status, 'resolved');
@@ -140,7 +140,7 @@ test('resolver creates a valid resolved artifact from a clear Open Library work 
   assert.deepEqual(entry.metadata.genres, [{ name: 'Science Fiction', slug: 'science-fiction' }, { name: 'Fiction', slug: 'fiction' }]);
   assert.equal(entry.metadata.averageRating, undefined);
   assert.equal(entry.provenance.description, 'open_library_work');
-  assert.deepEqual(calls, { openSearch: 1, openWork: 1, openEditions: 1, googleSearch: 1, googleExact: 0 });
+  assert.deepEqual(calls, { openSearch: 1, openWork: 1, openEditions: 1, googleSearch: 0, googleExact: 0 });
 });
 
 test('resolver uses Google Books when Open Library has no matching work', async () => {

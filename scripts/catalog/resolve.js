@@ -272,35 +272,74 @@ async function invoke(context, client, method, argument) {
   return client[method](argument);
 }
 
+function usableGoogleExact(source, candidate) {
+  return candidate && matchWork(source, candidate).eligible && selectEdition(source, [candidate]).status === 'selected'
+    ? candidate
+    : null;
+}
+
+function openLibraryMetadataNeedsEnrichment(source, selection, openWork) {
+  const { metadata } = mergedMetadata(source, {
+    selected: selection.selected,
+    isbn: selection.isbn,
+    openWork,
+    exactGoogle: null,
+  });
+  return !metadata.coverImageUrl || !metadata.description;
+}
+
+async function lookupGoogleExact(source, context, isbn, { notes, optional = false }) {
+  try {
+    const candidate = await invoke(context, context.providers.googleBooks, 'lookupByIsbn', isbn);
+    return { candidate: usableGoogleExact(source, candidate), error: null };
+  } catch (error) {
+    notes.push(optional ? 'google_books_optional_exact_isbn_failed' : 'google_books_exact_isbn_failed');
+    return { candidate: null, error };
+  }
+}
+
+async function resolveGoogleFallback(source, context, { notes, errors, openChoice, fallbackReview = null, exactLookup = null }) {
+  let googleVolumes = [];
+  let exactGoogle = exactLookup?.candidate ?? null;
+
+  try { googleVolumes = await invoke(context, context.providers.googleBooks, 'searchVolumes', { title: source.title, author: source.author }); }
+  catch (error) { errors.push(error); notes.push('google_books_search_failed'); }
+
+  const exactIsbn = source.pinnedIsbn13 ?? source.preferredIsbn13;
+  if (exactIsbn && exactLookup === null) {
+    const exact = await lookupGoogleExact(source, context, exactIsbn, { notes });
+    if (exact.error) errors.push(exact.error);
+    exactGoogle = exact.candidate;
+  }
+
+  const googleCandidates = [...googleVolumes, exactGoogle].filter(Boolean)
+    .filter((candidate, index, list) => list.findIndex(other => candidateId(other) === candidateId(candidate)) === index)
+    .filter(candidate => matchWork(source, candidate).eligible);
+  if (googleCandidates.length) {
+    const selection = selectEdition(source, googleCandidates);
+    if (selection.status === 'selected') return resolvedOrPinnedReview(source, selection, { openWork: null, exactGoogle, notes });
+    if (selection.status === 'needs_review' && !errors.length) return selectionReview(source, selection);
+  }
+
+  if (errors.length) return failedEntry(source, errors[0]);
+  if (fallbackReview) return fallbackReview;
+  if (openChoice.status === 'selected') return reviewEntry(source, 'no_eligible_edition', 'The matched Open Library work has no eligible edition', 'edition_selection');
+  return reviewEntry(source, 'no_matched_work', 'No provider work or volume strongly matched the curated source', 'work_matching');
+}
+
 async function resolveSource(source, context) {
   const notes = [];
   const errors = [];
-  let pinnedMismatchReview = null;
   let openWorks = [];
-  let googleVolumes = [];
-  let exactGoogle = null;
+  let fallbackReview = null;
 
   try { openWorks = await invoke(context, context.providers.openLibrary, 'searchWorks', { title: source.title, author: source.author }); }
   catch (error) { errors.push(error); notes.push('open_library_search_failed'); }
-  try { googleVolumes = await invoke(context, context.providers.googleBooks, 'searchVolumes', { title: source.title, author: source.author }); }
-  catch (error) { errors.push(error); notes.push('google_books_search_failed'); }
-  const exactIsbn = source.pinnedIsbn13 ?? source.preferredIsbn13;
-  if (exactIsbn) {
-    try { exactGoogle = await invoke(context, context.providers.googleBooks, 'lookupByIsbn', exactIsbn); }
-    catch (error) { errors.push(error); notes.push('google_books_exact_isbn_failed'); }
-  }
 
   const openChoice = workChoice(source, openWorks);
   if (openChoice.status === 'ambiguous') {
-    return reviewEntry(source, 'ambiguous_work_match', 'Multiple Open Library works match with insufficient separation', 'work_matching');
+    fallbackReview = reviewEntry(source, 'ambiguous_work_match', 'Multiple Open Library works match with insufficient separation', 'work_matching');
   }
-
-  const usableExactGoogle = exactGoogle && matchWork(source, exactGoogle).eligible && selectEdition(source, [exactGoogle]).status === 'selected'
-    ? exactGoogle
-    : null;
-  const googleCandidates = [...googleVolumes, usableExactGoogle].filter(Boolean)
-    .filter((candidate, index, list) => list.findIndex(other => candidateId(other) === candidateId(candidate)) === index)
-    .filter(candidate => matchWork(source, candidate).eligible);
 
   if (openChoice.status === 'selected') {
     let openWork = openChoice.winner.candidate;
@@ -323,24 +362,28 @@ async function resolveSource(source, context) {
     if (editionFetchSucceeded) {
       const selection = selectEdition(source, deduplicateOpenLibraryEditions(editions), { workMatch: openChoice.winner.match });
       if (selection.status === 'selected') {
-        const finalized = resolvedOrPinnedReview(source, selection, { openWork, exactGoogle: usableExactGoogle, notes });
-        if (finalized.status === 'resolved') return finalized;
-        pinnedMismatchReview = finalized;
+        if (source.pinnedIsbn13 && selection.isbn !== source.pinnedIsbn13) {
+          const exact = await lookupGoogleExact(source, context, source.pinnedIsbn13, { notes });
+          if (exact.candidate) return resolvedOrPinnedReview(source, selectEdition(source, [exact.candidate]), { openWork: null, exactGoogle: exact.candidate, notes });
+          if (exact.error) errors.push(exact.error);
+          fallbackReview = resolvedOrPinnedReview(source, selection, { openWork, exactGoogle: null, notes });
+          return resolveGoogleFallback(source, context, { notes, errors, openChoice, fallbackReview, exactLookup: exact });
+        }
+
+        let exactGoogle = null;
+        if (openLibraryMetadataNeedsEnrichment(source, selection, openWork)) {
+          const exact = await lookupGoogleExact(source, context, selection.isbn, { notes, optional: true });
+          exactGoogle = exact.candidate;
+        }
+        return resolvedOrPinnedReview(source, selection, { openWork, exactGoogle, notes });
       }
-      if (selection.status === 'needs_review' && !errors.length) return selectionReview(source, selection);
+      if (selection.status === 'needs_review') fallbackReview = selectionReview(source, selection);
+      if (selection.status === 'no_match') fallbackReview = reviewEntry(source, 'no_eligible_edition', 'The matched Open Library work has no eligible edition', 'edition_selection');
     }
+    if (!editionFetchSucceeded && !errors.length) fallbackReview = reviewEntry(source, 'no_eligible_edition', 'The matched Open Library work has no eligible edition', 'edition_selection');
   }
 
-  if (googleCandidates.length) {
-    const selection = selectEdition(source, googleCandidates);
-    if (selection.status === 'selected') return resolvedOrPinnedReview(source, selection, { openWork: null, exactGoogle: usableExactGoogle, notes });
-    if (selection.status === 'needs_review' && !errors.length) return selectionReview(source, selection);
-  }
-
-  if (errors.length) return failedEntry(source, errors[0]);
-  if (pinnedMismatchReview) return pinnedMismatchReview;
-  if (openChoice.status === 'selected') return reviewEntry(source, 'no_eligible_edition', 'The matched Open Library work has no eligible edition', 'edition_selection');
-  return reviewEntry(source, 'no_matched_work', 'No provider work or volume strongly matched the curated source', 'work_matching');
+  return resolveGoogleFallback(source, context, { notes, errors, openChoice, fallbackReview });
 }
 
 function artifactFor(entries) {
