@@ -95,7 +95,28 @@ test('edition eligibility hard-rejects invalid identifiers, unsafe variants, aud
   }
 });
 
-test('missing optional edition metadata remains eligible without receiving bonuses', () => {
+test('edition eligibility requires direct or trusted inherited author evidence', () => {
+  const noAuthors = edition({ authors: [] });
+  let result = evaluateEdition(source, noAuthors);
+  assert.equal(result.eligible, false);
+  assert.equal(result.reasons[0], 'rejected_missing_author_evidence');
+
+  const trustedWorkMatch = matchWork(source, work());
+  result = evaluateEdition(source, noAuthors, { workMatch: trustedWorkMatch });
+  assert.equal(result.eligible, true);
+  assert.ok(result.reasons.includes('author_inherited_work'));
+
+  result = evaluateEdition({ ...source, preferredIsbn13: ISBN_A }, noAuthors);
+  assert.equal(result.eligible, false);
+  assert.equal(result.reasons[0], 'rejected_missing_author_evidence');
+  assert.equal(result.preferredIsbnMatch, false);
+
+  result = evaluateEdition(source, edition({ authors: ['Jane Austen'] }), { workMatch: trustedWorkMatch });
+  assert.equal(result.eligible, false);
+  assert.equal(result.reasons[0], 'rejected_author_mismatch');
+});
+
+test('missing optional non-author edition metadata remains eligible without receiving bonuses', () => {
   const candidate = edition({ languages: [], publishers: [], formats: [], publicationDates: [], publicationYears: [], coverImageUrls: [], descriptions: [] });
   const result = evaluateEdition(source, candidate);
   assert.equal(result.eligible, true);
@@ -155,8 +176,9 @@ test('selection distinguishes no match, below threshold and clear winner', () =>
   const invalid = edition({ formats: ['Audiobook'] });
   assert.equal(selectEdition(source, [invalid]).status, 'no_match');
 
+  const trustedWorkMatch = matchWork(source, work());
   const weak = edition({ authors: [], languages: [], publishers: [], formats: [], publicationDates: [], publicationYears: [], coverImageUrls: [], descriptions: [] });
-  const review = selectEdition(source, [weak]);
+  const review = selectEdition(source, [weak], { workMatch: trustedWorkMatch });
   assert.equal(review.status, 'needs_review');
   assert.equal(review.reason, 'below_minimum_score');
   assert.ok(review.score < MIN_EDITION_SCORE);

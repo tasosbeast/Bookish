@@ -111,6 +111,7 @@ export function evaluateEdition(sourceValue, candidate, { workMatch = null } = {
   const authors = values(candidate?.authors);
   const authorMatch = authors.length ? matchAuthor(source.author, authors) : null;
   if (authorMatch && !authorMatch.eligible) return rejected(candidate, 'author_mismatch', { isbn: isbns[0], titleMatch, authorMatch });
+  if (!authorMatch && !inheritedWorkMatch) return rejected(candidate, 'missing_author_evidence', { isbn: isbns[0], titleMatch, authorMatch });
 
   const preferredIsbnMatch = Boolean(source.preferredIsbn13 && isbns.includes(source.preferredIsbn13));
   const isbn = preferredIsbnMatch ? source.preferredIsbn13 : isbns[0];
