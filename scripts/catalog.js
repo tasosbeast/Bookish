@@ -108,21 +108,27 @@ export function openLibrary({ fetchImpl = fetch, sleep = delay, timeout = 10000 
       return data.items.filter(item => hasIsbn13(item, isbn)).map(item => googleCoverUrl(item.volumeInfo.imageLinks)).find(Boolean) ?? null;
     } catch { return null; }
   }
+  async function atStage(stage, operation) {
+    try { return await operation(); }
+    catch (error) {
+      throw new Error(`${stage}: ${error?.message ?? String(error)}`, { cause: error });
+    }
+  }
   return async value => {
     const isbn = isbn13(value);
-    const edition = await get(`/isbn/${isbn}`);
+    const edition = await atStage('Open Library edition', () => get(`/isbn/${isbn}`));
     if (!edition) return null;
     const refs = edition.authors;
     if (!Array.isArray(refs) || !refs.length || refs.length > 8) return null;
     const authors = [];
     for (const ref of refs) {
       if (!/^\/authors\/OL\d+A$/.test(ref?.key)) return null;
-      authors.push((await get(ref.key))?.name);
+      authors.push((await atStage('Open Library author', () => get(ref.key)))?.name);
     }
     let work = {};
     const key = edition.works?.[0]?.key;
-    if (/^\/works\/OL\d+W$/.test(key)) work = await get(key) ?? {};
-    const metadata = mapEdition(isbn, edition, authors, work);
+    if (/^\/works\/OL\d+W$/.test(key)) work = await atStage('Open Library work', () => get(key)) ?? {};
+    const metadata = await atStage('validation', () => Promise.resolve(mapEdition(isbn, edition, authors, work)));
     if (metadata && !metadata.coverImageUrl) metadata.coverImageUrl = await googleCover(isbn);
     return metadata;
   };
@@ -162,7 +168,7 @@ export async function importCatalog(manifest, { resolve, save, report = () => {}
       if (!data) { summary.skipped++; report(`${isbn}: incomplete or not found`); continue; }
       summary.resolved++;
       summary[await save(data)]++;
-    } catch { summary.failed++; report(`${isbn}: failed (metadata or database operation)`); }
+    } catch (error) { summary.failed++; report(`${isbn}: failed (${error.message})`); }
   }
   return summary;
 }
