@@ -121,56 +121,6 @@ Returns only the user identified by the verified access token. `status` is optio
       "genres": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Fantasy", "slug": "fantasy" }]
     }
   }],
-- `sort`: `rating` (default) or `publicationYear`; `order`: `asc` or `desc` (default).
-- `q`: literal case-insensitive substring of title or author, 1–200 characters. `%`, `_` and backslash are escaped; Prisma uses parameterized PostgreSQL ILIKE, supported by the migration's GIN trigram indexes. Very short searches may still scan.
-- Both sorts place null values last and use ID as a deterministic tie-breaker. Pagination is bounded **offset pagination** for this API; use cursor pagination if large-catalog navigation becomes necessary. Concurrent changes between separate requests can move results between pages.
-
-Response: `{ "data": [ ...booksWithGenres ], "pagination": { "page": 1, "limit": 20, "total": 50, "totalPages": 3 } }`. `averageRating` is a JSON number or null. Counts and results within each request share a repeatable-read snapshot.
-
-`GET /api/books/:id?page=1&limit=20` returns `{ "data": { ...book, "genres": [...], "reviews": { "data": [...], "pagination": {...} } } }`. Pagination applies to reviews. Reviews are newest first with ID as tie-breaker. Reviewer data includes only ID, username and profile picture. Unknown books return 404.
-
-Each review also has `likedByMe: true | false`. Without an Authorization header it is always false, even if the browser has a refresh cookie. Supply `Authorization: Bearer <accessToken>` to obtain the current reader's state. Both `/api/books/` and `/api/books/:id` validate any supplied Authorization header and active session; malformed, empty, expired or revoked credentials return 401 instead of falling back to anonymous access. The catalog's response shape is unchanged and does not embed reviews.
-
-For example, `GET /api/books/:id?limit=1` can return a review containing:
-
-```json
-{
-  "id": "11111111-1111-4111-8111-111111111111",
-  "rating": 4,
-  "reviewText": "Thoughtful and engaging.",
-  "likesCount": 2,
-  "likedByMe": true,
-  "user": { "id": "22222222-2222-4222-8222-222222222222", "username": "reader_1", "profilePicture": null }
-}
-```
-
-Like states are fetched in one query restricted to the current reader and returned review IDs, inside the same repeatable-read transaction. No liker identities or session fields are exposed. Detail responses use `Cache-Control: no-store` and `Vary: Authorization` to prevent sharing personalized responses.
-
-## Shelves and reviews
-
-All following routes require `Authorization: Bearer <accessToken>`. Successful operations return 200, including an already-satisfied like/unlike request.
-
-`GET /api/user-books?status=read&page=1&limit=20`
-
-Returns only the user identified by the verified access token. `status` is optional and accepts `want_to_read`, `currently_reading` or `read`. `page` is 1–10000 (default 1); `limit` is 1–100 (default 20). Entries sort by `updatedAt` descending, then `bookId` ascending, including when timestamps tie. Count and page share a repeatable-read snapshot. Unknown parameters, including a caller-supplied `userId`, return 400. An empty or out-of-range page returns an empty `data` array with accurate pagination metadata.
-
-```json
-{
-  "data": [{
-    "bookId": "11111111-1111-4111-8111-111111111111",
-    "status": "read",
-    "userRating": 4,
-    "createdAt": "2026-09-06T00:00:00.000Z",
-    "updatedAt": "2026-09-06T00:00:00.000Z",
-    "book": {
-      "id": "11111111-1111-4111-8111-111111111111",
-      "title": "Example Book",
-      "author": "Example Author",
-      "coverImageUrl": null,
-      "averageRating": 4.25,
-      "genres": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Fantasy", "slug": "fantasy" }]
-    }
-  }],
   "pagination": { "page": 1, "limit": 20, "total": 1, "totalPages": 1 }
 }
 ```
@@ -187,7 +137,7 @@ Supply `status` and/or `userRating`. Status is `want_to_read`, `currently_readin
 
 `DELETE /api/user-books/:bookId`
 
-Removes only the authenticated reader's shelf entry and returns `{ "data": { "bookId": "...", "removed": true } }`. Accepts an optional `?deleteReview=true` query parameter. The Book and every other reader's data remain unchanged. A missing personal shelf entry returns `404 SHELF_NOT_FOUND`. If the reader has a review for the book and `deleteReview=true` is not provided, removal returns `409 REVIEW_BLOCKS_SHELF_REMOVAL`; if true, the user's review, rating, and shelf entry are atomically deleted. When the removed entry has a rating, the book's average and rating count are recomputed in the same serializable transaction.
+Removes only the authenticated reader's shelf entry and returns `{ "data": { "bookId": "...", "removed": true } }`. The Book and every other reader's data remain unchanged. A missing personal shelf entry returns `404 SHELF_NOT_FOUND`. If the reader has a review for the book, removal returns `409 REVIEW_BLOCKS_SHELF_REMOVAL` by default; the review must be handled before its required rating/shelf entry can be removed. Alternatively, supplying the query parameter `?deleteReview=true` atomically removes the authenticated reader's review, rating, and shelf entry in the same serializable transaction. When the removed entry has a rating, the book's average and rating count are recomputed in the same serializable transaction.
 
 `POST /api/reviews`
 
@@ -200,6 +150,18 @@ Upserts the user's unique review and canonical shelf rating together, preserving
 `DELETE /api/reviews/:id`
 
 Deletes the review only when it belongs to the authenticated reader and returns `{ "data": { "reviewId": "...", "deleted": true } }`. A missing review or a review owned by another reader returns `404 REVIEW_NOT_FOUND`. The reader's `UserBook`, shelf status and canonical `userRating` remain unchanged, so the book's `averageRating` and `ratingsCount` also remain unchanged. Likes attached to the deleted review are removed by the existing database cascade.
+
+Likes use explicit, idempotent state-setting commands (no request body):
+
+| Endpoint | Effect | Response |
+| --- | --- | --- |
+| PUT /api/reviews/:id/like | Ensure the current reader's like exists | `{ "data": { "reviewId": "...", "liked": true, "likesCount": 1 } }` |
+| DELETE /api/reviews/:id/like | Ensure the current reader's like is absent | `{ "data": { "reviewId": "...", "liked": false, "likesCount": 0 } }` |
+
+Repeated or simultaneous PUT requests create at most one like for the reader; repeated DELETE requests succeed even when their like is already absent. Neither operation modifies another reader's like. The join row and cached count are maintained together in a serializable transaction. `likesCount` reflects that transaction's snapshot and can differ between retries when other readers act. Unknown reviews return 404 for both methods; invalid UUIDs return 400, and missing/invalid/revoked access tokens return 401.
+
+**Contract change:** the old `POST /api/reviews/:id/like` toggle has been removed. Authenticated requests using POST receive 405 with `Allow: PUT, DELETE`; they do not change a like. Frontend callers must send the desired state explicitly:
+
 ```js
 const response = await fetch(`http://localhost:3000/api/reviews/${reviewId}/like`, {
   method: desiredLiked ? 'PUT' : 'DELETE',
