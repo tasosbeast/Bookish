@@ -127,6 +127,24 @@ npm run catalog:ol-snapshot-build -- --input path/to/ol_dump_editions.txt.gz --a
 
 The editions parser emits one candidate for each valid ISBN-13 (including validated ISBN-10 conversions), retains Open Library cover IDs as references, and uses only edition-level publication metadata. It needs the local author index because edition rows normally carry author keys rather than trustworthy author names. These commands are entirely local: they do not download files, contact providers, or access PostgreSQL.
 
+Before a large local bulk build, check the target volume. The preflight uses an intentionally conservative 8× input-size temporary-space estimate plus a reserve; it refuses the check with a non-zero exit status when that requirement exceeds free space. Override the amplification only with measurements from a comparable local build.
+
+```powershell
+npm run catalog:disk-preflight -- -- --directory scripts/catalog-cache --input path/to/ol_dump_editions.txt.gz
+```
+
+For a bounded local dump sample, `catalog:bulk-smoke` builds disposable author and edition indexes, samples process memory and temporary-directory use, verifies local ISBN/title-author lookups with `fetch` disabled, then removes its generated data:
+
+```powershell
+npm run catalog:bulk-smoke -- -- --authors path/to/authors-sample.txt.gz --editions path/to/editions-sample.txt.gz --workdir $env:TEMP --snapshot-id sample-2026-08
+```
+
+For a controlled source sample without downloading an entire archive, `catalog:ol-range-sample` requires a server-honored HTTP range and writes only complete decompressed rows to the requested local path. It is explicitly separate from the local index builders:
+
+```powershell
+npm run catalog:ol-range-sample -- -- --url https://openlibrary.org/data/ol_dump_authors_latest.txt.gz --bytes 33554432 --rows 50000 --output $env:TEMP/authors-sample.txt
+```
+
 `catalog:import` reads only the validated Catalog Pipeline v2 artifact at `scripts/catalog-resolved.json`; it never contacts Open Library or Google Books. Use `--artifact <path>` to inspect or import another resolved artifact. Provider resolution is a separate step and production database writes never depend on live metadata services.
 
 Run a no-write database classification first:
