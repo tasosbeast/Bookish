@@ -131,19 +131,18 @@ The nested book also includes its other existing scalar fields (description, ISB
 
 ```json
 { "bookId": "11111111-1111-4111-8111-111111111111", "status": "read", "userRating": 5 }
+
+```json
+{ "bookId": "11111111-1111-4111-8111-111111111111", "status": "read", "userRating": 5 }
 ```
 
 Supply `status` and/or `userRating`. Status is `want_to_read`, `currently_reading` or `read`; a new entry defaults to `want_to_read` if omitted. Rating is an integer 1–5 or null. Omitted fields retain previous values. A status-only update never clears a rating. Clearing a rating while a review exists returns 409. An updated rating is copied to any existing review in the same transaction.
 
 `DELETE /api/user-books/:bookId`
 
-Removes only the authenticated reader's shelf entry and returns `{ "data": { "bookId": "...", "removed": true } }`. The Book and every other reader's data remain unchanged. A missing personal shelf entry returns `404 SHELF_NOT_FOUND`. If the reader has a review for the book, removal returns `409 REVIEW_BLOCKS_SHELF_REMOVAL`; the review must be handled before its required rating/shelf entry can be removed. When the removed entry has a rating, the book's average and rating count are recomputed in the same serializable transaction.
+Removes only the authenticated reader's shelf entry and returns `{ "data": { "bookId": "...", "removed": true } }`. Accepts an optional `?deleteReview=true` query parameter. The Book and every other reader's data remain unchanged. A missing personal shelf entry returns `404 SHELF_NOT_FOUND`. If the reader has a review for the book and `deleteReview=true` is not provided, removal returns `409 REVIEW_BLOCKS_SHELF_REMOVAL`; if true, the user's review, rating, and shelf entry are atomically deleted. When the removed entry has a rating, the book's average and rating count are recomputed in the same serializable transaction.
 
 `POST /api/reviews`
-
-```json
-{ "bookId": "11111111-1111-4111-8111-111111111111", "rating": 4, "reviewText": "Thoughtful and engaging." }
-```
 
 Upserts the user's unique review and canonical shelf rating together, preserving an existing shelf status. Text is optional, nullable and at most 10000 characters; omit to preserve it, send null to clear it. Review writes and shelf rating writes recompute `Book.averageRating` and `ratingsCount` from all non-null shelf ratings, counting each reader once. No ratings produces a null average and zero count.
 

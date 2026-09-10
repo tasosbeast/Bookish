@@ -60,4 +60,14 @@ test('PostgreSQL: removing a shelf is isolated, review-safe and refreshes rating
       assert.ok(await prisma.review.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: book.id } } }));
       assert.deepEqual(await prisma.book.findUnique({ where: { id: book.id } }), before);
     });
+
+    await t.test('adding deleteReview=true removes both review and shelf and updates aggregates', async () => {
+      const response = await auth(first.token, 'delete', `/api/user-books/${book.id}?deleteReview=true`).expect(200);
+      assert.deepEqual(response.body, { data: { bookId: book.id, removed: true } });
+      assert.equal(await prisma.userBook.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: book.id } } }), null);
+      assert.equal(await prisma.review.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: book.id } } }), null);
+      const updated = await prisma.book.findUnique({ where: { id: book.id } });
+      assert.equal(Number(updated.averageRating), 3); // since second user had rating 3
+      assert.equal(updated.ratingsCount, 1);
+    });
   });

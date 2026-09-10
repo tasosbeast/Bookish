@@ -7,4 +7,4 @@ export async function list(req, res) {
   res.set('Cache-Control', 'no-store').json(await listShelves(req.auth.userId, req.validated.query));
 }
 export async function save(req, res) { res.json({ data: await saveShelf(req.auth.userId, req.validated.body) }); }
-export async function remove(req, res) { res.json({ data: await removeShelf(req.auth.userId, req.validated.params.bookId) }); }
+export async function remove(req, res) { res.json({ data: await removeShelf(req.auth.userId, req.validated.params.bookId, req.validated.query.deleteReview === 'true') }); }
