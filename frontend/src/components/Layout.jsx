@@ -26,6 +26,6 @@ export default function Layout() {
     </div></header>
     {(auth.error || logoutError) && <div className="container pt-4"><ErrorNotice error={logoutError || auth.error} retry={auth.error ? () => session.refresh().catch(() => {}) : undefined} /></div>}
     <main id="main" tabIndex={-1}><Outlet /></main>
-    <footer className="site-footer container"><Link to="/" className="footer-brand"><Icon size={20} /> bookish.</Link><span>A home for your next chapter.</span><span className="footer-note">Book metadata and covers: <a href="https://openlibrary.org/">Open Library</a></span></footer>
+    <footer className="site-footer container"><Link to="/" className="footer-brand"><Icon size={20} /> bookish.</Link><span>A home for your next chapter.</span><span className="footer-note">Book metadata and covers: <a href="https://openlibrary.org/">Open Library</a></span><span className="footer-note"><a href="https://docs.google.com/forms/d/e/1FAIpQLScCd1pH7Spq2p0i5aZo0eIq3NmHzBKfIgaaITJLioO-s2QoEA/viewform?usp=sharing&ouid=106005455597214982303" target="_blank" rel="noopener noreferrer">Send feedback</a></span></footer>
   </div>;
 }
