@@ -34,7 +34,7 @@ export default function Discover() {
   const filterCount = [q, genre, author].filter(Boolean).length;
   const noResultsTitle = filterCount > 1 ? 'No books match these filters' : author ? `No books by “${author}”` : genre ? `No ${genreName} books found` : `No books found for “${q}”`;
   return <div className="container discover-page">
-    <section className="discover-hero"><div><p className="eyebrow"><span /> A life between the pages</p><h1>There’s a world<br />in your <em>next read.</em></h1><p className="hero-copy">Follow your curiosity. Find a story to get lost in,<br className="desktop-break" /> and keep the books you love close.</p></div>
+    <section className="discover-hero"><div><p className="eyebrow"><span /> Living Between Pages</p><h1>There’s a world<br />in your <em>next read.</em></h1><p className="hero-copy">Follow your curiosity. Find a story to get lost in,<br className="desktop-break" /> and keep the books you love close.</p></div>
       <div className="hero-aside" aria-hidden="true"><span className="chapter-number">01 /</span><Icon size={56} /><span className="hero-aside-note">One more<br /><em>chapter.</em></span><div className="hero-line" /></div>
     </section>
     <section aria-label="Find books" className="discovery-controls">
