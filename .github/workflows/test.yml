@@ -20,8 +20,11 @@ jobs:
           --health-cmd "pg_isready -U bookish -d bookish_test"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
+      NODE_ENV: test
       DATABASE_URL: postgresql://bookish:bookish@localhost:5432/bookish_test
       TEST_DATABASE_URL: postgresql://bookish:bookish@localhost:5432/bookish_test
+      JWT_ACCESS_SECRET: ci-test-access-secret-not-for-production-0123456789
+      JWT_REFRESH_SECRET: ci-test-refresh-secret-not-for-production-0123456789
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
