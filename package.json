@@ -8,6 +8,7 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "catalog:import": "node scripts/import-catalog.js",
+    "catalog:launch-import": "node scripts/launch-import-catalog.js",
     "catalog:resolve": "node scripts/resolve-catalog.js",
     "catalog:status": "node scripts/catalog-status.js",
     "catalog:snapshot-build": "node scripts/snapshot-build.js",
