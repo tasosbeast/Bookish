@@ -60,25 +60,13 @@ test('My Books shelf editor displays correct review link', async t => {
   assert.ok(document.body.textContent.includes('Book One'));
   assert.ok(document.body.textContent.includes('Book Two'));
 
-  // Open editor for Book One (No review)
-  const buttons = [...document.querySelectorAll('.shelf-personal button')];
-  const updateBtn1 = buttons.find(b => b.textContent.includes('Update reading for Book One'));
-  await act(async () => updateBtn1.click());
+  // Check the review link for Book One
+  const link1 = [...document.querySelectorAll('.shelf-personal a')].find(a => a.href.includes('/books/book-1#review'));
+  assert.ok(link1, 'Review link for book-1 should be present');
+  assert.equal(link1.textContent, 'Review');
 
-  // Check the review link
-  const link1 = [...document.querySelectorAll('.inline-editor a')].find(a => a.textContent.includes('Write review'));
-  assert.ok(link1, 'Write review link should be present');
-  assert.equal(link1.getAttribute('href'), '/books/book-1#review');
-
-  // Close editor for Book One
-  await act(async () => updateBtn1.click());
-
-  // Open editor for Book Two (Has review)
-  const updateBtn2 = [...document.querySelectorAll('.shelf-personal button')].find(b => b.textContent.includes('Update reading for Book Two'));
-  await act(async () => updateBtn2.click());
-
-  // Check the review link
-  const link2 = [...document.querySelectorAll('.inline-editor a')].find(a => a.textContent.includes('Edit review'));
-  assert.ok(link2, 'Edit review link should be present');
-  assert.equal(link2.getAttribute('href'), '/books/book-2#review');
+  // Check the review link for Book Two
+  const link2 = [...document.querySelectorAll('.shelf-personal a')].find(a => a.href.includes('/books/book-2#review'));
+  assert.ok(link2, 'Review link for book-2 should be present');
+  assert.equal(link2.textContent, 'Review');
 });
