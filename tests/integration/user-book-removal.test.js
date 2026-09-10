@@ -61,6 +61,36 @@ test('PostgreSQL: removing a shelf is isolated, review-safe and refreshes rating
       assert.deepEqual(await prisma.book.findUnique({ where: { id: book.id } }), before);
     });
 
+    await t.test('a transaction failure during cascade removal rolls back both deletions', async () => {
+      const failingBook = await prisma.book.create({ data: { title: `Fail ${tag}`, author: 'Fail author' } });
+      bookIds.push(failingBook.id);
+      await auth(first.token, 'post', '/api/user-books').send({ bookId: failingBook.id, status: 'want_to_read' }).expect(200);
+      await auth(first.token, 'post', '/api/reviews').send({ bookId: failingBook.id, rating: 4, reviewText: 'Keep this review' }).expect(200);
+
+      const originalTransaction = prisma.$transaction;
+      let deleteCalled = false;
+      prisma.$transaction = async (work, options) => {
+        return originalTransaction.bind(prisma)(async tx => {
+          const originalDelete = tx.userBook.delete;
+          tx.userBook.delete = async (args) => {
+            deleteCalled = true;
+            throw new Error('Simulated transaction failure');
+          };
+          return work(tx);
+        }, options);
+      };
+
+      try {
+        await auth(first.token, 'delete', `/api/user-books/${failingBook.id}?deleteReview=true`).expect(500);
+      } finally {
+        prisma.$transaction = originalTransaction;
+      }
+
+      assert.ok(deleteCalled);
+      assert.ok(await prisma.userBook.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: failingBook.id } } }));
+      assert.ok(await prisma.review.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: failingBook.id } } }));
+    });
+
     await t.test('adding deleteReview=true removes both review and shelf and updates aggregates', async () => {
       const response = await auth(first.token, 'delete', `/api/user-books/${book.id}?deleteReview=true`).expect(200);
       assert.deepEqual(response.body, { data: { bookId: book.id, removed: true } });

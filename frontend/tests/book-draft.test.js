@@ -49,7 +49,7 @@ test('book forms preserve drafts through likes, review pages, shelf saves and fa
       accessToken: `header.${btoa(JSON.stringify({ exp: Date.now() / 1000 + 900 }))}.signature`, expiresIn: 900 });
     if (options.method === 'PUT') { liked = true; return response({ data: { liked: true } }); }
     if (options.method === 'DELETE') {
-      deletions.push(url.pathname);
+      deletions.push(url.pathname + url.search);
       if (url.pathname.startsWith('/api/reviews/')) personal = { ...personal, review: null };
       if (url.pathname.startsWith('/api/user-books/')) personal = { ...personal, shelf: null };
       return response({ data: { deleted: true } });
@@ -148,18 +148,14 @@ test('book forms preserve drafts through likes, review pages, shelf saves and fa
   await click('Save changes'); await flush(); preserved();
   assert.equal(reviewForm.querySelector('select').value, '3', 'clean review rating follows a saved shelf');
 
-  await click('Delete review');
-  assert.deepEqual(deletions, ['/api/reviews/own']);
-  assert.equal(document.querySelector('.review-form legend').textContent, 'What stayed with you?');
-  assert.equal(document.querySelector('.review-form textarea').value, '');
-  assert.equal(document.querySelectorAll('.reading-form select')[1].value, '3', 'deleting a review keeps the shelf rating');
-  assert.equal([...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Delete review'), false);
-  await flush(true);
-  assert.equal(document.querySelector('.review-form legend').textContent, 'What stayed with you?', 'a failed reconciliation cannot restore a deleted review');
-  assert.equal([...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Delete review'), false);
-  assert.ok(document.body.textContent.includes('Showing previously loaded reading data.'));
+  let confirmResult = false;
+  dom.window.confirm = () => confirmResult;
   await click('Remove from My Books');
-  assert.deepEqual(deletions, ['/api/reviews/own', `/api/user-books/${bookId}`]);
+  assert.deepEqual(deletions, []);
+  
+  confirmResult = true;
+  await click('Remove from My Books');
+  assert.deepEqual(deletions, [`/api/user-books/${bookId}?deleteReview=true`]);
   assert.ok(document.querySelector('.reading-form').textContent.includes('Add to my books'));
   await flush(true);
   assert.ok(document.querySelector('.reading-form').textContent.includes('Add to my books'));
