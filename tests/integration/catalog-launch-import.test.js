@@ -29,13 +29,14 @@ test('PostgreSQL: launch import preserves existing Book identity, ratings and re
   const seed = Number.parseInt(tag, 16) % 900000000;
   const source = fixtureSource(seed);
   const entries = prepareLaunchCatalog(source);
-  const isbns = entries.map(entry => entry.isbn);
+  const existingIsbn = isbnAt(seed + 1000);
+  const isbns = [...entries.map(entry => entry.isbn), existingIsbn];
   assert.equal(await prisma.book.count({ where: { isbn: { in: isbns } } }), 0, 'Test requires unused disposable ISBNs');
 
   const user = await prisma.user.create({ data: { username: `launch_${tag}`, email: `launch_${tag}@example.com`, passwordHash: 'integration-test-only' } });
   const existing = await prisma.book.create({
     data: {
-      isbn: entries[0].isbn, title: entries[0].title, author: entries[0].author,
+      isbn: existingIsbn, title: entries[0].title, author: entries[0].author,
       description: 'Existing description', publicationYear: 2001, coverImageUrl: 'https://example.com/known-good-cover.jpg',
       averageRating: 4, ratingsCount: 1,
     },
@@ -52,12 +53,12 @@ test('PostgreSQL: launch import preserves existing Book identity, ratings and re
 
   const before = await prisma.book.findUnique({ where: { id: existing.id } });
   const dryRun = await importLaunchCatalog(prisma, source, { apply: false });
-  assert.deepEqual(dryRun, { sourceEntries: 250, matched: 1, created: 249, updated: 0, conflicts: 0, invalidEntries: 0 });
+  assert.deepEqual({ ...dryRun, unmappedExistingBooks: [] }, { sourceEntries: 250, matchedExactIsbn: 0, matchedExistingWork: 1, created: 249, updated: 0, conflicts: 0, invalidEntries: 0, unmappedExistingBooks: [] });
   assert.equal(await prisma.book.count({ where: { isbn: { in: isbns } } }), 1);
 
   const result = await importLaunchCatalog(prisma, source, { apply: true });
   assert.deepEqual(result, dryRun);
-  const after = await prisma.book.findUnique({ where: { isbn: entries[0].isbn } });
+  const after = await prisma.book.findUnique({ where: { isbn: existingIsbn } });
   assert.deepEqual(after, before);
   assert.equal(await prisma.userBook.count({ where: { userId: user.id, bookId: existing.id, userRating: 4 } }), 1);
   assert.equal(await prisma.review.count({ where: { id: review.id, userId: user.id, bookId: existing.id, rating: 4 } }), 1);

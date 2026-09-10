@@ -41,13 +41,17 @@ function mockDatabase(rows = []) {
   };
   return {
     book: {
-      findMany: async ({ where, select: fields }) => [...books.values()]
-        .filter(row => where.isbn.in.includes(row.isbn))
+      findMany: async ({ select: fields }) => [...books.values()]
         .map(row => select(row, fields)),
     },
     $transaction: async work => work(tx),
     rows: books,
   };
+}
+
+function reported(result) {
+  const { unmappedExistingBooks, ...summary } = result;
+  return summary;
 }
 
 test('launch catalog uses all 250 curated ISBNs and retains the 30 production pins', () => {
@@ -68,32 +72,53 @@ test('launch catalog dry-run is offline and performs no writes', async () => {
   globalThis.fetch = () => { throw new Error('launch import must not fetch'); };
   try {
     const result = await importLaunchCatalog(db, source, { apply: false });
-    assert.deepEqual(result, { sourceEntries: 250, matched: 1, created: 249, updated: 0, conflicts: 0, invalidEntries: 0 });
+    assert.deepEqual(reported(result), { sourceEntries: 250, matchedExactIsbn: 1, matchedExistingWork: 0, created: 249, updated: 0, conflicts: 0, invalidEntries: 0 });
+    assert.equal(result.unmappedExistingBooks.length, 0);
     assert.deepEqual([...db.rows.values()], before);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test('launch apply creates missing books while preserving exact existing identities and user data', async () => {
+test('launch apply preserves a uniquely matched existing work with a different ISBN and user data', async () => {
   const source = sourceManifest();
-  const existing = prepareLaunchCatalog(source)[0];
+  const sourceEntry = prepareLaunchCatalog(source)[0];
+  const existingIsbn = isbnAt(900000000);
   const db = mockDatabase([{
-    id: 'production-book-id', isbn: existing.isbn, title: existing.title, author: existing.author,
+    id: 'production-book-id', isbn: existingIsbn, title: sourceEntry.title, author: sourceEntry.author,
     description: 'Existing description', publicationYear: 2001, coverImageUrl: 'https://example.test/good-cover.jpg',
     averageRating: 4.5, ratingsCount: 2, relations: { userBooks: ['shelf'], reviews: ['review'], likes: ['like'] },
   }]);
-  const before = structuredClone(db.rows.get(existing.isbn));
+  const before = structuredClone(db.rows.get(existingIsbn));
   const result = await importLaunchCatalog(db, source, { apply: true });
-  assert.deepEqual(result, { sourceEntries: 250, matched: 1, created: 249, updated: 0, conflicts: 0, invalidEntries: 0 });
-  assert.deepEqual(db.rows.get(existing.isbn), before);
+  assert.deepEqual(reported(result), { sourceEntries: 250, matchedExactIsbn: 0, matchedExistingWork: 1, created: 249, updated: 0, conflicts: 0, invalidEntries: 0 });
+  assert.deepEqual(db.rows.get(existingIsbn), before);
   const created = db.rows.get(prepareLaunchCatalog(source)[1].isbn);
   assert.equal(created.description, null);
   assert.equal(created.publicationYear, null);
   assert.equal(created.coverImageUrl, `https://covers.openlibrary.org/b/isbn/${created.isbn}-L.jpg?default=false`);
 });
 
-test('launch apply stops before writes for invalid source data or existing identity conflicts', async () => {
+test('launch matching accepts harmless exact-ISBN title suffixes and rejects wrong works', async () => {
+  const source = sourceManifest();
+  source[0] = sourceEntry(0, { title: 'Meditations', author: 'Marcus Aurelius' });
+  source[1] = sourceEntry(1, { title: 'The Road', author: 'Cormac McCarthy' });
+  const entries = prepareLaunchCatalog(source);
+  const db = mockDatabase([
+    { id: 'meditations', isbn: entries[0].isbn, title: 'Meditations (Penguin Classics)', author: 'Marcus Aurelius' },
+    { id: 'road', isbn: entries[1].isbn, title: "The Road (Oprah's Book Club)", author: 'Cormac McCarthy' },
+  ]);
+  const result = await importLaunchCatalog(db, source, { apply: false });
+  assert.deepEqual(reported(result), { sourceEntries: 250, matchedExactIsbn: 2, matchedExistingWork: 0, created: 248, updated: 0, conflicts: 0, invalidEntries: 0 });
+
+  const wrongBook = mockDatabase([{ id: 'wrong-book', isbn: entries[0].isbn, title: 'Different Book', author: 'Different Author' }]);
+  const wrongResult = await importLaunchCatalog(wrongBook, source, { apply: false });
+  assert.equal(wrongResult.conflicts, 1);
+  await assert.rejects(() => importLaunchCatalog(wrongBook, source, { apply: true }), { code: 'identity_conflict' });
+  assert.equal(wrongBook.rows.size, 1);
+});
+
+test('launch apply stops before writes for invalid source data, reused rows and conflicts', async () => {
   const db = mockDatabase();
   await assert.rejects(() => importLaunchCatalog(db, sourceManifest().slice(0, 249), { apply: false }), { code: 'invalid_source_count' });
 
@@ -101,7 +126,7 @@ test('launch apply stops before writes for invalid source data or existing ident
   const entry = prepareLaunchCatalog(source)[0];
   const conflictDb = mockDatabase([{ id: 'different-book', isbn: entry.isbn, title: 'Different Book', author: 'Different Author' }]);
   const dryRun = await importLaunchCatalog(conflictDb, source, { apply: false });
-  assert.deepEqual(dryRun, { sourceEntries: 250, matched: 0, created: 249, updated: 0, conflicts: 1, invalidEntries: 0 });
+  assert.deepEqual(reported(dryRun), { sourceEntries: 250, matchedExactIsbn: 0, matchedExistingWork: 0, created: 249, updated: 0, conflicts: 1, invalidEntries: 0 });
   await assert.rejects(() => importLaunchCatalog(conflictDb, source, { apply: true }), { code: 'identity_conflict' });
   assert.equal(conflictDb.rows.size, 1);
 
@@ -109,7 +134,17 @@ test('launch apply stops before writes for invalid source data or existing ident
   pinnedSource[0].pinnedIsbn13 = pinnedSource[0].preferredIsbn13;
   const missingPinDb = mockDatabase();
   const pinDryRun = await importLaunchCatalog(missingPinDb, pinnedSource, { apply: false });
-  assert.equal(pinDryRun.conflicts, 1);
-  await assert.rejects(() => importLaunchCatalog(missingPinDb, pinnedSource, { apply: true }), { code: 'identity_conflict' });
-  assert.equal(missingPinDb.rows.size, 0);
+  assert.equal(pinDryRun.conflicts, 0);
+  const pinApply = await importLaunchCatalog(missingPinDb, pinnedSource, { apply: true });
+  assert.equal(pinApply.created, 250);
+
+  const reusedSource = sourceManifest();
+  reusedSource[0] = sourceEntry(0, { title: 'Meditations', author: 'Marcus Aurelius' });
+  reusedSource[1] = sourceEntry(1, { title: 'Meditations (Penguin Classics)', author: 'Marcus Aurelius' });
+  const reusableBook = mockDatabase([{ id: 'one-book', isbn: isbnAt(900000001), title: 'Meditations', author: 'Marcus Aurelius' }]);
+  const reusedDryRun = await importLaunchCatalog(reusableBook, reusedSource, { apply: false });
+  assert.equal(reusedDryRun.matchedExistingWork, 1);
+  assert.equal(reusedDryRun.conflicts, 1);
+  await assert.rejects(() => importLaunchCatalog(reusableBook, reusedSource, { apply: true }), { code: 'identity_conflict' });
+  assert.equal(reusableBook.rows.size, 1);
 });
