@@ -8,7 +8,17 @@ function ShelfEditor({ bookId, onSaved }) {
   const personal = useResource(`/user-books/${bookId}`, 'required');
   if (personal.loading) return <Loading />;
   if (personal.error) return <ErrorNotice error={personal.error} retry={personal.reload} />;
-  return <ShelfForm personal={personal.data.data} onSaved={onSaved} />;
+  const data = personal.data.data;
+  return <>
+    <ShelfForm personal={data} onSaved={onSaved} />
+    {data.shelf && (
+      <div style={{ marginTop: '12px' }}>
+        <Link to={`/books/${bookId}#review`} className="text-button">
+          {data.review ? 'Edit review' : 'Write review'} <span aria-hidden="true">→</span>
+        </Link>
+      </div>
+    )}
+  </>;
 }
 
 export default function MyBooks() {
