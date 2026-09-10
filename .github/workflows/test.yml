@@ -37,3 +37,5 @@ jobs:
       - run: npm ci --prefix frontend
       - run: npm test --prefix frontend
       - run: npm run build --prefix frontend
+        env:
+          VITE_API_BASE_URL: https://api.example.com/api
