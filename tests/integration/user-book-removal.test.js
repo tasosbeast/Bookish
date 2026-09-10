@@ -100,4 +100,9 @@ test('PostgreSQL: removing a shelf is isolated, review-safe and refreshes rating
       assert.equal(Number(updated.averageRating), 3); // since second user had rating 3
       assert.equal(updated.ratingsCount, 1);
     });
+
+    await t.test('GET /api/user-books/:bookId rejects deleteReview parameter', async () => {
+      await auth(second.token, 'get', `/api/user-books/${book.id}?deleteReview=true`).expect(400);
+      await auth(second.token, 'get', `/api/user-books/${book.id}`).expect(200);
+    });
   });

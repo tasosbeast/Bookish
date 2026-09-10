@@ -35,4 +35,5 @@ export const reviewSchema = z.object({ body: z.object({
   bookId: uuid, rating, reviewText: z.string().trim().max(10000).nullable().optional(),
 }).strict() });
 export const likeSchema = z.object({ params: z.object({ id: uuid }) });
-export const personalBookSchema = z.object({ params: z.object({ bookId: uuid }), query: z.object({ deleteReview: z.enum(['true', 'false']).optional() }).strict() });
+export const personalBookSchema = z.object({ params: z.object({ bookId: uuid }), query: z.object({}).strict() });
+export const removeShelfSchema = z.object({ params: z.object({ bookId: uuid }), query: z.object({ deleteReview: z.enum(['true', 'false']).optional() }).strict() });
