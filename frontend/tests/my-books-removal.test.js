@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
 import { createServer } from 'vite';
 
-test('My Books confirms removal, explains review conflicts and refreshes the shelf', { timeout: 60000 }, async t => {
+test('My Books removes a deleted shelf entry even when reconciliation fails', { timeout: 60000 }, async t => {
   const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost:5173/my-books' });
   const original = new Map();
   for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document,
@@ -14,7 +14,7 @@ test('My Books confirms removal, explains review conflicts and refreshes the she
   }
   Object.defineProperty(navigator, 'locks', { value: { request: (_key, _options, work) => work() } });
   const nativeFetch = globalThis.fetch;
-  let server, root, session, blocked = true, present = true, removals = 0, confirmations = 0;
+  let server, root, session, blocked = true, present = true, failedRefresh = false, refreshFailures = 0, removals = 0, confirmations = 0;
   dom.window.confirm = () => { confirmations++; return true; };
   const book = { id: 'book-a', title: 'A removable book', author: 'An author', coverImageUrl: null, averageRating: 4, genres: [] };
   const shelf = { bookId: book.id, status: 'read', userRating: 4, book };
@@ -33,6 +33,7 @@ test('My Books confirms removal, explains review conflicts and refreshes the she
       present = false; return response({ data: { bookId: book.id, removed: true } });
     }
     if (url.pathname === `/api/user-books/${book.id}`) return response({ data: { bookId: book.id, shelf, review: null } });
+    if (url.pathname === '/api/user-books' && failedRefresh) { refreshFailures++; throw new TypeError('Shelf refresh unavailable'); }
     return response({ data: present ? [shelf] : [], pagination: { page: 1, limit: 10, total: present ? 1 : 0, totalPages: present ? 1 : 0 } });
   };
   server = await createServer({ root: fileURLToPath(new URL('..', import.meta.url)), server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] } });
@@ -56,8 +57,11 @@ test('My Books confirms removal, explains review conflicts and refreshes the she
   assert.ok(document.body.textContent.includes('Remove your review before removing this book from My Books'));
   assert.ok(document.body.textContent.includes(book.title));
   blocked = false;
+  failedRefresh = true;
   await click('Remove from My Books');
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
   assert.equal(confirmations, 2); assert.equal(removals, 2);
+  assert.equal(refreshFailures, 1, 'the background reconciliation request failed');
   assert.ok(!document.body.textContent.includes(book.title));
   assert.ok(document.body.textContent.includes('Your reading story starts here'));
 });
