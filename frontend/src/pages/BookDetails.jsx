@@ -33,8 +33,14 @@ export default function BookDetails() {
     if (!reconcilingDeletion || book.loading || personal.loading || book.error || personal.error) return;
     setRemoved({}); setReconcilingDeletion(false);
   }, [reconcilingDeletion, book.loading, book.error, personal.loading, personal.error]);
-  function saved(message, deletion) {
-    if (deletion) { setRemoved(current => ({ ...current, ...deletion })); setReconcilingDeletion(true); }
+  function saved(message, options) {
+    if (options?.shelf || options?.reviewId) {
+      setRemoved(current => ({ ...current, ...(options.shelf ? { shelf: true } : {}), ...(options.reviewId ? { reviewId: options.reviewId } : {}) }));
+      setReconcilingDeletion(true);
+    }
+    if (options?.scrollToReview) {
+      document.getElementById('review')?.scrollIntoView({ behavior: 'smooth' });
+    }
     setNotice(message); book.reload(); personal.reload();
   }
   

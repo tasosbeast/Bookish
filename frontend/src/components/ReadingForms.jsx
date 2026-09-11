@@ -7,14 +7,15 @@ export function ShelfForm({ personal, onSaved }) {
   const id = useId();
   const hasShelfStatus = Boolean(personal.shelf?.status);
   const [status, setStatus] = useDraftValue(personal.shelf?.status ?? 'want_to_read');
-  const [rating, setRating] = useDraftValue(personal.shelf?.userRating?.toString() ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   async function save(event) {
     event.preventDefault(); setBusy(true); setError(null);
+    const previousStatus = personal.shelf?.status;
+    const isTransitionToRead = previousStatus !== 'read' && status === 'read';
     try {
-      await api('/user-books', { method: 'POST', auth: 'required', body: { bookId: personal.bookId, status, userRating: rating ? Number(rating) : null } });
-      onSaved('Your bookshelf has been updated.');
+      await api('/user-books', { method: 'POST', auth: 'required', body: { bookId: personal.bookId, status } });
+      onSaved('Your bookshelf has been updated.', { scrollToReview: isTransitionToRead });
     } catch (error) { setError(error); } finally { setBusy(false); }
   }
   async function remove() {
@@ -25,7 +26,7 @@ export function ShelfForm({ personal, onSaved }) {
       onSaved('This book has been removed from My Books.', { shelf: true });
     } catch (error) { setError(error); } finally { setBusy(false); }
   }
-  return <form onSubmit={save} className="reading-form"><fieldset disabled={busy}><legend className="form-title">Your reading journey</legend><div className="form-grid"><div><label htmlFor={`${id}-status`}>Reading status</label><select id={`${id}-status`} value={status} onChange={event => setStatus(event.target.value)}>{statuses.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div><div><label htmlFor={`${id}-rating`}>Your rating</label><select id={`${id}-rating`} value={rating} onChange={event => setRating(event.target.value)}><option value="" disabled={Boolean(personal.review)}>Not rated</option>{[1, 2, 3, 4, 5].map(value => <option key={value} value={value}>{value} {value === 1 ? 'star' : 'stars'}</option>)}</select></div></div>{personal.review && <p className="field-help">Your review needs a rating. You can change it, but can’t clear it while the review exists.</p>}<ErrorNotice error={error} /><div className="reading-actions"><button className="button" type="submit">{busy ? 'Saving…' : hasShelfStatus ? 'Save changes' : 'Add to my books'}<Icon name="check" size={17} /></button>{hasShelfStatus && <button className="text-button danger-button" type="button" onClick={remove}>Remove from My Books</button>}</div></fieldset></form>;
+  return <form onSubmit={save} className="reading-form"><fieldset disabled={busy}><legend className="form-title">Your reading journey</legend><div className="form-grid"><div><label htmlFor={`${id}-status`}>Reading status</label><select id={`${id}-status`} value={status} onChange={event => setStatus(event.target.value)}>{statuses.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div></div><ErrorNotice error={error} /><div className="reading-actions"><button className="button" type="submit">{busy ? 'Saving…' : hasShelfStatus ? 'Save changes' : 'Add to my books'}<Icon name="check" size={17} /></button>{hasShelfStatus && <button className="text-button danger-button" type="button" onClick={remove}>Remove from My Books</button>}</div></fieldset></form>;
 }
 
 export function ReviewForm({ personal, onSaved }) {

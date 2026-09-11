@@ -61,8 +61,7 @@ test('book forms preserve drafts through likes, review pages, shelf saves and fa
       }
       const body = JSON.parse(options.body); writes.push({ path: url.pathname, body });
       if (url.pathname === '/api/user-books') {
-        personal = { ...personal, shelf: { ...personal.shelf, ...body, updatedAt: 'changed-shelf' },
-          review: { ...personal.review, rating: body.userRating, updatedAt: 'synced-review' } };
+        personal = { ...personal, shelf: { ...personal.shelf, ...body, updatedAt: 'changed-shelf' } };
         return response({ data: personal.shelf });
       }
       personal = { ...personal, review: { ...personal.review, ...body, updatedAt: 'saved-review' },
@@ -123,13 +122,13 @@ test('book forms preserve drafts through likes, review pages, shelf saves and fa
   await change(textarea, draft);
   await click('Next'); preserved(); await flush(); preserved();
   assert.ok(document.body.textContent.includes('Public page 2'));
-  await change(shelfForm.querySelectorAll('select')[0], 'currently_reading');
-  await change(shelfForm.querySelectorAll('select')[1], '5');
+  await change(shelfForm.querySelector('select'), 'currently_reading');
   await click('Save changes'); preserved();
   assert.ok(document.body.textContent.includes('Updating your reading data…'));
   await flush(); preserved();
-  assert.equal(reviewForm.querySelector('select').value, '2', 'dirty rating survives synchronized shelf rating');
+  assert.equal(reviewForm.querySelector('select').value, '2', 'dirty rating survives status change');
   assert.equal(writes[0].body.status, 'currently_reading');
+  assert.equal(writes[0].body.userRating, undefined, 'shelf save does not send userRating');
   await click('Previous'); preserved(); await flush(true); preserved();
   assert.ok(document.body.textContent.includes('Showing previously loaded book and reviews.'));
   await click('Try again'); await flush(); preserved();
@@ -143,10 +142,6 @@ test('book forms preserve drafts through likes, review pages, shelf saves and fa
   assert.equal(reviewForm.querySelector('[role="alert"]'), null, 'successful retry clears the error');
   assert.equal(writes.at(-1).body.reviewText, draft);
   assert.equal(writes.at(-1).body.rating, 2);
-  assert.equal(shelfForm.querySelectorAll('select')[1].value, '2', 'clean shelf rating follows a saved review');
-  await change(shelfForm.querySelectorAll('select')[1], '3');
-  await click('Save changes'); await flush(); preserved();
-  assert.equal(reviewForm.querySelector('select').value, '3', 'clean review rating follows a saved shelf');
 
   let confirmDialogMessage = '';
   dom.window.confirm = (msg) => {
@@ -160,7 +155,7 @@ test('book forms preserve drafts through likes, review pages, shelf saves and fa
   assert.deepEqual(deletions, ['/api/reviews/own']);
   assert.equal(document.querySelector('.review-form legend').textContent, 'What stayed with you?');
   assert.equal(document.querySelector('.review-form textarea').value, '');
-  assert.equal(document.querySelectorAll('.reading-form select')[1].value, '3', 'deleting a review keeps the shelf rating');
+  assert.equal(document.querySelector('.reading-form select').value, 'currently_reading', 'deleting a review keeps shelf status');
   assert.equal([...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Delete review'), false);
   await flush(true);
   assert.equal(document.querySelector('.review-form legend').textContent, 'What stayed with you?', 'a failed reconciliation cannot restore a deleted review');
