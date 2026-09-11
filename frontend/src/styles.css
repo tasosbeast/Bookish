@@ -102,7 +102,7 @@
   .genres { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
   .genre { display: inline-flex; padding: 2px 7px; border: 1px solid #dde2d4; border-radius: 4px; background: #eff1e8; color: #5e7051; font-size: 10px; text-align: left; }
   .genre:hover { background: #dde7d3; }
-  .top-picks-section { margin-bottom: 24px; padding-top: 10px; }
+  .top-picks-section { margin-top: 36px; margin-bottom: 24px; }
   .pick-reason { color: #5e7051; margin-top: 8px; font-size: 11px; line-height: 1.4; }
   .empty-state { text-align: center; padding: 50px 25px 58px; border: 1px dashed #d2d8c7; border-radius: 12px; background: #f1f2e9; }
   .empty-icon { display: inline-flex; align-items: center; justify-content: center; width: 80px; height: 80px; border-radius: 50%; background: #e5eadb; color: #70845e; margin-bottom: 20px; }
@@ -213,7 +213,7 @@
   }
   .discover-page .section-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
   .discover-page .genre-filters { overscroll-behavior-x: contain; scroll-snap-type: x proximity; scrollbar-width: thin; padding-bottom: 12px; }
-  .discover-page .top-picks-section { margin-top: 24px; }
+  .discover-page .top-picks-section { margin-top: 32px; }
   .discover-page .genre-filter { scroll-snap-align: start; }
   .discover-page .filter-line { align-items: flex-start; gap: 8px; }
   .discover-page .filter-item { width: 100%; }
