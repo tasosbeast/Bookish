@@ -86,4 +86,11 @@ export const readAllNotificationsSchema = z.object({
   query: z.object({}).strict(),
 });
 
+export const topPicksSchema = z.object({
+  query: z.object({
+    limit: z.coerce.number().int().min(1).max(12).default(6),
+  }).strict(),
+});
+
+
 

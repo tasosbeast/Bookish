@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { useAuth } from '../hooks/useAuth.js';
 import { useResource } from '../hooks/useResource.js';
 import { Cover, Rating, Genres, Icon, EmptyState, ErrorNotice, Loading, Pagination, pageNumber } from '../components/shared.jsx';
 
 export default function Discover() {
+  const auth = useAuth();
   const [params, setParams] = useSearchParams();
   const q = params.get('q') ?? '';
   const genre = params.get('genre') ?? '';
@@ -22,6 +24,10 @@ export default function Discover() {
   if (genre) query.set('genre', genre);
   if (author) query.set('author', author);
   const resource = useResource(`/books?${query}`, 'optional', 'discover');
+
+  const showTopPicks = Boolean(auth.user && page === 1 && !q && !genre && !author);
+  const topPicksResource = useResource(showTopPicks ? '/recommendations/top-picks?limit=6' : null, 'required');
+
   function change(values, keepPage = false) {
     const next = new URLSearchParams(params);
     for (const [key, value] of Object.entries(values)) value ? next.set(key, value) : next.delete(key);
@@ -37,6 +43,62 @@ export default function Discover() {
     <section className="discover-hero"><div><p className="eyebrow"><span /> Living Between Pages</p><h1>There’s a world<br />in your <em>next read.</em></h1><p className="hero-copy">Follow your curiosity. Find a story to get lost in,<br className="desktop-break" /> and keep the books you love close.</p></div>
       <div className="hero-aside" aria-hidden="true"><span className="chapter-number">01 /</span><Icon size={56} /><span className="hero-aside-note">One more<br /><em>chapter.</em></span><div className="hero-line" /></div>
     </section>
+    {showTopPicks && (
+      <section aria-labelledby="top-picks-heading" className="top-picks-section">
+        {topPicksResource.data?.meta?.personalized && (
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Personalized for you</p>
+              <h2 id="top-picks-heading">Top Picks for You</h2>
+              <p className="section-subheading muted" style={{ fontSize: '14px', marginTop: '4px' }}>Picked from the books you’ve loved.</p>
+            </div>
+          </div>
+        )}
+        {topPicksResource.error && <ErrorNotice error={topPicksResource.error} retry={topPicksResource.reload} />}
+        {topPicksResource.loading && !topPicksResource.data ? (
+          <Loading cards />
+        ) : topPicksResource.data?.meta?.personalized === false ? (
+          <EmptyState
+            title="Top Picks for You"
+            action={<Link to="/my-books" className="button secondary">My Books</Link>}
+          >
+            Rate at least 3 books you've read and we'll start learning your taste.
+          </EmptyState>
+        ) : topPicksResource.data?.data?.length > 0 ? (
+          <div className="book-grid">
+            {topPicksResource.data.data.map(book => (
+              <article className="book-card" key={book.id}>
+                <Link to={`/books/${book.id}`} className="cover-link" aria-label={`Read about ${book.title}`}>
+                  <Cover book={book} />
+                  <span className="cover-open"><Icon name="arrow" /></span>
+                </Link>
+                <div className="book-card-meta">
+                  <Rating value={book.averageRating} />
+                  <h3><Link to={`/books/${book.id}`}>{book.title}</Link></h3>
+                  <p>
+                    <button type="button" className="author-filter" onClick={() => change({ author: book.author })}>
+                      {book.author}
+                    </button>
+                  </p>
+                  <Genres genres={book.genres} onSelect={slug => change({ genre: slug })} />
+                  {book.reason && (
+                    <p className="pick-reason">
+                      {book.reason.type === 'author'
+                        ? `Because you've enjoyed books by ${book.reason.label}`
+                        : `Because you often rate ${book.reason.label} highly`}
+                    </p>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : !topPicksResource.error && topPicksResource.data?.meta?.personalized ? (
+          <EmptyState title="Top Picks for You">
+            We need a little more variety in the catalog to make a good pick for you.
+          </EmptyState>
+        ) : null}
+      </section>
+    )}
     <section aria-label="Find books" className="discovery-controls">
       <form className="search-box" onSubmit={event => { event.preventDefault(); change({ q: search.trim() }); }} role="search"><Icon name="search" size={22} /><label className="sr-only" htmlFor="book-search">Search by title or author</label><input id="book-search" type="search" value={search} maxLength={200} onChange={event => setSearch(event.target.value)} placeholder="Search by title or author" /><button type="submit" className="button compact">Search</button></form>
       <div className="sort-box"><label htmlFor="book-sort">Sort by</label><select id="book-sort" value={`${sort}:${order}`} onChange={event => { const [sort, order] = event.target.value.split(':'); change({ sort, order }); }}><option value="rating:desc">Highest rated</option><option value="rating:asc">Lowest rated</option><option value="publicationYear:desc">Newest published</option><option value="publicationYear:asc">Oldest published</option></select></div>

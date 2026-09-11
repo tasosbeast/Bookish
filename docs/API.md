@@ -284,3 +284,16 @@ Marks all unread notifications belonging to the authenticated recipient as read.
 - Removing a like (`DELETE /api/reviews/:id/like`) automatically removes the corresponding `review_like` notification.
 - Notifications rely on client-initiated fetches when the app header mounts or the notification popover opens (v1 has no WebSocket/SSE push).
 
+## Recommendations
+
+All recommendation routes require `Authorization: Bearer <accessToken>`. Responses use `Cache-Control: no-store`. No external recommendation providers or external ML services are used.
+
+`GET /api/recommendations/top-picks?limit=6`
+
+Returns personalized book recommendations calculated in-memory from the user's full historical ratings (`UserBook.userRating`). `limit` is an optional integer from 1 to 12 (default 6).
+
+- **Candidate Exclusions**: Excludes all books for which the authenticated user has a `UserBook` record (including `want_to_read`, `currently_reading`, `read`, or rating-only entries).
+- **Genre & Author Signal**: 5-star ratings add +2 genre points and +3 author points; 4-star ratings add +1 genre point and +2 author points; 3-star ratings add 0 points; 1-2 star ratings add 0 genre points (low ratings do not globally suppress genres) and penalty points to the specific author (-2 for 2-star, -3 for 1-star).
+- **Minimum Signal**: Requires at least 3 rated books (`ratedBooks >= 3`). If fewer than 3 rated books exist, returns `data: []` with `meta.personalized: false`.
+
+
