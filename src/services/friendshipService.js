@@ -5,6 +5,64 @@ export function canonicalPair(idA, idB) {
   return idA < idB ? [idA, idB] : [idB, idA];
 }
 
+function escapeLike(value) {
+  return value.replace(/[\\%_]/g, character => `\\${character}`);
+}
+
+export async function searchReaders(userId, { q, limit }) {
+  const query = q.trim();
+  const escapedQuery = escapeLike(query);
+  const users = await prisma.$queryRaw`
+    SELECT id, username, profile_picture AS "profilePicture", bio
+    FROM users
+    WHERE id <> ${userId}::uuid
+      AND username ILIKE ${`%${escapedQuery}%`} ESCAPE E'\\\\'
+    ORDER BY
+      CASE
+        WHEN lower(username) = lower(${query}) THEN 0
+        WHEN username ILIKE ${`${escapedQuery}%`} ESCAPE E'\\\\' THEN 1
+        ELSE 2
+      END,
+      lower(username) ASC,
+      id ASC
+    LIMIT ${limit}
+  `;
+
+  if (!users.length) return { data: [] };
+
+  const ids = users.map(user => user.id);
+  const friendships = await prisma.friendship.findMany({
+    where: {
+      OR: [
+        { userAId: userId, userBId: { in: ids } },
+        { userBId: userId, userAId: { in: ids } },
+      ],
+    },
+    select: { id: true, userAId: true, userBId: true, requestedById: true, status: true },
+  });
+  const relationships = new Map(friendships.map(friendship => [
+    friendship.userAId === userId ? friendship.userBId : friendship.userAId,
+    friendship,
+  ]));
+
+  return {
+    data: users.map(user => {
+      const friendship = relationships.get(user.id);
+      let relationship = { status: 'none' };
+      if (friendship?.status === 'accepted') {
+        relationship = { status: 'accepted', friendshipId: friendship.id };
+      } else if (friendship) {
+        relationship = {
+          status: 'pending',
+          direction: friendship.requestedById === userId ? 'outgoing' : 'incoming',
+          requestId: friendship.id,
+        };
+      }
+      return { user, relationship };
+    }),
+  };
+}
+
 export async function getFriends(userId) {
   const friendships = await prisma.friendship.findMany({
     where: {

@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import {
   friendSuggestionsSchema,
+  searchReadersSchema,
   sendFriendRequestSchema,
   friendRequestIdSchema,
   removeFriendSchema,
@@ -15,6 +16,7 @@ friendsRouter.use((req, res, next) => { res.set('Cache-Control', 'no-store'); ne
 friendsRouter.use(requireAuth);
 
 friendsRouter.get('/suggestions', validate(friendSuggestionsSchema), controller.suggestions);
+friendsRouter.get('/search', validate(searchReadersSchema), controller.searchReaders);
 friendsRouter.get('/requests', validate(listFriendsSchema), controller.listRequests);
 friendsRouter.post('/requests', validate(sendFriendRequestSchema), controller.sendRequest);
 friendsRouter.post('/requests/:id/accept', validate(friendRequestIdSchema), controller.acceptRequest);

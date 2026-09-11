@@ -1,9 +1,114 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useResource } from '../hooks/useResource.js';
 import { api } from '../lib/api.js';
 import { messageFor } from '../lib/http.js';
 import { EmptyState, ErrorNotice, Loading } from '../components/shared.jsx';
+
+function ReaderSearchResult({ result, onRelationshipChange }) {
+  const [relationship, setRelationship] = useState(result.relationship);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const { user } = result;
+  const initial = user.username ? user.username.slice(0, 1).toUpperCase() : '?';
+
+  useEffect(() => setRelationship(result.relationship), [result.relationship]);
+
+  async function changeRelationship(action) {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      if (action === 'send') {
+        const response = await api('/friends/requests', { method: 'POST', auth: 'required', body: { userId: user.id } });
+        setRelationship({ status: 'pending', direction: 'outgoing', requestId: response.data.id });
+      } else if (action === 'accept') {
+        const response = await api(`/friends/requests/${relationship.requestId}/accept`, { method: 'POST', auth: 'required' });
+        setRelationship({ status: 'accepted', friendshipId: response.data.id });
+      } else {
+        await api(`/friends/requests/${relationship.requestId}`, { method: 'DELETE', auth: 'required' });
+        setRelationship({ status: 'none' });
+      }
+      onRelationshipChange?.();
+    } catch (err) {
+      setError(messageFor(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  let actions;
+  if (relationship.status === 'accepted') {
+    actions = <span className="reader-relationship" aria-label={`${user.username} is already your friend`}>✓ Friends</span>;
+  } else if (relationship.status === 'pending' && relationship.direction === 'outgoing') {
+    actions = <><span className="reader-relationship">Request sent</span><button type="button" className="text-button" disabled={busy} onClick={() => changeRelationship('cancel')}>{busy ? 'Cancelling…' : 'Cancel'}</button></>;
+  } else if (relationship.status === 'pending') {
+    actions = <><span className="reader-relationship">Sent you a friend request</span><button type="button" className="button compact" disabled={busy} onClick={() => changeRelationship('accept')}>{busy ? 'Accepting…' : 'Accept'}</button><button type="button" className="button secondary compact" disabled={busy} onClick={() => changeRelationship('decline')}>{busy ? 'Declining…' : 'Decline'}</button></>;
+  } else {
+    actions = <button type="button" className="button secondary compact add-friend-button" disabled={busy} onClick={() => changeRelationship('send')}>{busy ? 'Sending…' : 'Add Friend'}</button>;
+  }
+
+  return <article className="reader-card reader-search-result">
+    <div className="reader-card-header">
+      {user.profilePicture ? <img src={user.profilePicture} alt={`${user.username}'s avatar`} className="reader-avatar" /> : <span className="reader-avatar-placeholder" aria-hidden="true">{initial}</span>}
+      <div className="reader-info"><h3>{user.username}</h3>{user.bio && <p className="reader-bio">{user.bio}</p>}</div>
+    </div>
+    <div className="reader-card-actions">{actions}{error && <p className="reader-error small-error" role="alert">{error}</p>}</div>
+  </article>;
+}
+
+function ReaderSearch({ onRelationshipChange }) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [retry, setRetry] = useState(0);
+  const requestId = useRef(0);
+  const normalizedQuery = query.trim();
+  const isValidQuery = normalizedQuery.length >= 2;
+
+  useEffect(() => {
+    if (!isValidQuery) {
+      requestId.current++;
+      setResults(null);
+      setError(null);
+      setLoading(false);
+      return undefined;
+    }
+    const currentRequest = ++requestId.current;
+    const controller = new AbortController();
+    setResults(null);
+    setError(null);
+    const timeout = setTimeout(() => {
+      setLoading(true);
+      api(`/friends/search?q=${encodeURIComponent(normalizedQuery)}&limit=10`, { auth: 'required', signal: controller.signal })
+        .then(response => {
+          if (requestId.current === currentRequest) setResults(response.data);
+        })
+        .catch(err => {
+          if (err.name !== 'AbortError' && requestId.current === currentRequest) setError(err);
+        })
+        .finally(() => {
+          if (requestId.current === currentRequest) setLoading(false);
+        });
+    }, 275);
+    return () => { clearTimeout(timeout); controller.abort(); };
+  }, [isValidQuery, normalizedQuery, retry]);
+
+  return <section className="reader-search" aria-label="Find readers">
+    <form role="search" onSubmit={event => event.preventDefault()}>
+      <label className="sr-only" htmlFor="reader-search-input">Search readers by username</label>
+      <input id="reader-search-input" type="search" value={query} maxLength={30} placeholder="Search readers by username..." aria-label="Search readers by username" onChange={event => setQuery(event.target.value)} />
+    </form>
+    {normalizedQuery && !isValidQuery && <p className="muted small reader-search-helper">Type at least 2 characters.</p>}
+    {isValidQuery && <div className="reader-search-results" aria-live="polite">
+      {loading && <p className="muted small" role="status">Searching readers…</p>}
+      {error && <ErrorNotice error={error} retry={() => setRetry(value => value + 1)} />}
+      {!loading && !error && results && !results.length && <p className="muted small">No readers found.</p>}
+      {!loading && !error && results?.length > 0 && <div className="reader-cards-grid">{results.map(result => <ReaderSearchResult key={result.user.id} result={result} onRelationshipChange={onRelationshipChange} />)}</div>}
+    </div>}
+  </section>;
+}
 
 function SuggestionsTab({ onSentRequest }) {
   const suggestions = useResource('/friends/suggestions?limit=12', 'required');
@@ -385,6 +490,8 @@ export default function Friends() {
         <h1>Friends</h1>
         <p className="muted">Find readers who live between the same kinds of pages.</p>
       </div>
+
+      <ReaderSearch onRelationshipChange={requestsResource.reload} />
 
       <nav className="shelf-tabs friends-tabs" role="tablist" aria-label="Friends tabs">
         <button

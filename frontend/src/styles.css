@@ -232,6 +232,11 @@
 }
 
 .friends-page { padding-block: 55px 70px; }
+.reader-search { max-width: 620px; margin: 28px 0 18px; }
+.reader-search-results { margin-top: 12px; }
+.reader-search-results .reader-cards-grid { margin-top: 12px; }
+.reader-search-helper { margin-top: 7px; }
+.reader-relationship { color: var(--color-leaf); font-size: 13px; font-weight: 600; }
 .reader-cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; margin-top: 24px; }
 .reader-card { background: #fffef9; border: 1px solid #dfe4d6; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; justify-content: space-between; gap: 14px; box-shadow: 0 4px 16px rgba(47, 66, 38, 0.04); }
 .reader-card-header { display: flex; align-items: center; gap: 14px; }
@@ -252,7 +257,7 @@
 
 @media (max-width: 760px) {
   .friends-page { padding-top: 35px; }
+  .reader-search { max-width: none; }
   .reader-cards-grid { grid-template-columns: 1fr; gap: 16px; }
   .add-friend-button, .accept-request-button, .decline-request-button, .remove-friend-button, .cancel-request-button { min-height: 44px; }
 }
-

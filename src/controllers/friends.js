@@ -6,6 +6,11 @@ export async function suggestions(req, res) {
   res.json(result);
 }
 
+export async function searchReaders(req, res) {
+  const result = await friendshipService.searchReaders(req.auth.userId, req.validated.query);
+  res.json(result);
+}
+
 export async function listFriends(req, res) {
   const result = await friendshipService.getFriends(req.auth.userId);
   res.json(result);

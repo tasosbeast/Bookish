@@ -98,6 +98,13 @@ export const friendSuggestionsSchema = z.object({
   }).strict(),
 });
 
+export const searchReadersSchema = z.object({
+  query: z.object({
+    q: z.string().trim().min(2).max(30),
+    limit: z.coerce.number().int().min(1).max(20).default(10),
+  }).strict(),
+});
+
 export const sendFriendRequestSchema = z.object({
   body: z.object({
     userId: uuid,
@@ -117,7 +124,6 @@ export const removeFriendSchema = z.object({
 export const listFriendsSchema = z.object({
   query: z.object({}).strict(),
 });
-
 
 
 

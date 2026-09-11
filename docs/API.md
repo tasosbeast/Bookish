@@ -304,6 +304,10 @@ All friends routes require `Authorization: Bearer <accessToken>`. Responses use 
 
 Returns personalized reader suggestions based on genre profile similarity, rating agreement, and shared reading history. `limit` is an optional integer from 1 to 24 (default 12). Requires at least 5 eligible taste books (`status === "read"`, `status === "currently_reading"`, or `userRating != null`). If fewer than 5 eligible books exist, returns `data: []` with `meta.personalized: false`.
 
+`GET /api/friends/search?q=<username>&limit=10`
+
+Searches readers by username only. `q` is required, case-insensitive, supports partial matches, and must contain 2–30 characters; `limit` is 1–20 (default 10). The authenticated reader is excluded. Each result returns safe reader fields (`id`, `username`, `profilePicture`, `bio`) and its relationship state: `none`, `accepted` with `friendshipId`, or `pending` with an `incoming`/`outgoing` direction and `requestId`. This authenticated response is private and uses `Cache-Control: no-store`.
+
 `GET /api/friends`
 
 Returns list of accepted friends for the authenticated user.
