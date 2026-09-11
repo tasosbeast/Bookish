@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams, useSearchParams, useLocation } from 'react-router-dom';
+import { Link, useParams, useSearchParams, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth.js';
 import { useResource } from '../hooks/useResource.js';
 import { api } from '../lib/api.js';
@@ -21,6 +21,7 @@ export default function BookDetails() {
   const { id } = useParams();
   const [params, setParams] = useSearchParams();
   const location = useLocation();
+  const navigate = useNavigate();
   const auth = useAuth();
   const [notice, setNotice] = useState('');
   const [removed, setRemoved] = useState({});
@@ -50,12 +51,25 @@ export default function BookDetails() {
   useEffect(() => {
     if (!book.loading && !personal.loading && location.hash) {
       const targetId = decodeURIComponent(location.hash.slice(1));
-      const element = document.getElementById(targetId);
-      if (element) {
-        element.scrollIntoView({ behavior: 'smooth' });
+      if (targetId === 'review' || targetId.startsWith('review-')) {
+        const element = document.getElementById(targetId);
+        if (element) {
+          element.scrollIntoView({ behavior: 'smooth' });
+          const nextParams = new URLSearchParams(params);
+          nextParams.delete('reviewId');
+          const effectivePage = book.data?.data?.reviews?.pagination?.page;
+          if (effectivePage && effectivePage > 1) {
+            nextParams.set('page', effectivePage.toString());
+          } else {
+            nextParams.delete('page');
+          }
+          const searchStr = nextParams.toString();
+          const nextSearch = searchStr ? `?${searchStr}` : '';
+          navigate(`/books/${id}${nextSearch}`, { replace: true, state: {} });
+        }
       }
     }
-  }, [location.hash, location.key, location.state, book.loading, personal.loading, auth.user]);
+  }, [location.hash, location.key, location.state, book.loading, personal.loading, auth.user, id, params, navigate, book.data]);
 
   if (book.loading && !book.data) return <div className="container page-space"><Loading /></div>;
   if (book.error && !book.data) return <div className="container page-space"><Link className="back-link" to="/">← Back to discover</Link><ErrorNotice error={book.error} retry={book.reload} /></div>;

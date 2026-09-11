@@ -94,6 +94,17 @@ test('reading flow shelf management and rating/review separation', { timeout: 60
       personal = { ...personal, review: null };
       return response({ data: { deleted: true } });
     }
+    if (url.searchParams.get('reviewId') === 'rev-p2') {
+      return response({
+        data: {
+          id: bookId, title: 'Flow Book', author: 'Flow Author', genres: [], averageRating: 4,
+          reviews: {
+            data: [{ id: 'rev-p2', rating: 4, reviewText: 'Page 2 review', createdAt: stamp, likesCount: 0, likedByMe: false, user: { username: 'bob' } }],
+            pagination: { page: 2, limit: 10, total: 15, totalPages: 2 }
+          }
+        }
+      });
+    }
     return response({
       data: {
         id: bookId, title: 'Flow Book', author: 'Flow Author', genres: [], averageRating: 4,
@@ -113,7 +124,12 @@ test('reading flow shelf management and rating/review separation', { timeout: 60
   const { default: BookDetails } = await server.ssrLoadModule('/src/pages/BookDetails.jsx');
   ({ session } = await server.ssrLoadModule('/src/lib/api.js'));
   const { createRoot } = await import('react-dom/client');
-  const { MemoryRouter, Routes, Route } = await import('react-router-dom');
+  const { MemoryRouter, Routes, Route, useLocation } = await import('react-router-dom');
+
+  function LocationDisplay() {
+    const loc = useLocation();
+    return h('div', { id: 'location-display' }, loc.pathname + loc.search + loc.hash);
+  }
 
   await session.authenticate('login', {});
   root = createRoot(document.getElementById('root'));
@@ -225,14 +241,50 @@ test('reading flow shelf management and rating/review separation', { timeout: 60
   const globalNoticeAfterDelete = document.querySelector('.detail-copy .success-notice');
   assert.equal(globalNoticeAfterDelete, null, 'Global notice is NOT rendered for review delete');
 
-  // 10. Rendering BookDetails with hash #review-rev-public scrolls to public review card
+  // 10. Deep link scrolling is one-shot and cleans URL
   scrolledElements = [];
   await act(async () => root.unmount());
   root = createRoot(document.getElementById('root'));
   await act(async () => root.render(
     h(MemoryRouter, { initialEntries: [`/books/${bookId}?reviewId=rev-public#review-rev-public`] },
-      h(Routes, null, h(Route, { path: '/books/:id', element: h(BookDetails) }))
+      h(Routes, null, h(Route, { path: '/books/:id', element: h('div', null, h(BookDetails), h(LocationDisplay)) }))
     )
   ));
   assert.ok(scrolledElements.some(e => e.id === 'review-rev-public'), 'Scrolls to public review card #review-rev-public');
+  assert.equal(document.getElementById('location-display').textContent, `/books/${bookId}`, 'Page 1 deep link URL is cleaned to /books/:id');
+
+  // Remounting cleaned URL (F5 refresh) does NOT scroll again
+  scrolledElements = [];
+  await act(async () => root.unmount());
+  root = createRoot(document.getElementById('root'));
+  await act(async () => root.render(
+    h(MemoryRouter, { initialEntries: [`/books/${bookId}`] },
+      h(Routes, null, h(Route, { path: '/books/:id', element: h('div', null, h(BookDetails), h(LocationDisplay)) }))
+    )
+  ));
+  assert.equal(scrolledElements.length, 0, 'F5 refresh on cleaned URL does not trigger auto-scroll');
+
+  // Page 2 deep link target cleans URL to /books/:id?page=2
+  scrolledElements = [];
+  await act(async () => root.unmount());
+  root = createRoot(document.getElementById('root'));
+  await act(async () => root.render(
+    h(MemoryRouter, { initialEntries: [`/books/${bookId}?reviewId=rev-p2#review-rev-p2`] },
+      h(Routes, null, h(Route, { path: '/books/:id', element: h('div', null, h(BookDetails), h(LocationDisplay)) }))
+    )
+  ));
+  assert.ok(scrolledElements.some(e => e.id === 'review-rev-p2'), 'Scrolls to page 2 review card #review-rev-p2');
+  assert.equal(document.getElementById('location-display').textContent, `/books/${bookId}?page=2`, 'Page 2 deep link URL is cleaned to /books/:id?page=2');
+
+  // Existing #review editor deep link scrolls to editor and cleans hash
+  scrolledElements = [];
+  await act(async () => root.unmount());
+  root = createRoot(document.getElementById('root'));
+  await act(async () => root.render(
+    h(MemoryRouter, { initialEntries: [`/books/${bookId}#review`] },
+      h(Routes, null, h(Route, { path: '/books/:id', element: h('div', null, h(BookDetails), h(LocationDisplay)) }))
+    )
+  ));
+  assert.ok(scrolledElements.some(e => e.id === 'review'), 'Scrolls to review editor #review');
+  assert.equal(document.getElementById('location-display').textContent, `/books/${bookId}`, 'Editor deep link URL cleans hash to /books/:id');
 });
