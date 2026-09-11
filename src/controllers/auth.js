@@ -2,8 +2,9 @@ import * as auth from '../services/auth.js';
 import { ACCESS_SECONDS } from '../services/tokens.js';
 import { env } from '../config/env.js';
 
+const isProd = env.NODE_ENV === 'production';
 const cookieName = 'bookish_refresh';
-const cookieOptions = { httpOnly: true, secure: env.NODE_ENV === 'production', sameSite: 'strict', path: '/api/auth' };
+const cookieOptions = { httpOnly: true, secure: isProd, sameSite: isProd ? 'none' : 'strict', path: '/api/auth' };
 function respond(res, result, status = 200) {
   res.cookie(cookieName, result.refreshToken, { ...cookieOptions, expires: result.expiresAt });
   return res.status(status).json({ accessToken: result.accessToken, tokenType: 'Bearer', expiresIn: ACCESS_SECONDS,

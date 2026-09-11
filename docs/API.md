@@ -22,7 +22,7 @@ All request bodies are JSON. Unknown body/query fields are rejected. UUID route 
 
 ## Authentication
 
-Send `X-Bookish-CSRF: 1` on **all auth POST requests**, including signup/login. Browser requests must originate from `CLIENT_ORIGIN` and use `credentials: 'include'`. Production requires HTTPS. Refresh cookies use HttpOnly, Secure in production, SameSite=Strict, and Path=/api/auth. The frontend and API must be deployed on the same site (for example app.example.com and api.example.com); unrelated domains are not supported by this cookie policy.
+Send `X-Bookish-CSRF: 1` on **all auth POST requests**, including signup/login. Browser requests must originate from `CLIENT_ORIGIN` and use `credentials: 'include'`. Production requires HTTPS. Refresh cookies use HttpOnly, Secure in production, SameSite=None, and Path=/api/auth for the current split-origin Render deployment (where frontend and API run on distinct `*.onrender.com` origins). `CLIENT_ORIGIN` must match the exact frontend URL; no wildcard CORS is permitted. A custom-domain production deployment (for example `app.example.com` and `api.example.com`) can later use a stricter same-site cookie policy. No `Domain` attribute targeting `onrender.com` should be set, as `onrender.com` is a public suffix.
 
 | Endpoint | JSON body | Result |
 | --- | --- | --- |

@@ -11,7 +11,7 @@ npm ci --prefix frontend
 npm run dev --prefix frontend
 ```
 
-Open http://localhost:5173. The API defaults to http://localhost:3000/api. Copy `frontend/.env.example` to `frontend/.env` to override `VITE_API_BASE_URL` and restart Vite. This variable is public build configuration, never a secret. Set the backend's `CLIENT_ORIGIN` to the exact frontend origin. Keep localhost/127.0.0.1 consistent: the refresh cookie uses SameSite=Strict. Production requires HTTPS, compatible same-site API hosting, configured CORS, and SPA fallback to `index.html` for client routes.
+Open http://localhost:5173. The API defaults to http://localhost:3000/api. Copy `frontend/.env.example` to `frontend/.env` to override `VITE_API_BASE_URL` and restart Vite. This variable is public build configuration, never a secret. Set the backend's `CLIENT_ORIGIN` to the exact frontend origin. Development on localhost uses `SameSite=Strict` without requiring HTTPS. The production split-origin Render deployment uses `SameSite=None; Secure` for `/api/auth` refresh cookies so that reloads can restore the in-memory access token across distinct `*.onrender.com` origins. `CLIENT_ORIGIN` must match the exact frontend URL. Do not configure a `Domain` attribute targeting `onrender.com` as it is a public suffix. A custom single-domain or same-site setup (e.g. `app.example.com` and `api.example.com`) can later use a stricter same-site policy.
 
 Production builds fail when `VITE_API_BASE_URL` is missing, preventing a deployed bundle from silently using the localhost development API. Set it to the public HTTPS API URL including `/api` before running `npm run build --prefix frontend`.
 

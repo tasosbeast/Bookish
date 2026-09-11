@@ -141,3 +141,34 @@ test('account changes discard in-flight results and cancelled requests do not se
   await assert.rejects(cancelled.api('/books', { signal: controller.signal }), { name: 'AbortError' });
   assert.equal(cancelled.counts.calls, 0);
 });
+
+test('simulated page reload restores authentication from refresh cookie without persisting tokens', async () => {
+  const env = environment();
+  const session1 = env.make();
+  await session1.authenticate('login', { email: 'reader@example.com', password: 'fixture' });
+  assert.equal(session1.getSnapshot().status, 'authenticated');
+  assert.equal(session1.getSnapshot().user.id, 'reader');
+
+  const creds = await session1.credentials();
+  assert.ok(creds.token);
+  for (const value of env.values.values()) {
+    assert.ok(!value.includes(creds.token));
+  }
+
+  const session2 = env.make();
+  assert.equal(session2.getSnapshot().status, 'restoring');
+  await session2.initialize();
+  assert.equal(session2.getSnapshot().status, 'authenticated');
+  assert.equal(session2.getSnapshot().user.id, 'reader');
+
+  const failedEnv = environment();
+  const sessionFail = failedEnv.make({
+    fetcher: async url => {
+      if (url.endsWith('/refresh')) return failure(401, 'UNAUTHORIZED');
+      return json({ user: { id: 'reader' } });
+    },
+  });
+  await sessionFail.initialize();
+  assert.equal(sessionFail.getSnapshot().status, 'guest');
+  assert.equal((await sessionFail.credentials()).token, null);
+});
