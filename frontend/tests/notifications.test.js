@@ -93,7 +93,7 @@ test('Notification bell, dropdown, unread badge, and navigation', { timeout: 600
 
   function LocationDisplay() {
     const loc = useLocation();
-    return h('div', { id: 'location-display' }, loc.pathname + loc.hash);
+    return h('div', { id: 'location-display' }, loc.pathname + loc.search + loc.hash);
   }
 
   t.after(async () => {
@@ -200,7 +200,7 @@ test('Notification bell, dropdown, unread badge, and navigation', { timeout: 600
   });
 
   const locationText = document.querySelector('#location-display').textContent;
-  assert.equal(locationText, '/books/book-hobbit#review');
+  assert.equal(locationText, '/books/book-hobbit?reviewId=rev-1#review-rev-1');
   assert.equal(document.querySelector('.notification-dropdown'), null, 'Clicking notification item closes dropdown');
 
   // 7. Failed mark-read does not block navigation
@@ -210,7 +210,7 @@ test('Notification bell, dropdown, unread badge, and navigation', { timeout: 600
     const itemBtn = [...document.querySelectorAll('.notification-item')][1];
     itemBtn.click();
   });
-  assert.equal(document.querySelector('#location-display').textContent, '/books/book-dune#review');
+  assert.equal(document.querySelector('#location-display').textContent, '/books/book-dune?reviewId=rev-2#review-rev-2');
   failMarkRead = false;
 
   // 8. Mark all failure shows local error

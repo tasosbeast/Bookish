@@ -97,7 +97,10 @@ test('reading flow shelf management and rating/review separation', { timeout: 60
     return response({
       data: {
         id: bookId, title: 'Flow Book', author: 'Flow Author', genres: [], averageRating: 4,
-        reviews: { data: [], pagination: { page: 1, limit: 10, total: 0, totalPages: 1 } }
+        reviews: {
+          data: [{ id: 'rev-public', rating: 5, reviewText: 'Great read!', createdAt: stamp, likesCount: 0, likedByMe: false, user: { username: 'alice' } }],
+          pagination: { page: 1, limit: 10, total: 1, totalPages: 1 }
+        }
       }
     });
   };
@@ -120,6 +123,16 @@ test('reading flow shelf management and rating/review separation', { timeout: 60
       h(Routes, null, h(Route, { path: '/books/:id', element: h(BookDetails) }))
     )
   ));
+
+  // Public review card has stable DOM id review-rev-public
+  const publicCard = document.getElementById('review-rev-public');
+  assert.ok(publicCard, 'Public review card has id="review-rev-public"');
+  assert.ok(publicCard.classList.contains('review-card'));
+
+  // Review editor has id="review"
+  const editorSidebar = document.getElementById('review');
+  assert.ok(editorSidebar, 'Review editor sidebar has id="review"');
+  assert.ok(editorSidebar.classList.contains('review-editor'));
 
   const click = async buttonText => act(async () => {
     const button = [...document.querySelectorAll('button')].find(b => b.textContent.trim().startsWith(buttonText));
@@ -211,4 +224,15 @@ test('reading flow shelf management and rating/review separation', { timeout: 60
   assert.ok(localDeleteNotice && localDeleteNotice.textContent.includes('Your review has been deleted. Your rating remains.'), 'ReviewForm renders local delete notice');
   const globalNoticeAfterDelete = document.querySelector('.detail-copy .success-notice');
   assert.equal(globalNoticeAfterDelete, null, 'Global notice is NOT rendered for review delete');
+
+  // 10. Rendering BookDetails with hash #review-rev-public scrolls to public review card
+  scrolledElements = [];
+  await act(async () => root.unmount());
+  root = createRoot(document.getElementById('root'));
+  await act(async () => root.render(
+    h(MemoryRouter, { initialEntries: [`/books/${bookId}?reviewId=rev-public#review-rev-public`] },
+      h(Routes, null, h(Route, { path: '/books/:id', element: h(BookDetails) }))
+    )
+  ));
+  assert.ok(scrolledElements.some(e => e.id === 'review-rev-public'), 'Scrolls to public review card #review-rev-public');
 });

@@ -113,7 +113,9 @@ export function NotificationBell({ userId }) {
       }
     }
     setOpen(false);
-    navigate(`/books/${item.review.bookId}#review`);
+    navigate(`/books/${item.review.bookId}?reviewId=${item.review.id}#review-${item.review.id}`, {
+      state: { jump: Date.now() }
+    });
   };
 
   const unreadCount = notificationsData.unreadCount;

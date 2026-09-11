@@ -14,7 +14,7 @@ function Review({ review, canLike, onSaved, next }) {
     try { await api(`/reviews/${review.id}/like`, { method: review.likedByMe ? 'DELETE' : 'PUT', auth: 'required' }); onSaved(); }
     catch (error) { setError(error); } finally { setBusy(false); }
   }
-  return <article className="review-card"><div className="review-heading"><div className="review-author"><span className="avatar">{review.user.username[0].toUpperCase()}</span><div><strong>{review.user.username}</strong><time dateTime={review.createdAt}>{new Date(review.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</time></div></div><Rating value={review.rating} /></div>{review.reviewText ? <p className="review-text">{review.reviewText}</p> : <p className="muted small italic">This reader left a rating.</p>}<ErrorNotice error={error} />{canLike ? <button className={`like-button ${review.likedByMe ? 'is-liked' : ''}`} aria-pressed={review.likedByMe} disabled={busy} onClick={saveLike}><Icon name="heart" size={17} />{busy ? 'Saving…' : review.likedByMe ? 'Liked' : 'Like'}<span>{review.likesCount}</span></button> : <Link className="like-button" to={`/login?next=${encodeURIComponent(next)}`}><Icon name="heart" size={17} />Log in to like<span>{review.likesCount}</span></Link>}</article>;
+  return <article className="review-card" id={`review-${review.id}`}><div className="review-heading"><div className="review-author"><span className="avatar">{review.user.username[0].toUpperCase()}</span><div><strong>{review.user.username}</strong><time dateTime={review.createdAt}>{new Date(review.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</time></div></div><Rating value={review.rating} /></div>{review.reviewText ? <p className="review-text">{review.reviewText}</p> : <p className="muted small italic">This reader left a rating.</p>}<ErrorNotice error={error} />{canLike ? <button className={`like-button ${review.likedByMe ? 'is-liked' : ''}`} aria-pressed={review.likedByMe} disabled={busy} onClick={saveLike}><Icon name="heart" size={17} />{busy ? 'Saving…' : review.likedByMe ? 'Liked' : 'Like'}<span>{review.likesCount}</span></button> : <Link className="like-button" to={`/login?next=${encodeURIComponent(next)}`}><Icon name="heart" size={17} />Log in to like<span>{review.likesCount}</span></Link>}</article>;
 }
 
 export default function BookDetails() {
@@ -26,7 +26,9 @@ export default function BookDetails() {
   const [removed, setRemoved] = useState({});
   const [reconcilingDeletion, setReconcilingDeletion] = useState(false);
   useEffect(() => { setNotice(''); setRemoved({}); setReconcilingDeletion(false); }, [id, auth.user?.id]);
-  const book = useResource(`/books/${id}?page=${pageNumber(params.get('page'))}&limit=10`, 'optional', id);
+  const focusReviewId = params.get('reviewId');
+  const bookQuery = `/books/${id}?page=${pageNumber(params.get('page'))}&limit=10${focusReviewId ? `&reviewId=${encodeURIComponent(focusReviewId)}` : ''}`;
+  const book = useResource(bookQuery, 'optional', id);
   const personal = useResource(auth.user ? `/user-books/${id}` : null, 'required', id);
   const path = `/books/${id}`;
   useEffect(() => {
@@ -46,10 +48,14 @@ export default function BookDetails() {
   }
   
   useEffect(() => {
-    if (location.hash === '#review' && !book.loading && !personal.loading && document.getElementById('review')) {
-      document.getElementById('review').scrollIntoView({ behavior: 'smooth' });
+    if (!book.loading && !personal.loading && location.hash) {
+      const targetId = decodeURIComponent(location.hash.slice(1));
+      const element = document.getElementById(targetId);
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth' });
+      }
     }
-  }, [location.hash, book.loading, personal.loading, auth.user]);
+  }, [location.hash, location.key, location.state, book.loading, personal.loading, auth.user]);
 
   if (book.loading && !book.data) return <div className="container page-space"><Loading /></div>;
   if (book.error && !book.data) return <div className="container page-space"><Link className="back-link" to="/">← Back to discover</Link><ErrorNotice error={book.error} retry={book.reload} /></div>;

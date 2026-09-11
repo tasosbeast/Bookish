@@ -29,12 +29,33 @@ export async function listBooks(query) {
   ], { isolationLevel: 'RepeatableRead' });
   return { data: books.map(serializeBook), pagination: pageInfo(page, limit, total) };
 }
-export async function bookDetails(id, { page, limit }, userId) {
+export async function bookDetails(id, { page, limit, reviewId }, userId) {
   return prisma.$transaction(async tx => {
     const book = await tx.book.findUnique({ where: { id }, include: genres });
     if (!book) throw new AppError(404, 'BOOK_NOT_FOUND', 'Book not found');
     const where = { bookId: id };
-    const reviews = await tx.review.findMany({ where, skip: (page - 1) * limit, take: limit,
+
+    let effectivePage = page;
+    if (reviewId) {
+      const targetReview = await tx.review.findFirst({
+        where: { id: reviewId, bookId: id },
+        select: { id: true, createdAt: true },
+      });
+      if (targetReview) {
+        const countBefore = await tx.review.count({
+          where: {
+            bookId: id,
+            OR: [
+              { createdAt: { gt: targetReview.createdAt } },
+              { createdAt: targetReview.createdAt, id: { lt: targetReview.id } },
+            ],
+          },
+        });
+        effectivePage = Math.floor(countBefore / limit) + 1;
+      }
+    }
+
+    const reviews = await tx.review.findMany({ where, skip: (effectivePage - 1) * limit, take: limit,
       orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
       include: { user: { select: { id: true, username: true, profilePicture: true } } } });
     const total = await tx.review.count({ where });
@@ -46,7 +67,7 @@ export async function bookDetails(id, { page, limit }, userId) {
     const likedIds = new Set(likes.map(like => like.reviewId));
     return { data: { ...serializeBook(book), reviews: {
       data: reviews.map(review => ({ ...review, likedByMe: likedIds.has(review.id) })),
-      pagination: pageInfo(page, limit, total),
+      pagination: pageInfo(effectivePage, limit, total),
     } } };
   }, { isolationLevel: 'RepeatableRead' });
 }

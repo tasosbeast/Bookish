@@ -118,5 +118,41 @@ test('PostgreSQL: review like notifications lifecycle and isolation',
     const bNotifsAfterDelete = await auth(userB, 'get', '/api/notifications').expect(200);
     assert.equal(bNotifsAfterDelete.body.unreadCount, 0);
     assert.equal(bNotifsAfterDelete.body.data.length, 0);
+
+    // 10. GET /api/books/:id reviewId query parameter effective page calculations and validation
+    await request(app).get(`/api/books/${book.id}?reviewId=not-a-uuid`).expect(400);
+
+    // Create a second book
+    const book2 = await prisma.book.create({ data: { title: `Other Book ${tag}`, author: 'Other Author' } });
+    bookIds.push(book2.id);
+    const otherReviewRes = await auth(userB, 'post', '/api/reviews').send({ bookId: book2.id, rating: 5, reviewText: 'Other book review' }).expect(200);
+    const otherReviewId = otherReviewRes.body.data.id;
+
+    // reviewId for another book falls back to requested page safely
+    const fallbackRes = await request(app).get(`/api/books/${book.id}?reviewId=${otherReviewId}`).expect(200);
+    assert.equal(fallbackRes.body.data.reviews.pagination.page, 1);
+    assert.equal(fallbackRes.body.data.reviews.data.some(r => r.id === otherReviewId), false);
+
+    // Create 11 reviews for book2 so review on page 2 is calculated
+    const reviewIdsBook2 = [otherReviewId];
+    for (let i = 0; i < 11; i++) {
+      const u = await signup(`bulk${i}`);
+      const r = await prisma.review.create({
+        data: {
+          bookId: book2.id,
+          userId: u.userId,
+          rating: 4,
+          reviewText: `Bulk review ${i}`,
+          createdAt: new Date(Date.now() - (i + 1) * 1000),
+        }
+      });
+      reviewIdsBook2.push(r.id);
+    }
+
+    const oldestReviewId = reviewIdsBook2[reviewIdsBook2.length - 1];
+    // Request page 1 with reviewId pointing to oldest review (which falls on page 2 when limit=10)
+    const page2Res = await request(app).get(`/api/books/${book2.id}?page=1&limit=10&reviewId=${oldestReviewId}`).expect(200);
+    assert.equal(page2Res.body.data.reviews.pagination.page, 2);
+    assert.ok(page2Res.body.data.reviews.data.some(r => r.id === oldestReviewId));
   }
 );

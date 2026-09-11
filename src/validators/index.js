@@ -21,7 +21,7 @@ export const booksSchema = z.object({ query: z.object({
   sort: z.enum(['rating', 'publicationYear']).default('rating'),
   order: z.enum(['asc', 'desc']).default('desc'),
 }).strict() });
-export const bookSchema = z.object({ params: z.object({ id: uuid }), query: z.object(pagination).strict() });
+export const bookSchema = z.object({ params: z.object({ id: uuid }), query: z.object({ ...pagination, reviewId: uuid.optional() }).strict() });
 export const shelvesQuerySchema = z.object({ query: z.object({
   ...pagination,
   status: z.enum(['want_to_read', 'currently_reading', 'read']).optional(),
