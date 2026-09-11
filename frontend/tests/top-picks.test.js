@@ -138,6 +138,12 @@ test('Top Picks frontend: rendering rules, states, filters, and error isolation'
   const sectionRec = document.querySelector('.top-picks-section');
   assert.ok(sectionRec, 'Renders Top Picks section');
   assert.equal(sectionRec.getAttribute('aria-label'), 'Top Picks for You', 'Section is labeled via aria-label in recommendations state');
+
+  const genreNav = document.querySelector('.genre-filters');
+  const catalogSec = document.querySelector('.catalog-section');
+  assert.ok(genreNav.compareDocumentPosition(sectionRec) & 4, 'Top Picks is positioned after genre filters');
+  assert.ok(sectionRec.compareDocumentPosition(catalogSec) & 4, 'Top Picks is positioned before catalog section');
+
   assert.ok(document.body.textContent.includes('Recommended Book 1'));
   assert.ok(document.body.textContent.includes("Because you've enjoyed books by Top Author"));
   assert.ok(document.body.textContent.includes('Because you often rate Thriller highly'));
