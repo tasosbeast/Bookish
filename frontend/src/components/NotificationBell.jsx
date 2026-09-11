@@ -10,23 +10,52 @@ export function NotificationBell({ userId }) {
   const dropdownRef = useRef(null);
   const navigate = useNavigate();
 
+  const userIdRef = useRef(userId);
+  userIdRef.current = userId;
+
+  const fetchSeqRef = useRef(0);
+  const abortControllerRef = useRef(null);
+
   const fetchNotifications = async () => {
+    const currentUserId = userIdRef.current;
+    if (!currentUserId) return;
+
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    const seq = ++fetchSeqRef.current;
+
     try {
       setError(null);
-      const res = await api('/notifications?limit=10', { auth: 'required' });
-      setNotificationsData(res);
-    } catch {
+      const res = await api('/notifications?limit=10', { auth: 'required', signal: controller.signal });
+      if (fetchSeqRef.current === seq && userIdRef.current === currentUserId) {
+        setNotificationsData(res);
+      }
+    } catch (err) {
+      if (err?.name === 'AbortError') return;
       // Background fetch errors ignored silently
     }
   };
 
   useEffect(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
     setOpen(false);
     setNotificationsData({ data: [], unreadCount: 0 });
     setError(null);
     if (userId) {
       fetchNotifications();
     }
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
   }, [userId]);
 
   useEffect(() => {
@@ -55,25 +84,33 @@ export function NotificationBell({ userId }) {
   };
 
   const handleMarkAllRead = async () => {
+    const currentUserId = userIdRef.current;
     try {
       setError(null);
       await api('/notifications/read-all', { method: 'PUT', auth: 'required' });
-      setNotificationsData(prev => ({
-        unreadCount: 0,
-        data: prev.data.map(item => ({ ...item, readAt: item.readAt || new Date().toISOString() }))
-      }));
+      if (userIdRef.current === currentUserId) {
+        setNotificationsData(prev => ({
+          unreadCount: 0,
+          data: prev.data.map(item => ({ ...item, readAt: item.readAt || new Date().toISOString() }))
+        }));
+      }
     } catch (err) {
-      setError(err);
+      if (userIdRef.current === currentUserId) {
+        setError(err);
+      }
     }
   };
 
   const handleItemClick = (item) => {
+    const currentUserId = userIdRef.current;
     if (!item.readAt) {
       api(`/notifications/${item.id}/read`, { method: 'PUT', auth: 'required' }).catch(() => {});
-      setNotificationsData(prev => ({
-        unreadCount: Math.max(0, prev.unreadCount - 1),
-        data: prev.data.map(n => n.id === item.id ? { ...n, readAt: new Date().toISOString() } : n)
-      }));
+      if (userIdRef.current === currentUserId) {
+        setNotificationsData(prev => ({
+          unreadCount: Math.max(0, prev.unreadCount - 1),
+          data: prev.data.map(n => n.id === item.id ? { ...n, readAt: new Date().toISOString() } : n)
+        }));
+      }
     }
     setOpen(false);
     navigate(`/books/${item.review.bookId}#review`);

@@ -22,6 +22,10 @@ test('Notification bell, dropdown, unread badge, and navigation', { timeout: 600
 
   let notificationsList = [];
   let unreadCount = 0;
+  let notificationsListB = [];
+  let unreadCountB = 0;
+  let deferNotificationFetchForUserA = false;
+  let resolveFetchA = null;
   let markReadCalls = [];
   let markAllCalls = [];
   let failMarkAll = false;
@@ -32,9 +36,26 @@ test('Notification bell, dropdown, unread badge, and navigation', { timeout: 600
   globalThis.fetch = async (input, options = {}) => {
     const url = new URL(input);
     if (url.pathname === '/api/auth/login') {
-      return response({ user: { id: 'reader-a', username: 'reader_a' }, accessToken: `header.${btoa(JSON.stringify({ exp: Date.now() / 1000 + 900 }))}.signature`, expiresIn: 900 });
+      const body = options.body ? JSON.parse(options.body) : {};
+      const userId = body.userId || 'reader-a';
+      const username = body.username || 'reader_a';
+      const payload = btoa(JSON.stringify({ sub: userId, exp: 2000000000 }));
+      return response({
+        user: { id: userId, username },
+        accessToken: `header.${payload}.signature`,
+        expiresIn: 900
+      });
     }
     if (url.pathname === '/api/notifications' && (!options.method || options.method === 'GET')) {
+      const authHeader = options.headers?.Authorization || '';
+      let tokenPayload = '';
+      try { tokenPayload = authHeader.split('.')[1] ? atob(authHeader.split('.')[1]) : ''; } catch { /* ignore */ }
+      if (deferNotificationFetchForUserA && tokenPayload.includes('reader-a')) {
+        await new Promise(resolve => { resolveFetchA = resolve; });
+      }
+      if (tokenPayload.includes('reader-b')) {
+        return response({ data: notificationsListB, unreadCount: unreadCountB });
+      }
       return response({ data: notificationsList, unreadCount });
     }
     if (url.pathname === '/api/notifications/read-all' && options.method === 'PUT') {
@@ -202,8 +223,59 @@ test('Notification bell, dropdown, unread badge, and navigation', { timeout: 600
   assert.ok(document.querySelector('.notification-error'), 'Local error rendered inside popover on mark-all failure');
   failMarkAll = false;
 
-  // 9. Account switch clears notification state
-  session.destroy();
-  await act(async () => session.authenticate('login', {}));
-  assert.equal(document.querySelector('.notification-dropdown'), null);
+  // 9. Account switch and race condition handling between User A and User B
+  notificationsListB = [
+    {
+      id: 'notif-b1',
+      type: 'review_like',
+      readAt: null,
+      createdAt: '2026-09-11T15:00:00Z',
+      actor: { id: 'user-a', username: 'alice', profilePicture: null },
+      review: { id: 'rev-b1', bookId: 'book-1984', book: { title: '1984' } }
+    }
+  ];
+  unreadCountB = 1;
+
+  // Set defer flag for User A's fetch
+  deferNotificationFetchForUserA = true;
+
+  // Click bell to initiate in-flight fetch for User A that will be held pending
+  await act(async () => {
+    const btn = document.querySelector('.bell-button');
+    if (btn) btn.click();
+  });
+
+  // Switch session to User B while A's fetch is pending
+  await act(async () => {
+    await session.authenticate('login', { userId: 'reader-b', username: 'reader_b' });
+  });
+
+  // User B's notification request resolves immediately with B's data
+  let badgeB = document.querySelector('.unread-badge');
+  assert.ok(badgeB, "User B renders unread badge");
+  assert.equal(badgeB.textContent, '1', "User B's badge displays B's unread count (1)");
+
+  // Now resolve User A's old pending request
+  if (resolveFetchA) {
+    await act(async () => {
+      resolveFetchA();
+    });
+  }
+
+  // UI must still show only User B's notifications and count; User A's notification must NEVER appear
+  badgeB = document.querySelector('.unread-badge');
+  assert.ok(badgeB, "User B badge still exists");
+  assert.equal(badgeB.textContent, '1', "User B badge count remains 1 after User A's delayed response resolves");
+
+  await act(async () => {
+    const btnB = document.querySelector('.bell-button');
+    if (btnB && !document.querySelector('.notification-dropdown')) {
+      btnB.click();
+    }
+  });
+
+  const dropdownB = document.querySelector('.notification-dropdown');
+  assert.ok(dropdownB, "User B popover dropdown opens");
+  assert.ok(dropdownB.textContent.includes('alice liked your review of 1984'), "User B sees B's notification");
+  assert.equal(dropdownB.textContent.includes('maria liked your review of The Hobbit'), false, "User A's notification never populates User B's UI");
 });

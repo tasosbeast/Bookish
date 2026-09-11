@@ -39,7 +39,8 @@ test('PostgreSQL: review like notifications lifecycle and isolation',
 
     // 2. User A likes their own review -> No notification created
     await auth(userA, 'put', `/api/reviews/${reviewId}/like`).expect(200);
-    const initialNotifs = await auth(userA, 'get', '/api/notifications').expect(200);
+    const initialNotifs = await auth(userA, 'get', '/api/notifications').expect(200).expect('Cache-Control', 'no-store');
+    assert.equal(initialNotifs.headers['cache-control'], 'no-store');
     assert.equal(initialNotifs.body.unreadCount, 0);
     assert.equal(initialNotifs.body.data.length, 0);
 
