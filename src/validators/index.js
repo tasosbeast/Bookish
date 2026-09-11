@@ -71,3 +71,19 @@ export const updateProfileSchema = z.object({
   }).strict().refine(data => data.bio !== undefined || data.profilePicture !== undefined, 'Provide at least one editable field'),
 });
 
+export const notificationsQuerySchema = z.object({
+  query: z.object({
+    limit: z.coerce.number().int().min(1).max(50).default(10),
+  }).strict(),
+});
+
+export const notificationIdSchema = z.object({
+  params: z.object({ id: uuid }),
+  query: z.object({}).strict(),
+});
+
+export const readAllNotificationsSchema = z.object({
+  query: z.object({}).strict(),
+});
+
+

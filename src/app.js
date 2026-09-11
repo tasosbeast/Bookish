@@ -13,6 +13,7 @@ import { booksRouter } from './routes/books.js';
 import { genresRouter } from './routes/genres.js';
 import { userBooksRouter } from './routes/user-books.js';
 import { reviewsRouter } from './routes/reviews.js';
+import { notificationsRouter } from './routes/notifications.js';
 
 export const app = express();
 app.disable('x-powered-by');
@@ -40,5 +41,6 @@ app.use('/api/books', booksRouter);
 app.use('/api/genres', genresRouter);
 app.use('/api/user-books', userBooksRouter);
 app.use('/api/reviews', reviewsRouter);
+app.use('/api/notifications', notificationsRouter);
 app.use((req, res, next) => next(new AppError(404, 'NOT_FOUND', 'Route not found')));
 app.use(errorHandler);

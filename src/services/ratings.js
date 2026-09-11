@@ -80,14 +80,42 @@ export async function removeReview(userId, reviewId) {
 }
 export async function setReviewLike(userId, reviewId, liked) {
   return serializable(prisma, async tx => {
-    if (!await tx.review.findUnique({ where: { id: reviewId }, select: { id: true } })) {
+    const review = await tx.review.findUnique({ where: { id: reviewId }, select: { id: true, userId: true } });
+    if (!review) {
       throw new AppError(404, 'REVIEW_NOT_FOUND', 'Review not found');
     }
     if (liked) {
       await tx.reviewLike.upsert({ where: { userId_reviewId: { userId, reviewId } },
         create: { userId, reviewId }, update: {} });
+      if (review.userId !== userId) {
+        await tx.notification.upsert({
+          where: {
+            recipientId_actorId_reviewId_type: {
+              recipientId: review.userId,
+              actorId: userId,
+              reviewId,
+              type: 'review_like',
+            },
+          },
+          create: {
+            recipientId: review.userId,
+            actorId: userId,
+            reviewId,
+            type: 'review_like',
+          },
+          update: {},
+        });
+      }
     } else {
       await tx.reviewLike.deleteMany({ where: { userId, reviewId } });
+      await tx.notification.deleteMany({
+        where: {
+          recipientId: review.userId,
+          actorId: userId,
+          reviewId,
+          type: 'review_like',
+        },
+      });
     }
     const likesCount = await tx.reviewLike.count({ where: { reviewId } });
     await tx.review.update({ where: { id: reviewId }, data: { likesCount } });

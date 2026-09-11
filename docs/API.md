@@ -235,3 +235,52 @@ Authorization: Bearer <access-token>
 ```
 
 `shelf` and `review` are independently `null` when the current reader has no corresponding record. No user credentials or session fields are returned. Invalid UUID/query input returns 400, missing/invalid/revoked credentials return 401, and an unknown book returns 404. The read uses a consistent transaction snapshot. Use this endpoint to initialize editing forms: neither a paginated shelf nor a public review page can establish that personal data is absent. Existing POST shelf/review contracts remain unchanged.
+
+## Notifications
+
+All notification routes require `Authorization: Bearer <accessToken>`. Responses use `Cache-Control: no-store`.
+
+`GET /api/notifications?limit=10`
+
+Returns the authenticated recipient's notifications, ordered by `createdAt` descending. `limit` is an optional integer from 1 to 50 (default 10). `unreadCount` reflects all unread notifications belonging to the recipient across the entire dataset, not only those in the paginated response.
+
+```json
+{
+  "data": [
+    {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "type": "review_like",
+      "readAt": null,
+      "createdAt": "2026-09-12T00:00:00.000Z",
+      "actor": {
+        "id": "22222222-2222-4222-8222-222222222222",
+        "username": "maria",
+        "profilePicture": null
+      },
+      "review": {
+        "id": "33333333-3333-4333-8333-333333333333",
+        "bookId": "44444444-4444-4444-8444-444444444444",
+        "book": {
+          "title": "The Hobbit"
+        }
+      }
+    }
+  ],
+  "unreadCount": 1
+}
+```
+
+`PUT /api/notifications/:id/read`
+
+Marks a single notification belonging to the authenticated recipient as read. Idempotent. Returns `{ "data": { "id": "...", "readAt": "..." } }`. Missing notifications or notifications owned by another recipient return 404.
+
+`PUT /api/notifications/read-all`
+
+Marks all unread notifications belonging to the authenticated recipient as read. Idempotent. Returns `{ "data": { "updatedCount": 1 } }`.
+
+### Social Notification Rules
+- When user B likes user A's review (`PUT /api/reviews/:id/like`), a `review_like` notification is generated for user A.
+- Liking one's own review (`B === A`) creates no notification.
+- Removing a like (`DELETE /api/reviews/:id/like`) automatically removes the corresponding `review_like` notification.
+- Notifications rely on client-initiated fetches when the app header mounts or the notification popover opens (v1 has no WebSocket/SSE push).
+
