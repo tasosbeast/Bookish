@@ -20,7 +20,7 @@ export async function listShelves(userId, { status, q, page, limit }) {
   const search = q?.replace(/[\\%_]/g, '\\$&');
   const where = {
     userId,
-    ...(status !== undefined && { status }),
+    status: status !== undefined ? status : { not: null },
     ...(search && {
       book: {
         OR: ['title', 'author'].map(field => ({ [field]: { contains: search, mode: 'insensitive' } })),

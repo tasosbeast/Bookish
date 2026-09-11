@@ -14,8 +14,12 @@ test('My Books removes a deleted shelf entry even when reconciliation fails', { 
   }
   Object.defineProperty(navigator, 'locks', { value: { request: (_key, _options, work) => work() } });
   const nativeFetch = globalThis.fetch;
-  let server, root, session, blocked = true, present = true, failedRefresh = false, refreshFailures = 0, removals = 0, confirmations = 0;
-  dom.window.confirm = () => { confirmations++; return true; };
+  let server, root, session, present = true, failedRefresh = false, refreshFailures = 0, removals = 0, confirmations = 0;
+  dom.window.confirm = (msg) => {
+    assert.equal(msg, 'Remove this book from My Books?');
+    confirmations++;
+    return true;
+  };
   const book = { id: 'book-a', title: 'A removable book', author: 'An author', coverImageUrl: null, averageRating: 4, genres: [] };
   const shelf = { bookId: book.id, status: 'read', userRating: 4, book };
   const response = (body, status = 200) => Response.json(body, { status });
@@ -29,7 +33,6 @@ test('My Books removes a deleted shelf entry even when reconciliation fails', { 
     if (url.pathname === '/api/auth/login') return response({ user: { id: 'reader', username: 'reader' }, accessToken: `header.${btoa(JSON.stringify({ exp: Date.now() / 1000 + 900 }))}.signature`, expiresIn: 900 });
     if (options.method === 'DELETE') {
       removals++;
-      if (blocked) return response({ error: { code: 'REVIEW_BLOCKS_SHELF_REMOVAL', message: 'Remove your review before removing this book from My Books' } }, 409);
       present = false; return response({ data: { bookId: book.id, removed: true } });
     }
     if (url.pathname === `/api/user-books/${book.id}`) return response({ data: { bookId: book.id, shelf, review: null } });
@@ -52,15 +55,10 @@ test('My Books removes a deleted shelf entry even when reconciliation fails', { 
   const update = [...document.querySelectorAll('button')].find(button => button.textContent.trim() === `Update reading for ${book.title}`);
   assert.ok(update, 'the shelf editor control identifies its book');
   await act(async () => update.click());
-  await click('Remove from My Books');
-  assert.equal(confirmations, 1); assert.equal(removals, 1);
-  assert.ok(document.body.textContent.includes('Remove your review before removing this book from My Books'));
-  assert.ok(document.body.textContent.includes(book.title));
-  blocked = false;
   failedRefresh = true;
   await click('Remove from My Books');
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
-  assert.equal(confirmations, 2); assert.equal(removals, 2);
+  assert.equal(confirmations, 1); assert.equal(removals, 1);
   assert.equal(refreshFailures, 1, 'the background reconciliation request failed');
   assert.ok(!document.body.textContent.includes(book.title));
   assert.ok(document.body.textContent.includes('Your reading story starts here'));

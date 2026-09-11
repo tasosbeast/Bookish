@@ -119,7 +119,7 @@ All following routes require `Authorization: Bearer <accessToken>`. Successful o
 
 `GET /api/user-books?status=read&q=dune&page=1&limit=20`
 
-Returns only the user identified by the verified access token. `status` is optional and accepts `want_to_read`, `currently_reading` or `read`. `q` is an optional trimmed search string (1–200 characters) that filters entries by literal case-insensitive substring match on book title or author. `page` is 1–10000 (default 1); `limit` is 1–100 (default 20). Entries sort by `updatedAt` descending, then `bookId` ascending, including when timestamps tie. Count and page share a repeatable-read snapshot. Unknown parameters, including a caller-supplied `userId`, return 400. An empty or out-of-range page returns an empty `data` array with accurate pagination metadata.
+Returns only bookshelf entries where `status` is not null for the user identified by the verified access token. `status` is optional and accepts `want_to_read`, `currently_reading` or `read`. `q` is an optional trimmed search string (1–200 characters) that filters entries by literal case-insensitive substring match on book title or author. `page` is 1–10000 (default 1); `limit` is 1–100 (default 20). Entries sort by `updatedAt` descending, then `bookId` ascending, including when timestamps tie. Count and page share a repeatable-read snapshot. Unknown parameters, including a caller-supplied `userId`, return 400. An empty or out-of-range page returns an empty `data` array with accurate pagination metadata.
 
 ```json
 {
@@ -150,11 +150,11 @@ The nested book also includes its other existing scalar fields (description, ISB
 { "bookId": "11111111-1111-4111-8111-111111111111", "status": "read", "userRating": 5 }
 ```
 
-Supply `status` and/or `userRating`. Status is `want_to_read`, `currently_reading` or `read`; a new entry defaults to `want_to_read` if omitted. Rating is an integer 1–5 or null. Omitted fields retain previous values. A status-only update never clears a rating. Clearing a rating while a review exists returns 409. An updated rating is copied to any existing review in the same transaction.
+Supply `status` and/or `userRating`. Status is `want_to_read`, `currently_reading` or `read`; if omitted when creating a new record, `status` defaults to `null`. Rating is an integer 1–5 or null. Omitted fields retain previous values. A status-only update never clears a rating. Clearing a rating while a review exists returns 409. An updated rating is copied to any existing review in the same transaction.
 
 `DELETE /api/user-books/:bookId`
 
-Removes only the authenticated reader's shelf entry and returns `{ "data": { "bookId": "...", "removed": true } }`. The Book and every other reader's data remain unchanged. A missing personal shelf entry returns `404 SHELF_NOT_FOUND`. If the reader has a review for the book, removal returns `409 REVIEW_BLOCKS_SHELF_REMOVAL` by default; the review must be handled before its required rating/shelf entry can be removed. Alternatively, supplying the query parameter `?deleteReview=true` atomically removes the authenticated reader's review, rating, and shelf entry in the same serializable transaction. When the removed entry has a rating, the book's average and rating count are recomputed in the same serializable transaction.
+Removes the book from the authenticated reader's bookshelf (setting `status` to `null` if a rating or review exists, or removing the `UserBook` record if neither exists) and returns `{ "data": { "bookId": "...", "removed": true } }`. The reader's rating and review are preserved. The Book's average rating and rating count remain unchanged since the rating is preserved. A missing personal shelf entry (where no `UserBook` record exists) returns `404 SHELF_NOT_FOUND`.
 
 `POST /api/reviews`
 

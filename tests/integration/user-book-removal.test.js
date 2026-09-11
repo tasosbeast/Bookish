@@ -6,7 +6,7 @@ import request from 'supertest';
 import { app } from '../../src/app.js';
 import { prisma } from '../../src/lib/prisma.js';
 
-test('PostgreSQL: removing a shelf is isolated, review-safe and refreshes ratings',
+test('PostgreSQL: removing a shelf membership is non-destructive to ratings/reviews and filters correctly',
   { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async t => {
     const tag = randomUUID().replaceAll('-', '').slice(0, 10), userIds = [], bookIds = [];
     t.after(async () => {
@@ -22,87 +22,119 @@ test('PostgreSQL: removing a shelf is isolated, review-safe and refreshes rating
       return { token: response.body.accessToken, userId: response.body.user.id };
     };
     const [first, second, outsider] = await Promise.all(['a', 'b', 'c'].map(signup));
-    const book = await prisma.book.create({ data: { title: `Removal ${tag}`, author: 'Fixture author' } });
-    const unratedBook = await prisma.book.create({ data: { title: `Unrated removal ${tag}`, author: 'Fixture author' } });
+    const book = await prisma.book.create({ data: { title: `Removal Title ${tag}`, author: 'Fixture author' } });
+    const unratedBook = await prisma.book.create({ data: { title: `Unrated Title ${tag}`, author: 'Fixture author' } });
     bookIds.push(book.id, unratedBook.id);
     const auth = (token, method, path) => request(app)[method](path).auth(token, { type: 'bearer' });
     const save = (token, body) => auth(token, 'post', '/api/user-books').send({ bookId: book.id, ...body });
+
     await save(first.token, { status: 'read', userRating: 5 }).expect(200);
     await save(second.token, { status: 'want_to_read', userRating: 3 }).expect(200);
     await auth(first.token, 'post', '/api/user-books').send({ bookId: unratedBook.id, status: 'want_to_read' }).expect(200);
 
-    await t.test('successfully removes the current reader shelf and keeps the book', async () => {
+    await t.test('remove unreviewed + unrated shelf entry deletes the UserBook row completely', async () => {
       const response = await auth(first.token, 'delete', `/api/user-books/${unratedBook.id}`).expect(200);
       assert.deepEqual(response.body, { data: { bookId: unratedBook.id, removed: true } });
       assert.equal(await prisma.userBook.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: unratedBook.id } } }), null);
       assert.ok(await prisma.book.findUnique({ where: { id: unratedBook.id } }));
     });
 
-    await t.test('removing a rating recomputes the affected book aggregate', async () => {
-      await auth(first.token, 'delete', `/api/user-books/${book.id}`).expect(200);
-      const updated = await prisma.book.findUnique({ where: { id: book.id } });
-      assert.equal(Number(updated.averageRating), 3); assert.equal(updated.ratingsCount, 1);
+    await t.test('remove rated shelf entry sets status to null and preserves userRating and book aggregates', async () => {
+      const beforeBook = await prisma.book.findUnique({ where: { id: book.id } });
+      const response = await auth(first.token, 'delete', `/api/user-books/${book.id}`).expect(200);
+      assert.deepEqual(response.body, { data: { bookId: book.id, removed: true } });
+      const userBook = await prisma.userBook.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: book.id } } });
+      assert.ok(userBook);
+      assert.equal(userBook.status, null);
+      assert.equal(userBook.userRating, 5);
+      const afterBook = await prisma.book.findUnique({ where: { id: book.id } });
+      assert.deepEqual(afterBook, beforeBook, 'removing shelf membership does not alter book aggregate ratings');
     });
 
-    await t.test('a reader cannot remove another reader shelf', async () => {
+    await t.test('another user shelf data remains isolated', async () => {
       const response = await auth(outsider.token, 'delete', `/api/user-books/${book.id}`).expect(404);
       assert.equal(response.body.error.code, 'SHELF_NOT_FOUND');
-      assert.equal((await prisma.userBook.findUnique({ where: { userId_bookId: { userId: second.userId, bookId: book.id } } })).userRating, 3);
+      const secondBook = await prisma.userBook.findUnique({ where: { userId_bookId: { userId: second.userId, bookId: book.id } } });
+      assert.equal(secondBook.status, 'want_to_read');
+      assert.equal(secondBook.userRating, 3);
     });
 
-    await t.test('an existing review blocks removal without changing data', async () => {
-      await auth(first.token, 'post', '/api/reviews').send({ bookId: book.id, rating: 4, reviewText: 'Keep this review' }).expect(200);
-      const before = await prisma.book.findUnique({ where: { id: book.id } });
-      const response = await auth(first.token, 'delete', `/api/user-books/${book.id}`).expect(409);
-      assert.equal(response.body.error.code, 'REVIEW_BLOCKS_SHELF_REMOVAL');
-      assert.match(response.body.error.message, /review/i);
-      assert.ok(await prisma.userBook.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: book.id } } }));
-      assert.ok(await prisma.review.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: book.id } } }));
-      assert.deepEqual(await prisma.book.findUnique({ where: { id: book.id } }), before);
+    await t.test('My Books listing, q search, and status filter exclude status=null rows', async () => {
+      const listAll = await auth(first.token, 'get', '/api/user-books').expect(200);
+      assert.equal(listAll.body.data.length, 0, 'status=null rows are excluded from My Books');
+
+      const searchQ = await auth(first.token, 'get', `/api/user-books?q=${encodeURIComponent('Removal')}`).expect(200);
+      assert.equal(searchQ.body.data.length, 0, 'q search excludes status=null rows');
+
+      const filterStatus = await auth(first.token, 'get', '/api/user-books?status=read').expect(200);
+      assert.equal(filterStatus.body.data.length, 0, 'status filter excludes status=null rows');
     });
 
-    await t.test('a transaction failure during cascade removal rolls back both deletions', async () => {
-      const failingBook = await prisma.book.create({ data: { title: `Fail ${tag}`, author: 'Fail author' } });
-      bookIds.push(failingBook.id);
-      await auth(first.token, 'post', '/api/user-books').send({ bookId: failingBook.id, status: 'want_to_read' }).expect(200);
-      await auth(first.token, 'post', '/api/reviews').send({ bookId: failingBook.id, rating: 4, reviewText: 'Keep this review' }).expect(200);
-
-      const originalTransaction = prisma.$transaction;
-      let deleteCalled = false;
-      prisma.$transaction = async (work, options) => {
-        return originalTransaction.bind(prisma)(async tx => {
-          const originalDelete = tx.userBook.delete;
-          tx.userBook.delete = async (args) => {
-            deleteCalled = true;
-            throw new Error('Simulated transaction failure');
-          };
-          return work(tx);
-        }, options);
-      };
-
-      try {
-        await auth(first.token, 'delete', `/api/user-books/${failingBook.id}?deleteReview=true`).expect(500);
-      } finally {
-        prisma.$transaction = originalTransaction;
-      }
-
-      assert.ok(deleteCalled);
-      assert.ok(await prisma.userBook.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: failingBook.id } } }));
-      assert.ok(await prisma.review.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: failingBook.id } } }));
+    await t.test('personal book detail still returns status=null row with rating and review', async () => {
+      await auth(first.token, 'post', '/api/reviews').send({ bookId: book.id, rating: 5, reviewText: 'Great book!' }).expect(200);
+      const detail = await auth(first.token, 'get', `/api/user-books/${book.id}`).expect(200);
+      assert.equal(detail.body.data.shelf.status, null);
+      assert.equal(detail.body.data.shelf.userRating, 5);
+      assert.equal(detail.body.data.review.reviewText, 'Great book!');
     });
 
-    await t.test('adding deleteReview=true removes both review and shelf and updates aggregates', async () => {
-      const response = await auth(first.token, 'delete', `/api/user-books/${book.id}?deleteReview=true`).expect(200);
+    await t.test('remove reviewed shelf entry sets status to null and preserves review & review likes', async () => {
+      const review = await prisma.review.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: book.id } } });
+      await auth(second.token, 'put', `/api/reviews/${review.id}/like`).expect(200);
+
+      const response = await auth(first.token, 'delete', `/api/user-books/${book.id}`).expect(200);
       assert.deepEqual(response.body, { data: { bookId: book.id, removed: true } });
-      assert.equal(await prisma.userBook.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: book.id } } }), null);
-      assert.equal(await prisma.review.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: book.id } } }), null);
-      const updated = await prisma.book.findUnique({ where: { id: book.id } });
-      assert.equal(Number(updated.averageRating), 3); // since second user had rating 3
-      assert.equal(updated.ratingsCount, 1);
+
+      const userBook = await prisma.userBook.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: book.id } } });
+      assert.ok(userBook);
+      assert.equal(userBook.status, null);
+      assert.equal(userBook.userRating, 5);
+
+      const preservedReview = await prisma.review.findUnique({ where: { id: review.id } });
+      assert.ok(preservedReview);
+      assert.equal(preservedReview.likesCount, 1);
     });
 
-    await t.test('GET /api/user-books/:bookId rejects deleteReview parameter', async () => {
-      await auth(second.token, 'get', `/api/user-books/${book.id}?deleteReview=true`).expect(400);
-      await auth(second.token, 'get', `/api/user-books/${book.id}`).expect(200);
+    await t.test('rating-only write on a book not in My Books creates UserBook with status=null without setting want_to_read', async () => {
+      const ratedBook = await prisma.book.create({ data: { title: `Rating Only ${tag}`, author: 'Fixture author' } });
+      bookIds.push(ratedBook.id);
+      await auth(first.token, 'post', '/api/user-books').send({ bookId: ratedBook.id, userRating: 4 }).expect(200);
+      const ub = await prisma.userBook.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: ratedBook.id } } });
+      assert.ok(ub);
+      assert.equal(ub.status, null);
+      assert.equal(ub.userRating, 4);
+    });
+
+    await t.test('review creation on a book not in My Books creates UserBook with status=null', async () => {
+      const reviewBook = await prisma.book.create({ data: { title: `Review Only ${tag}`, author: 'Fixture author' } });
+      bookIds.push(reviewBook.id);
+      await auth(first.token, 'post', '/api/reviews').send({ bookId: reviewBook.id, rating: 4, reviewText: 'Nice' }).expect(200);
+      const ub = await prisma.userBook.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: reviewBook.id } } });
+      assert.ok(ub);
+      assert.equal(ub.status, null);
+      assert.equal(ub.userRating, 4);
+    });
+
+    await t.test('re-adding a book with status=null updates status while preserving rating and review', async () => {
+      await auth(first.token, 'post', '/api/user-books').send({ bookId: book.id, status: 'currently_reading' }).expect(200);
+      const ub = await prisma.userBook.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: book.id } } });
+      assert.equal(ub.status, 'currently_reading');
+      assert.equal(ub.userRating, 5);
+      const rev = await prisma.review.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: book.id } } });
+      assert.ok(rev);
+      assert.equal(rev.reviewText, 'Great book!');
+    });
+
+    await t.test('standalone Delete review deletes only the review leaving userRating and status intact', async () => {
+      const rev = await prisma.review.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: book.id } } });
+      await auth(first.token, 'delete', `/api/reviews/${rev.id}`).expect(200);
+      assert.equal(await prisma.review.findUnique({ where: { id: rev.id } }), null);
+      const ub = await prisma.userBook.findUnique({ where: { userId_bookId: { userId: first.userId, bookId: book.id } } });
+      assert.equal(ub.status, 'currently_reading');
+      assert.equal(ub.userRating, 5);
+    });
+
+    await t.test('DELETE /api/user-books/:bookId with unexpected query parameter returns 400', async () => {
+      await auth(first.token, 'delete', `/api/user-books/${book.id}?deleteReview=true`).expect(400);
     });
   });

@@ -90,7 +90,7 @@ model Review {
 model UserBook {
   userId     String        @map("user_id") @db.Uuid
   bookId     String        @map("book_id") @db.Uuid
-  status     ReadingStatus @default(want_to_read)
+  status     ReadingStatus?
   // Canonical user rating, including ratings without a written review.
   userRating Int?          @map("user_rating") @db.SmallInt
   createdAt  DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)

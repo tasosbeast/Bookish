@@ -47,7 +47,13 @@ export default function BookDetails() {
   if (book.loading && !book.data) return <div className="container page-space"><Loading /></div>;
   if (book.error && !book.data) return <div className="container page-space"><Link className="back-link" to="/">← Back to discover</Link><ErrorNotice error={book.error} retry={book.reload} /></div>;
   const data = book.data.data;
-  const personalData = personal.data && { ...personal.data.data, ...(removed.shelf && { shelf: null }), ...(removed.reviewId && { review: null }) };
+  const personalData = personal.data && {
+    ...personal.data.data,
+    ...(removed.shelf && {
+      shelf: personal.data.data.shelf ? { ...personal.data.data.shelf, status: null } : null,
+    }),
+    ...(removed.reviewId && { review: null }),
+  };
   const reviews = removed.reviewId ? { ...data.reviews, data: data.reviews.data.filter(review => review.id !== removed.reviewId) } : data.reviews;
   const bookStatus = book.loading ? 'Updating book and reviews…' : book.error ? 'Showing previously loaded book and reviews.' : null;
   const personalStatus = personal.loading ? 'Updating your reading data…' : personal.error && personalData ? 'Showing previously loaded reading data.' : null;

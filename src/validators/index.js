@@ -29,7 +29,7 @@ export const shelvesQuerySchema = z.object({ query: z.object({
 }).strict() });
 export const shelfSchema = z.object({ body: z.object({
   bookId: uuid,
-  status: z.enum(['want_to_read', 'currently_reading', 'read']).optional(),
+  status: z.enum(['want_to_read', 'currently_reading', 'read']).nullable().optional(),
   userRating: rating.nullable().optional(),
 }).strict().refine(v => v.status !== undefined || v.userRating !== undefined, 'Provide status or userRating') });
 export const reviewSchema = z.object({ body: z.object({
@@ -37,7 +37,7 @@ export const reviewSchema = z.object({ body: z.object({
 }).strict() });
 export const likeSchema = z.object({ params: z.object({ id: uuid }) });
 export const personalBookSchema = z.object({ params: z.object({ bookId: uuid }), query: z.object({}).strict() });
-export const removeShelfSchema = z.object({ params: z.object({ bookId: uuid }), query: z.object({ deleteReview: z.enum(['true', 'false']).optional() }).strict() });
+export const removeShelfSchema = personalBookSchema;
 
 const bioSchema = z.union([
   z.string().transform(s => s.trim()).pipe(z.string().max(500)).transform(s => (s === '' ? null : s)),

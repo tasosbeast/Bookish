@@ -49,7 +49,7 @@ test('PostgreSQL: authentication, search, rating synchronization and concurrent 
     const post = (index, route, body) => request(app).post(`/api/${route}`).auth(users[index].token, { type: 'bearer' }).send(body);
     const bookId = bookIds[0];
     await Promise.all([post(0, 'user-books', { bookId, status: 'read', userRating: 5 }).expect(200),
-      post(1, 'user-books', { bookId, userRating: 3 }).expect(200)]);
+      post(1, 'user-books', { bookId, status: 'want_to_read', userRating: 3 }).expect(200)]);
     let book = await prisma.book.findUnique({ where: { id: bookId } });
     assert.equal(Number(book.averageRating), 4);
     assert.equal(book.ratingsCount, 2);
@@ -63,7 +63,7 @@ test('PostgreSQL: authentication, search, rating synchronization and concurrent 
     book = await prisma.book.findUnique({ where: { id: bookId } });
     assert.equal(Number(book.averageRating), 2);
     assert.equal(book.ratingsCount, 1);
-    await post(1, 'user-books', { bookId: bookIds[1], userRating: 5 }).expect(200);
+    await post(1, 'user-books', { bookId: bookIds[1], status: 'want_to_read', userRating: 5 }).expect(200);
     await post(1, 'user-books', { bookId: bookIds[1], userRating: null }).expect(200);
     assert.equal((await prisma.book.findUnique({ where: { id: bookIds[1] } })).averageRating, null);
     const likeRequest = (index, method, id = reviewId) => request(app)[method](`/api/reviews/${id}/like`)

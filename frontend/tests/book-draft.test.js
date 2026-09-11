@@ -163,13 +163,16 @@ test('book forms preserve drafts through likes, review pages, shelf saves and fa
   await click('Save review'); await flush();
 
   let confirmResult = false;
-  dom.window.confirm = () => confirmResult;
+  dom.window.confirm = (msg) => {
+    assert.equal(msg, 'Remove this book from My Books?');
+    return confirmResult;
+  };
   await click('Remove from My Books');
   assert.deepEqual(deletions, ['/api/reviews/own']);
   
   confirmResult = true;
   await click('Remove from My Books');
-  assert.deepEqual(deletions, ['/api/reviews/own', `/api/user-books/${bookId}?deleteReview=true`]);
+  assert.deepEqual(deletions, ['/api/reviews/own', `/api/user-books/${bookId}`]);
   assert.ok(document.querySelector('.reading-form').textContent.includes('Add to my books'));
   await flush(true);
   assert.ok(document.querySelector('.reading-form').textContent.includes('Add to my books'));

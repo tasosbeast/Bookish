@@ -21,9 +21,17 @@ export async function saveShelf(userId, { bookId, status, userRating }) {
     if (userRating === null && await tx.review.findUnique({ where: key, select: { id: true } })) {
       throw new AppError(409, 'REVIEW_REQUIRES_RATING', 'Cannot clear a rating while a review exists');
     }
-    const changes = { ...(status !== undefined && { status }), ...(userRating !== undefined && { userRating }) };
-    const shelf = await tx.userBook.upsert({ where: key,
-      create: { userId, bookId, ...changes }, update: changes });
+    const updateData = {
+      ...(status !== undefined && { status }),
+      ...(userRating !== undefined && { userRating }),
+    };
+    const createData = {
+      userId,
+      bookId,
+      status: status !== undefined ? status : null,
+      ...(userRating !== undefined && { userRating }),
+    };
+    const shelf = await tx.userBook.upsert({ where: key, create: createData, update: updateData });
     if (userRating !== undefined) {
       if (userRating !== null) await tx.review.updateMany({ where: { userId, bookId }, data: { rating: userRating } });
       await refreshRating(tx, bookId);
@@ -31,19 +39,18 @@ export async function saveShelf(userId, { bookId, status, userRating }) {
     return shelf;
   });
 }
-export async function removeShelf(userId, bookId, deleteReview = false) {
+export async function removeShelf(userId, bookId) {
   return serializable(prisma, async tx => {
     await requireBook(tx, bookId);
     const key = { userId_bookId: { userId, bookId } };
     const shelf = await tx.userBook.findUnique({ where: key, select: { userRating: true } });
     if (!shelf) throw new AppError(404, 'SHELF_NOT_FOUND', 'This book is not in your books');
     const review = await tx.review.findUnique({ where: key, select: { id: true } });
-    if (review) {
-      if (!deleteReview) throw new AppError(409, 'REVIEW_BLOCKS_SHELF_REMOVAL', 'Remove your review before removing this book from My Books');
-      await tx.review.deleteMany({ where: { id: review.id, userId } });
+    if (shelf.userRating !== null || review) {
+      await tx.userBook.update({ where: key, data: { status: null } });
+    } else {
+      await tx.userBook.delete({ where: key });
     }
-    await tx.userBook.delete({ where: key });
-    if (shelf.userRating !== null) await refreshRating(tx, bookId);
     return { bookId, removed: true };
   });
 }
@@ -51,7 +58,12 @@ export async function saveReview(userId, { bookId, rating, reviewText }) {
   return serializable(prisma, async tx => {
     await requireBook(tx, bookId);
     const key = { userId_bookId: { userId, bookId } };
-    await tx.userBook.upsert({ where: key, create: { userId, bookId, userRating: rating }, update: { userRating: rating } });
+    const existing = await tx.userBook.findUnique({ where: key, select: { status: true } });
+    if (!existing) {
+      await tx.userBook.create({ data: { userId, bookId, status: null, userRating: rating } });
+    } else {
+      await tx.userBook.update({ where: key, data: { userRating: rating } });
+    }
     const text = reviewText === undefined ? {} : { reviewText };
     const review = await tx.review.upsert({ where: key, create: { userId, bookId, rating, ...text }, update: { rating, ...text } });
     await refreshRating(tx, bookId);
