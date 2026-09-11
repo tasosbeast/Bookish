@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken';
 import { randomUUID } from 'node:crypto';
 import { app } from '../src/app.js';
 import { prisma } from '../src/lib/prisma.js';
+import { refreshCookieOptions } from '../src/controllers/auth.js';
 import { signTokens, verifyToken } from '../src/services/tokens.js';
 import { bookFilter } from '../src/services/books.js';
 
@@ -43,37 +44,20 @@ test('auth endpoints enforce CSRF, validation and cookie security attributes', a
   assert.match(response.headers['set-cookie'][0], /SameSite=Strict/i);
 });
 
-test('production refresh cookies use HttpOnly, Secure, SameSite=None, and Path=/api/auth', async () => {
-  const originalEnv = process.env.NODE_ENV;
-  try {
-    process.env.NODE_ENV = 'production';
-    // Re-import app or auth controller module to test production cookieOptions
-    const { signup } = await import('../src/controllers/auth.js');
-    let cookieHeader = null;
-    const mockRes = {
-      cookie: (name, val, options) => {
-        assert.equal(name, 'bookish_refresh');
-        assert.equal(options.httpOnly, true);
-        assert.equal(options.secure, true);
-        assert.equal(options.sameSite, 'none');
-        assert.equal(options.path, '/api/auth');
-        cookieHeader = options;
-      },
-      clearCookie: (name, options) => {
-        assert.equal(name, 'bookish_refresh');
-        assert.equal(options.httpOnly, true);
-        assert.equal(options.secure, true);
-        assert.equal(options.sameSite, 'none');
-        assert.equal(options.path, '/api/auth');
-      },
-      status: function() { return this; },
-      json: function() { return this; },
-      end: function() { return this; },
-    };
-    // Verify cookieOptions has production settings
-    assert.ok(cookieHeader !== undefined);
-  } finally {
-    process.env.NODE_ENV = originalEnv;
+test('refreshCookieOptions produces correct attributes for production and development/test', () => {
+  assert.deepEqual(refreshCookieOptions('production'), {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'none',
+    path: '/api/auth',
+  });
+  for (const envName of ['development', 'test']) {
+    assert.deepEqual(refreshCookieOptions(envName), {
+      httpOnly: true,
+      secure: false,
+      sameSite: 'strict',
+      path: '/api/auth',
+    });
   }
 });
 test('protected routes reject missing and malformed bearer tokens', async () => {
