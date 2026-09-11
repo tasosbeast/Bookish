@@ -3,18 +3,18 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useResource } from '../hooks/useResource.js';
 import { Cover, Rating, Genres, Icon, EmptyState, ErrorNotice, Loading, Pagination, pageNumber } from '../components/shared.jsx';
 
-const genreOptions = [['fiction', 'Fiction'], ['fantasy', 'Fantasy'], ['science-fiction', 'Science Fiction'], ['mystery', 'Mystery'], ['romance', 'Romance'], ['history', 'History'], ['biography', 'Biography'], ['science', 'Science'], ['philosophy', 'Philosophy'], ['poetry', 'Poetry'], ['children', 'Children']];
-
 export default function Discover() {
   const [params, setParams] = useSearchParams();
   const q = params.get('q') ?? '';
   const genre = params.get('genre') ?? '';
   const author = params.get('author') ?? '';
   const page = pageNumber(params.get('page'));
+  const genresResource = useResource('/genres', 'none');
+  const fetchedGenres = genresResource.data?.data ?? [];
   const hasExplicitSort = params.has('sort') || params.has('order');
   const sort = params.get('sort') === 'publicationYear' ? 'publicationYear' : hasExplicitSort ? 'rating' : 'publicationYear';
   const order = params.get('order') === 'asc' ? 'asc' : 'desc';
-  const genreName = genreOptions.find(([slug]) => slug === genre)?.[1] ?? genre;
+  const genreName = fetchedGenres.find(g => g.slug === genre)?.name ?? genre;
   const [search, setSearch] = useState(q);
   useEffect(() => setSearch(q), [q]);
   const query = new URLSearchParams({ page, limit: 18, sort, order });
@@ -41,7 +41,7 @@ export default function Discover() {
       <form className="search-box" onSubmit={event => { event.preventDefault(); change({ q: search.trim() }); }} role="search"><Icon name="search" size={22} /><label className="sr-only" htmlFor="book-search">Search by title or author</label><input id="book-search" type="search" value={search} maxLength={200} onChange={event => setSearch(event.target.value)} placeholder="Search by title or author" /><button type="submit" className="button compact">Search</button></form>
       <div className="sort-box"><label htmlFor="book-sort">Sort by</label><select id="book-sort" value={`${sort}:${order}`} onChange={event => { const [sort, order] = event.target.value.split(':'); change({ sort, order }); }}><option value="rating:desc">Highest rated</option><option value="rating:asc">Lowest rated</option><option value="publicationYear:desc">Newest published</option><option value="publicationYear:asc">Oldest published</option></select></div>
     </section>
-    <nav className="genre-filters" aria-label="Browse by genre"><span className="genre-filter-label">Browse genres</span>{[['', 'All'], ...genreOptions].map(([slug, name]) => <button type="button" className={`genre-filter${genre === slug ? ' active' : ''}`} aria-pressed={genre === slug} key={slug || 'all'} onClick={() => change({ genre: slug })}>{name}</button>)}</nav>
+    <nav className="genre-filters" aria-label="Browse by genre"><span className="genre-filter-label">Browse genres</span>{[{ slug: '', name: 'All' }, ...fetchedGenres].map(({ slug, name }) => <button type="button" className={`genre-filter${genre === slug ? ' active' : ''}`} aria-pressed={genre === slug} key={slug || 'all'} onClick={() => change({ genre: slug })}>{name}</button>)}{genresResource.error && <span className="muted small" style={{ marginLeft: '8px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>Couldn’t load genres. <button type="button" className="text-button" onClick={genresResource.reload}>Retry</button></span>}</nav>
     <section aria-labelledby="discover-heading" className="catalog-section"><div className="section-heading"><div><p className="eyebrow">The bookshelf</p><h2 id="discover-heading">{author ? `Books by “${author}”` : q ? `Results for “${q}”` : 'Discover something good'}</h2></div>{resource.data && <span className="muted small" role="status" aria-live="polite">{resource.loading ? 'Updating results…' : resource.error ? 'Showing previous results.' : `${resource.data.pagination.total} ${resource.data.pagination.total === 1 ? 'book' : 'books'}`}</span>}</div>
       {q || genre || author ? <div className="filter-line">{q && <div className="filter-item"><span>Search</span><button type="button" className="active-filter" aria-label={`Clear search filter: ${q}`} onClick={() => { setSearch(''); change({ q: null }); }}><span className="active-filter-label">{q}</span><Icon name="close" size={14} /></button></div>}{genre && <div className="filter-item"><span>Genre</span><button type="button" className="active-filter" aria-label={`Clear genre filter: ${genreName}`} onClick={() => change({ genre: null })}><span className="active-filter-label">{genreName}</span><Icon name="close" size={14} /></button></div>}{author && <div className="filter-item"><span>Author</span><button type="button" className="active-filter" aria-label={`Clear author filter: ${author}`} onClick={() => change({ author: null })}><span className="active-filter-label">{author}</span><Icon name="close" size={14} /></button></div>}</div> : <p className="genre-hint">See something you like? Choose a genre label on a book to explore more.</p>}
       {resource.error && <ErrorNotice error={resource.error} retry={resource.reload} />}

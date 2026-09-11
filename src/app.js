@@ -10,6 +10,7 @@ import { prisma } from './lib/prisma.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { authRouter } from './routes/auth.js';
 import { booksRouter } from './routes/books.js';
+import { genresRouter } from './routes/genres.js';
 import { userBooksRouter } from './routes/user-books.js';
 import { reviewsRouter } from './routes/reviews.js';
 
@@ -36,6 +37,7 @@ app.get('/ready', async (req, res) => {
 });
 app.use('/api/auth', authRouter);
 app.use('/api/books', booksRouter);
+app.use('/api/genres', genresRouter);
 app.use('/api/user-books', userBooksRouter);
 app.use('/api/reviews', reviewsRouter);
 app.use((req, res, next) => next(new AppError(404, 'NOT_FOUND', 'Route not found')));

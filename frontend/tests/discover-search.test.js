@@ -23,7 +23,19 @@ test('Discover defaults to newest published and clearing search preserves explic
   });
   globalThis.fetch = async input => {
     const url = new URL(input);
-    if (url.pathname === '/api/auth/login') return Response.json({ user: { id: 'reader', username: 'reader' }, accessToken: `header.${btoa(JSON.stringify({ exp: Date.now() / 1000 + 900 }))}.signature`, expiresIn: 900 });
+    if (url.pathname === '/api/genres') return Response.json({ data: [
+      { id: '1', name: 'Fiction', slug: 'fiction' },
+      { id: '2', name: 'Fantasy', slug: 'fantasy' },
+      { id: '3', name: 'Science Fiction', slug: 'science-fiction' },
+      { id: '4', name: 'Mystery', slug: 'mystery' },
+      { id: '5', name: 'Romance', slug: 'romance' },
+      { id: '6', name: 'History', slug: 'history' },
+      { id: '7', name: 'Biography', slug: 'biography' },
+      { id: '8', name: 'Science', slug: 'science' },
+      { id: '9', name: 'Philosophy', slug: 'philosophy' },
+      { id: '10', name: 'Poetry', slug: 'poetry' },
+      { id: '11', name: 'Children', slug: 'children' },
+    ] });
     requests.push(url);
     return Response.json({ data: [{ id: 'book-id', title: 'A book', author: 'Jane Austen', coverImageUrl: null, averageRating: null, genres: [] }], pagination: { page: 2, limit: 18, total: 1, totalPages: 1 } });
   };

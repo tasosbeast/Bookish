@@ -67,6 +67,22 @@ const shelves = await shelvesResponse.json();
 
 ## Books
 
+`GET /api/genres`
+
+Public endpoint returning all genres currently assigned to at least one book, sorted deterministically by `name` ascending:
+
+```json
+{
+  "data": [
+    {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "name": "Fantasy",
+      "slug": "fantasy"
+    }
+  ]
+}
+```
+
 `GET /api/books?page=1&limit=20&genre=fantasy&author=Jane%20Austen&sort=rating&order=desc&q=hobbit`
 
 - `page`: 1–10000; `limit`: 1–100 (default 20).

@@ -25,6 +25,7 @@ test('Discover retains results through a filter refresh and failed retry path', 
   globalThis.fetch = input => {
     const url = new URL(input);
     if (url.pathname === '/api/auth/login') return Promise.resolve(response({ user: { id: 'reader', username: 'reader' }, accessToken: `header.${btoa(JSON.stringify({ exp: Date.now() / 1000 + 900 }))}.signature`, expiresIn: 900 }));
+    if (url.pathname === '/api/genres') return Promise.resolve(response({ data: [{ id: '1', name: 'Fiction', slug: 'fiction' }] }));
     return new Promise((resolve, reject) => pending.push({ url, resolve, reject }));
   };
   server = await createServer({ root: fileURLToPath(new URL('..', import.meta.url)), server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] } });
