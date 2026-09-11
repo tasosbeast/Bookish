@@ -82,11 +82,18 @@ test('Friends frontend: protection, tabs, reader suggestions, request flows, emp
     requests.push(`${method} ${url.toString()}`);
 
     if (url.pathname === '/api/auth/login') {
+      const payload = btoa(JSON.stringify({ sub: 'reader-1', exp: 2000000000 }));
       return Promise.resolve(jsonResponse({
         user: { id: 'reader-1', username: 'reader' },
-        accessToken: `header.${btoa(JSON.stringify({ exp: Date.now() / 1000 + 900 }))}.signature`,
+        accessToken: `header.${payload}.signature`,
         expiresIn: 900,
       }));
+    }
+    if (url.pathname === '/api/auth/refresh' || url.pathname === '/api/auth/me') {
+      return Promise.resolve(jsonResponse({ error: { code: 'UNAUTHORIZED', message: 'Not authenticated' } }, 401));
+    }
+    if (url.pathname.startsWith('/api/notifications')) {
+      return Promise.resolve(jsonResponse({ data: [], unreadCount: 0 }));
     }
     if (url.pathname === '/api/genres') {
       return Promise.resolve(jsonResponse({ data: [] }));
@@ -133,30 +140,38 @@ test('Friends frontend: protection, tabs, reader suggestions, request flows, emp
     optimizeDeps: { noDiscovery: true, include: [] },
   });
 
-  const { default: Friends } = await server.ssrLoadModule('/src/pages/Friends.jsx');
   ({ session } = await server.ssrLoadModule('/src/lib/api.js'));
+  const { useAuth } = await server.ssrLoadModule('/src/hooks/useAuth.js');
+  const { default: Layout } = await server.ssrLoadModule('/src/components/Layout.jsx');
+  const { default: Friends } = await server.ssrLoadModule('/src/pages/Friends.jsx');
   const { createElement: h, act } = await import('react');
   const { createRoot } = await import('react-dom/client');
   const { MemoryRouter, Routes, Route, Navigate, useLocation } = await import('react-router-dom');
 
   function RequireAuth({ children }) {
+    const auth = useAuth();
     const location = useLocation();
-    if (session.status === 'restoring') return h('div', null, 'Loading...');
-    if (!session.user) return h(Navigate, { to: `/login?next=${encodeURIComponent(location.pathname + location.search)}`, replace: true });
+    if (auth.status === 'restoring') return h('div', null, 'Loading...');
+    if (!auth.user) return h(Navigate, { to: `/login?next=${encodeURIComponent(location.pathname + location.search)}`, replace: true });
     return children;
   }
 
   root = createRoot(document.getElementById('root'));
 
+  // Initialize session state to guest before first render test
+  await session.initialize().catch(() => {});
+
   // 1. Unauthenticated navigation to /friends redirects to login
-  await act(async () => root.render(
-    h(MemoryRouter, { initialEntries: ['/friends'] },
-      h(Routes, null,
-        h(Route, { path: '/friends', element: h(RequireAuth, null, h(Friends)) }),
-        h(Route, { path: '/login', element: h('div', null, 'Log in page') })
+  await act(async () => {
+    root.render(
+      h(MemoryRouter, { key: 'step1', initialEntries: ['/friends'] },
+        h(Routes, null,
+          h(Route, { path: '/friends', element: h(RequireAuth, null, h(Friends)) }),
+          h(Route, { path: '/login', element: h('div', null, 'Log in page') })
+        )
       )
-    )
-  ));
+    );
+  });
   assert.ok(document.body.textContent.includes('Log in page'), 'Unauthenticated /friends redirects to login');
 
   // Authenticate user
@@ -165,9 +180,8 @@ test('Friends frontend: protection, tabs, reader suggestions, request flows, emp
   });
 
   // 2. Authenticated user sees Friends in main nav & navigation works
-  const { default: Layout } = await server.ssrLoadModule('/src/components/Layout.jsx');
   await act(async () => root.render(
-    h(MemoryRouter, { initialEntries: ['/'] },
+    h(MemoryRouter, { key: 'step2', initialEntries: ['/'] },
       h(Routes, null,
         h(Route, { element: h(Layout) },
           h(Route, { path: '/', element: h('div', null, 'Discover page') }),
@@ -182,7 +196,7 @@ test('Friends frontend: protection, tabs, reader suggestions, request flows, emp
 
   // 3. Render /friends page & Suggestions Tab
   await act(async () => root.render(
-    h(MemoryRouter, { initialEntries: ['/friends'] },
+    h(MemoryRouter, { key: 'step3', initialEntries: ['/friends'] },
       h(Routes, null,
         h(Route, { path: '/friends', element: h(Friends) })
       )
@@ -202,39 +216,60 @@ test('Friends frontend: protection, tabs, reader suggestions, request flows, emp
   postError = true;
   const addBtn = document.querySelector('.add-friend-button');
   assert.ok(addBtn, 'Contains Add Friend button');
-  await act(async () => addBtn.click());
+  await act(async () => {
+    addBtn.click();
+    await new Promise(r => setTimeout(r, 0));
+  });
   assert.ok(document.body.textContent.includes('Could not send friend request'), 'Shows local inline error on failure');
   assert.ok(document.body.textContent.includes('Reader_Maria'), 'Candidate remains visible on failure');
 
   // 5. Successful Add Friend interaction
   postError = false;
-  await act(async () => addBtn.click());
+  await act(async () => {
+    addBtn.click();
+    await new Promise(r => setTimeout(r, 0));
+  });
   assert.equal(friendPostCalls.length, 2, 'Calls POST /api/friends/requests');
   assert.deepEqual(friendPostCalls[1].body, { userId: 'cand-1' });
   assert.ok(!document.body.textContent.includes('Reader_Maria'), 'Removes candidate from list on success');
 
   // 6. Friends Tab
   const friendsTabBtn = document.getElementById('tab-friends');
-  await act(async () => friendsTabBtn.click());
+  await act(async () => {
+    friendsTabBtn.click();
+    await new Promise(r => setTimeout(r, 0));
+  });
   assert.ok(document.body.textContent.includes('Friend_Alex'), 'Renders accepted friend Friend_Alex');
   const removeBtn = document.querySelector('.remove-friend-button');
   assert.ok(removeBtn, 'Contains Remove friend button');
 
-  await act(async () => removeBtn.click());
+  await act(async () => {
+    removeBtn.click();
+    await new Promise(r => setTimeout(r, 0));
+  });
   assert.ok(friendDeleteCalls.some(c => c.url.includes('/api/friends/f-1')), 'Calls DELETE /api/friends/f-1');
 
   // 7. Requests Tab (Incoming & Sent)
   const requestsTabBtn = document.getElementById('tab-requests');
-  await act(async () => requestsTabBtn.click());
+  await act(async () => {
+    requestsTabBtn.click();
+    await new Promise(r => setTimeout(r, 0));
+  });
   assert.ok(document.body.textContent.includes('Incoming_Sam'), 'Renders incoming request Incoming_Sam');
   assert.ok(document.body.textContent.includes('Sent_Taylor'), 'Renders sent request Sent_Taylor');
 
   const acceptBtn = document.querySelector('.accept-request-button');
-  await act(async () => acceptBtn.click());
+  await act(async () => {
+    acceptBtn.click();
+    await new Promise(r => setTimeout(r, 0));
+  });
   assert.ok(friendPostCalls.some(c => c.url.includes('/api/friends/requests/req-in-1/accept')), 'Calls accept API endpoint');
 
   const cancelBtn = document.querySelector('.cancel-request-button');
-  await act(async () => cancelBtn.click());
+  await act(async () => {
+    cancelBtn.click();
+    await new Promise(r => setTimeout(r, 0));
+  });
   assert.ok(friendDeleteCalls.some(c => c.url.includes('/api/friends/requests/req-sent-1')), 'Calls cancel/delete request API endpoint');
 
   // 8. Empty state for insufficient reading history (meta.personalized === false)
@@ -244,7 +279,10 @@ test('Friends frontend: protection, tabs, reader suggestions, request flows, emp
   };
 
   const suggestionsTabBtn = document.getElementById('tab-suggestions');
-  await act(async () => suggestionsTabBtn.click());
+  await act(async () => {
+    suggestionsTabBtn.click();
+    await new Promise(r => setTimeout(r, 0));
+  });
   assert.ok(document.body.textContent.includes('We need a little more reading history first.'), 'Renders insufficient reading history title');
   assert.ok(document.querySelector('a[href="/my-books"]'), 'Renders link to My Books');
 });

@@ -160,6 +160,10 @@ export async function getFriendSuggestions(userId, { limit = 12 } = {}) {
 
     const finalScore = 0.60 * genreSimilarity + 0.25 * ratingSignal + 0.15 * sharedBookSignal;
 
+    if (finalScore <= 0) {
+      continue;
+    }
+
     const sharedGenres = [];
     for (const g of Object.keys(userGenreWeights)) {
       if (candGenreWeights[g]) {
@@ -173,27 +177,29 @@ export async function getFriendSuggestions(userId, { limit = 12 } = {}) {
     const topSharedGenreNames = sharedGenres.slice(0, 2).map(g => g.name);
 
     let reason;
-    if (topSharedGenreNames.length > 0) {
+    if (genreSimilarity > 0 && topSharedGenreNames.length > 0) {
       reason = {
         type: 'genres',
         genres: topSharedGenreNames,
         commonRatedBooks: commonRatedCount,
         sharedBooks: sharedBookCount,
       };
-    } else if (commonRatedCount > 0) {
+    } else if (ratingSignal > 0 && commonRatedCount > 0) {
       reason = {
         type: 'ratings',
         genres: [],
         commonRatedBooks: commonRatedCount,
         sharedBooks: sharedBookCount,
       };
-    } else {
+    } else if (sharedBookCount > 0) {
       reason = {
         type: 'shared_books',
         genres: [],
-        commonRatedBooks: 0,
+        commonRatedBooks: commonRatedCount,
         sharedBooks: sharedBookCount,
       };
+    } else {
+      continue;
     }
 
     scoredCandidates.push({

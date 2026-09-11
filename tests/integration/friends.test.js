@@ -6,6 +6,8 @@ import request from 'supertest';
 import { app } from '../../src/app.js';
 import { prisma } from '../../src/lib/prisma.js';
 
+import { signTokens, digest } from '../../src/services/tokens.js';
+
 test('PostgreSQL: Friends v1 lifecycle, validations, authorization, and similarity algorithm',
   { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async t => {
     const tag = randomUUID().replaceAll('-', '').slice(0, 10);
@@ -22,6 +24,9 @@ test('PostgreSQL: Friends v1 lifecycle, validations, authorization, and similari
           ],
         },
       });
+      if (userIds.length) {
+        await prisma.refreshSession.deleteMany({ where: { userId: { in: userIds } } });
+      }
       if (bookIds.length) {
         await prisma.book.deleteMany({ where: { id: { in: bookIds } } });
       }
@@ -35,13 +40,21 @@ test('PostgreSQL: Friends v1 lifecycle, validations, authorization, and similari
     });
 
     const signup = async suffix => {
-      const res = await request(app).post('/api/auth/signup').set('X-Bookish-CSRF', '1').send({
-        username: `fr${tag}${suffix}`,
-        email: `fr${tag}${suffix}@example.com`,
-        password: 'friends test password',
-      }).expect(201);
-      userIds.push(res.body.user.id);
-      return { token: res.body.accessToken, userId: res.body.user.id, username: res.body.user.username };
+      const user = await prisma.user.create({
+        data: {
+          username: `fr${tag}${suffix}`,
+          email: `fr${tag}${suffix}@example.com`,
+          passwordHash: 'friends-test-password-hash',
+        },
+      });
+      userIds.push(user.id);
+      const sessionId = randomUUID();
+      const expiresAt = new Date(Date.now() + 86400000);
+      const { accessToken } = signTokens(user.id, sessionId, expiresAt);
+      await prisma.refreshSession.create({
+        data: { id: sessionId, userId: user.id, expiresAt, tokenHash: digest(`dummy-${sessionId}`) },
+      });
+      return { token: accessToken, userId: user.id, username: user.username };
     };
 
     const auth = (reader, method, path) => request(app)[method](path).auth(reader.token, { type: 'bearer' });
@@ -225,4 +238,125 @@ test('PostgreSQL: Friends v1 lifecycle, validations, authorization, and similari
     const suggE2 = await auth(userE, 'get', '/api/friends/suggestions').expect(200);
     assert.equal(suggE2.body.meta.personalized, true);
     assert.equal(suggE2.body.meta.eligibleBooks, 5);
+
+    // =========================================================
+    // EXTENDED REGRESSION COVERAGE (A, B, C, D)
+    // =========================================================
+
+    // A. ZERO-SIGNAL EXCLUSION
+    const sciFi = await prisma.genre.create({ data: { name: `Sci-Fi ${tag}`, slug: `sci-fi-${tag}` } });
+    genreIds.push(sciFi.id);
+
+    const userZero = await signup('zero');
+    const booksZero = await Promise.all([
+      createBook('SciFi Book 1', [sciFi]),
+      createBook('SciFi Book 2', [sciFi]),
+      createBook('SciFi Book 3', [sciFi]),
+      createBook('SciFi Book 4', [sciFi]),
+      createBook('SciFi Book 5', [sciFi]),
+    ]);
+    for (const b of booksZero) {
+      await auth(userZero, 'post', '/api/user-books').send({ bookId: b.id, status: 'read' }).expect(200);
+    }
+
+    const suggAAfterZero = await auth(userA, 'get', '/api/friends/suggestions').expect(200);
+    const candZero = suggAAfterZero.body.data.find(s => s.user.id === userZero.userId);
+    assert.equal(candZero, undefined, 'Zero-signal reader (no genre overlap, no shared books, no shared ratings) is excluded');
+
+    // B. RELATIONSHIP EXCLUSIONS (accepted, pending outgoing, pending incoming)
+    const [userRelPendingOut, userRelPendingIn, userRelAccepted] = await Promise.all(['relout', 'relin', 'relacc'].map(signup));
+    const booksRel = await Promise.all([
+      createBook('Rel Book 1', [thriller]),
+      createBook('Rel Book 2', [thriller]),
+      createBook('Rel Book 3', [mystery]),
+      createBook('Rel Book 4', [mystery]),
+      createBook('Rel Book 5', [thriller, mystery]),
+    ]);
+
+    for (const u of [userRelPendingOut, userRelPendingIn, userRelAccepted]) {
+      for (const b of booksRel) {
+        await auth(u, 'post', '/api/user-books').send({ bookId: b.id, status: 'read' }).expect(200);
+      }
+    }
+
+    // Verify all 3 would be suggested initially
+    const suggBeforeRel = await auth(userA, 'get', '/api/friends/suggestions').expect(200);
+    assert.ok(suggBeforeRel.body.data.some(s => s.user.id === userRelPendingOut.userId));
+    assert.ok(suggBeforeRel.body.data.some(s => s.user.id === userRelPendingIn.userId));
+    assert.ok(suggBeforeRel.body.data.some(s => s.user.id === userRelAccepted.userId));
+
+    // A sends pending request to userRelPendingOut
+    await auth(userA, 'post', '/api/friends/requests').send({ userId: userRelPendingOut.userId }).expect(201);
+
+    // userRelPendingIn sends pending request to A
+    await auth(userRelPendingIn, 'post', '/api/friends/requests').send({ userId: userA.userId }).expect(201);
+
+    // A sends request to userRelAccepted and userRelAccepted accepts
+    const reqAcc = await auth(userA, 'post', '/api/friends/requests').send({ userId: userRelAccepted.userId }).expect(201);
+    await auth(userRelAccepted, 'post', `/api/friends/requests/${reqAcc.body.data.id}/accept`).expect(200);
+
+    // Suggestions for A must now EXCLUDE all three
+    const suggAfterRel = await auth(userA, 'get', '/api/friends/suggestions').expect(200);
+    const suggIdsAfterRel = suggAfterRel.body.data.map(s => s.user.id);
+    assert.ok(!suggIdsAfterRel.includes(userRelPendingOut.userId), 'Excludes pending outgoing request');
+    assert.ok(!suggIdsAfterRel.includes(userRelPendingIn.userId), 'Excludes pending incoming request');
+    assert.ok(!suggIdsAfterRel.includes(userRelAccepted.userId), 'Excludes accepted friend');
+
+    // C. RATING SIGNAL
+    const [userRatingHigh, userRatingLow] = await Promise.all(['rhigh', 'rlow'].map(signup));
+    const booksRatingTest = await Promise.all([
+      createBook('Rate Book 1', [thriller]),
+      createBook('Rate Book 2', [thriller]),
+      createBook('Rate Book 3', [thriller]),
+      createBook('Rate Book 4', [thriller]),
+      createBook('Rate Book 5', [thriller]),
+    ]);
+
+    // User A rates them all 5
+    for (const b of booksRatingTest) {
+      await auth(userA, 'post', '/api/user-books').send({ bookId: b.id, status: 'read', userRating: 5 }).expect(200);
+    }
+    // High agreement candidate rates them all 5
+    for (const b of booksRatingTest) {
+      await auth(userRatingHigh, 'post', '/api/user-books').send({ bookId: b.id, status: 'read', userRating: 5 }).expect(200);
+    }
+    // Low agreement candidate rates them all 1
+    for (const b of booksRatingTest) {
+      await auth(userRatingLow, 'post', '/api/user-books').send({ bookId: b.id, status: 'read', userRating: 1 }).expect(200);
+    }
+
+    const suggRatingRes = await auth(userA, 'get', '/api/friends/suggestions').expect(200);
+    const idxHigh = suggRatingRes.body.data.findIndex(s => s.user.id === userRatingHigh.userId);
+    const idxLow = suggRatingRes.body.data.findIndex(s => s.user.id === userRatingLow.userId);
+
+    assert.ok(idxHigh !== -1, 'High rating agreement candidate is suggested');
+    assert.ok(idxLow !== -1, 'Low rating agreement candidate is suggested');
+    assert.ok(idxHigh < idxLow, 'Similar ratings improve ranking compared to strongly different ratings');
+
+    // D. DETERMINISTIC ORDERING
+    // Create tied candidates T1 and T2 with identical books and genre profile
+    const [userTie1, userTie2] = await Promise.all(['tie1', 'tie2'].map(signup));
+    const booksTie = await Promise.all([
+      createBook('Tie Book 1', [mystery]),
+      createBook('Tie Book 2', [mystery]),
+      createBook('Tie Book 3', [mystery]),
+      createBook('Tie Book 4', [mystery]),
+      createBook('Tie Book 5', [mystery]),
+    ]);
+
+    for (const b of booksTie) {
+      await auth(userTie1, 'post', '/api/user-books').send({ bookId: b.id, status: 'read' }).expect(200);
+      await auth(userTie2, 'post', '/api/user-books').send({ bookId: b.id, status: 'read' }).expect(200);
+    }
+
+    const suggTieRes = await auth(userA, 'get', '/api/friends/suggestions').expect(200);
+    const idxT1 = suggTieRes.body.data.findIndex(s => s.user.id === userTie1.userId);
+    const idxT2 = suggTieRes.body.data.findIndex(s => s.user.id === userTie2.userId);
+
+    assert.ok(idxT1 !== -1 && idxT2 !== -1, 'Tied candidates are returned');
+    if (userTie1.username < userTie2.username) {
+      assert.ok(idxT1 < idxT2, 'Tied candidates ordered by username ASC');
+    } else {
+      assert.ok(idxT2 < idxT1, 'Tied candidates ordered by username ASC');
+    }
   });
