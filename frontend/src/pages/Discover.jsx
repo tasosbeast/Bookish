@@ -3,6 +3,48 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth.js';
 import { useResource } from '../hooks/useResource.js';
 import { Cover, Rating, Genres, Icon, EmptyState, ErrorNotice, Loading, Pagination, pageNumber } from '../components/shared.jsx';
+import { api } from '../lib/api.js';
+import { messageFor } from '../lib/http.js';
+
+function TopPickAction({ bookId, onSaved }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function handleAdd() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api('/user-books', {
+        method: 'POST',
+        auth: 'required',
+        body: { bookId, status: 'want_to_read' },
+      });
+      onSaved();
+    } catch (err) {
+      setError(err);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="top-pick-action-wrap">
+      <button
+        type="button"
+        className="button secondary compact top-pick-action"
+        disabled={busy}
+        onClick={handleAdd}
+      >
+        {busy ? 'Adding…' : '+ Want to Read'}
+      </button>
+      {error && (
+        <span className="top-pick-action-error muted small" role="alert">
+          {messageFor(error)}
+        </span>
+      )}
+    </div>
+  );
+}
 
 export default function Discover() {
   const auth = useAuth();
@@ -93,6 +135,7 @@ export default function Discover() {
                         : `Because you often rate ${book.reason.label} highly`}
                     </p>
                   )}
+                  <TopPickAction bookId={book.id} onSaved={topPicksResource.reload} />
                 </div>
               </article>
             ))}

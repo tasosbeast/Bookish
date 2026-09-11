@@ -67,10 +67,20 @@ test('Top Picks frontend: rendering rules, states, filters, and error isolation'
 
   let topPicksError = false;
 
-  globalThis.fetch = input => {
+  let userBooksCalls = [];
+  let userBooksError = false;
+
+  globalThis.fetch = (input, options = {}) => {
     const url = new URL(input);
     requests.push(url.toString());
 
+    if (url.pathname === '/api/user-books') {
+      userBooksCalls.push({ input: input.toString(), options, body: options.body ? JSON.parse(options.body) : null });
+      if (userBooksError) {
+        return Promise.resolve(jsonResponse({ error: { code: 'SAVE_FAILED', message: 'Could not save book' } }, 400));
+      }
+      return Promise.resolve(jsonResponse({ data: { id: 'ub-1', status: 'want_to_read' } }));
+    }
     if (url.pathname === '/api/auth/login') {
       return Promise.resolve(jsonResponse({
         user: { id: 'reader-1', username: 'reader' },
@@ -151,6 +161,61 @@ test('Top Picks frontend: rendering rules, states, filters, and error isolation'
   // Click recommendation links to /books/rec-1
   const recLink = document.querySelector('a[href="/books/rec-1"]');
   assert.ok(recLink, 'Recommendation item links to /books/rec-1');
+
+  // Verify compact "Want to Read" actions on Top Picks cards
+  const actionButtons = document.querySelectorAll('.top-pick-action');
+  assert.equal(actionButtons.length, 2, 'Each Top Picks card renders a Want to Read action');
+  assert.equal(actionButtons[0].textContent, '+ Want to Read', 'Action has + Want to Read text');
+
+  // Test Failed Save Path
+  userBooksError = true;
+  userBooksCalls = [];
+  await act(async () => actionButtons[0].click());
+
+  assert.equal(userBooksCalls.length, 1, 'Calls /api/user-books on click');
+  assert.equal(userBooksCalls[0].options.method, 'POST');
+  assert.deepEqual(userBooksCalls[0].body, { bookId: 'rec-1', status: 'want_to_read' });
+  assert.ok(document.body.textContent.includes('Recommended Book 1'), 'Failed save leaves recommendation visible');
+  assert.ok(document.body.textContent.includes('Could not save book'), 'Failed save shows local error notice');
+
+  // Test Successful Save Path
+  userBooksError = false;
+  userBooksCalls = [];
+  topPicksResponseData = {
+    data: [
+      {
+        id: 'rec-2',
+        title: 'Recommended Book 2',
+        author: 'Another Author',
+        coverImageUrl: null,
+        averageRating: 4.2,
+        genres: [{ id: 'g1', name: 'Thriller', slug: 'thriller' }],
+        reason: { type: 'genre', label: 'Thriller' },
+      },
+      {
+        id: 'rec-3',
+        title: 'Recommended Book 3',
+        author: 'Third Author',
+        coverImageUrl: null,
+        averageRating: 4.8,
+        genres: [{ id: 'g1', name: 'Thriller', slug: 'thriller' }],
+        reason: { type: 'author', label: 'Third Author' },
+      },
+    ],
+    meta: { personalized: true, ratedBooks: 5, minimumRatings: 3 },
+  };
+
+  const actionBtnRec1 = document.querySelectorAll('.top-pick-action')[0];
+  let clickPromise;
+  await act(async () => {
+    clickPromise = actionBtnRec1.click();
+  });
+  await clickPromise;
+
+  assert.equal(userBooksCalls.length, 1, 'Calls /api/user-books on retry/successful save');
+  assert.deepEqual(userBooksCalls[0].body, { bookId: 'rec-1', status: 'want_to_read' });
+  assert.ok(!document.body.textContent.includes('Recommended Book 1'), 'Saved recommendation is removed / refetched');
+  assert.ok(document.body.textContent.includes('Recommended Book 3'), 'New recommendation fills the slot after refetch');
 
   // 3. Search / Filter active -> Top Picks section is NOT rendered and not fetched
   requests.length = 0;
