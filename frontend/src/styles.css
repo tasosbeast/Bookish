@@ -230,3 +230,29 @@
   .my-books-page .shelf-cover { width: 88px; }
   .my-books-page .shelf-personal { grid-column: 2; margin: 0; min-width: 0; }
 }
+
+.friends-page { padding-block: 55px 70px; }
+.reader-cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; margin-top: 24px; }
+.reader-card { background: #fffef9; border: 1px solid #dfe4d6; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; justify-content: space-between; gap: 14px; box-shadow: 0 4px 16px rgba(47, 66, 38, 0.04); }
+.reader-card-header { display: flex; align-items: center; gap: 14px; }
+.reader-avatar { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+.reader-avatar-placeholder { width: 44px; height: 44px; border-radius: 50%; background: var(--color-paper); color: var(--color-leaf); display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 18px; flex-shrink: 0; }
+.reader-info { flex: 1; min-width: 0; }
+.reader-info h3 { font-size: 16px; margin: 0; overflow-wrap: anywhere; }
+.reader-bio { font-size: 12px; color: #687066; margin-top: 3px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.reader-card-reason { background: #f4f6ef; border-radius: 8px; padding: 10px 12px; font-size: 12px; color: #425239; }
+.reason-text { margin: 0; line-height: 1.4; }
+.secondary-overlap { display: block; margin-top: 4px; font-size: 11px; }
+.reader-card-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: auto; }
+.reader-card-actions.row-actions { display: flex; gap: 8px; }
+.add-friend-button { font-size: 12px; }
+.reader-error { color: #894a32; font-size: 11px; margin-top: 4px; width: 100%; }
+.requests-tab-container { margin-top: 24px; }
+.section-title { font-size: 18px; margin-bottom: 12px; }
+
+@media (max-width: 760px) {
+  .friends-page { padding-top: 35px; }
+  .reader-cards-grid { grid-template-columns: 1fr; gap: 16px; }
+  .add-friend-button, .accept-request-button, .decline-request-button, .remove-friend-button, .cancel-request-button { min-height: 44px; }
+}
+

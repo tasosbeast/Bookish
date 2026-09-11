@@ -296,4 +296,38 @@ Returns personalized book recommendations calculated in-memory from the user's f
 - **Genre & Author Signal**: 5-star ratings add +2 genre points and +3 author points; 4-star ratings add +1 genre point and +2 author points; 3-star ratings add 0 points; 1-2 star ratings add 0 genre points (low ratings do not globally suppress genres) and penalty points to the specific author (-2 for 2-star, -3 for 1-star).
 - **Minimum Signal**: Requires at least 3 rated books (`ratedBooks >= 3`). If fewer than 3 rated books exist, returns `data: []` with `meta.personalized: false`.
 
+## Friends
+
+All friends routes require `Authorization: Bearer <accessToken>`. Responses use `Cache-Control: no-store`.
+
+`GET /api/friends/suggestions?limit=12`
+
+Returns personalized reader suggestions based on genre profile similarity, rating agreement, and shared reading history. `limit` is an optional integer from 1 to 24 (default 12). Requires at least 5 eligible taste books (`status === "read"`, `status === "currently_reading"`, or `userRating != null`). If fewer than 5 eligible books exist, returns `data: []` with `meta.personalized: false`.
+
+`GET /api/friends`
+
+Returns list of accepted friends for the authenticated user.
+
+`GET /api/friends/requests`
+
+Returns `{ "data": { "incoming": [...], "sent": [...] } }` listing pending incoming and sent friend requests.
+
+`POST /api/friends/requests`
+
+Body: `{ "userId": "uuid" }`
+Sends a friend request to the target user. Returns 201. Self-requests, nonexistent users, duplicate pending requests, or existing friends return 400/404/409 errors.
+
+`POST /api/friends/requests/:id/accept`
+
+Only the recipient of a pending friend request may accept it. Marks status as `accepted`.
+
+`DELETE /api/friends/requests/:id`
+
+Cancels a sent pending request or declines an incoming pending request.
+
+`DELETE /api/friends/:id`
+
+Removes an accepted friendship between the authenticated user and the target friend.
+
+
 

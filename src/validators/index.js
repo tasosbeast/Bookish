@@ -92,5 +92,32 @@ export const topPicksSchema = z.object({
   }).strict(),
 });
 
+export const friendSuggestionsSchema = z.object({
+  query: z.object({
+    limit: z.coerce.number().int().min(1).max(24).default(12),
+  }).strict(),
+});
+
+export const sendFriendRequestSchema = z.object({
+  body: z.object({
+    userId: uuid,
+  }).strict(),
+});
+
+export const friendRequestIdSchema = z.object({
+  params: z.object({ id: uuid }),
+  query: z.object({}).strict(),
+});
+
+export const removeFriendSchema = z.object({
+  params: z.object({ id: uuid }),
+  query: z.object({}).strict(),
+});
+
+export const listFriendsSchema = z.object({
+  query: z.object({}).strict(),
+});
+
+
 
 

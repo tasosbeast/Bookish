@@ -19,7 +19,7 @@ export default function Layout() {
     <a href="#main" className="skip-link">Skip to content</a>
     <header className="site-header"><div className="header-inner">
       <Link to="/" className="brand" aria-label="Bookish home"><Icon size={29} /><span>bookish<span className="brand-dot">.</span></span></Link>
-      <nav className="main-nav" aria-label="Main navigation"><NavLink to="/" end>Discover</NavLink><NavLink to="/my-books">My books</NavLink></nav>
+      <nav className="main-nav" aria-label="Main navigation"><NavLink to="/" end>Discover</NavLink><NavLink to="/my-books">My books</NavLink>{auth.user && <NavLink to="/friends">Friends</NavLink>}</nav>
       <div className="account-nav">{auth.status === 'restoring' ? <span className="muted small">Opening your bookshelf…</span> : auth.user ? <>
         <NotificationBell userId={auth.user.id} />
         <Link className="reader-name" to="/account" title="View account"><span className="avatar">{auth.user.username.slice(0, 1).toUpperCase()}</span><span>{auth.user.username}</span></Link>

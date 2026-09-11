@@ -7,6 +7,7 @@ import BookDetails from './pages/BookDetails.jsx';
 import MyBooks from './pages/MyBooks.jsx';
 import Account from './pages/Account.jsx';
 import AuthPage from './pages/AuthPage.jsx';
+import Friends from './pages/Friends.jsx';
 
 function RequireAuth({ children }) {
   const auth = useAuth();
@@ -17,5 +18,5 @@ function RequireAuth({ children }) {
 }
 
 export default function App() {
-  return <BrowserRouter><Routes><Route element={<Layout />}><Route index element={<Discover />} /><Route path="books/:id" element={<BookDetails />} /><Route path="my-books" element={<RequireAuth><MyBooks /></RequireAuth>} /><Route path="account" element={<RequireAuth><Account /></RequireAuth>} /><Route path="login" element={<AuthPage key="login" />} /><Route path="signup" element={<AuthPage key="signup" signup />} /><Route path="*" element={<div className="container"><EmptyState title="This page has turned">Use Discover to find your way back to the books.</EmptyState></div>} /></Route></Routes></BrowserRouter>;
+  return <BrowserRouter><Routes><Route element={<Layout />}><Route index element={<Discover />} /><Route path="books/:id" element={<BookDetails />} /><Route path="my-books" element={<RequireAuth><MyBooks /></RequireAuth>} /><Route path="friends" element={<RequireAuth><Friends /></RequireAuth>} /><Route path="account" element={<RequireAuth><Account /></RequireAuth>} /><Route path="login" element={<AuthPage key="login" />} /><Route path="signup" element={<AuthPage key="signup" signup />} /><Route path="*" element={<div className="container"><EmptyState title="This page has turned">Use Discover to find your way back to the books.</EmptyState></div>} /></Route></Routes></BrowserRouter>;
 }

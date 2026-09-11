@@ -32,6 +32,9 @@ model User {
   sessions              RefreshSession[]
   notificationsReceived Notification[]   @relation("NotificationRecipient")
   notificationsActed    Notification[]   @relation("NotificationActor")
+  friendshipsAsUserA     Friendship[]     @relation("FriendshipUserA")
+  friendshipsAsUserB     Friendship[]     @relation("FriendshipUserB")
+  friendshipsRequestedBy Friendship[]     @relation("FriendshipRequestedBy")
 
   @@map("users")
 }
@@ -165,3 +168,30 @@ model Notification {
   @@index([reviewId])
   @@map("notifications")
 }
+
+enum FriendshipStatus {
+  pending
+  accepted
+}
+
+model Friendship {
+  id            String           @id @default(uuid()) @db.Uuid
+  userAId       String           @map("user_a_id") @db.Uuid
+  userBId       String           @map("user_b_id") @db.Uuid
+  requestedById String           @map("requested_by_id") @db.Uuid
+  status        FriendshipStatus @default(pending)
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  acceptedAt    DateTime?        @map("accepted_at") @db.Timestamptz(3)
+
+  userA       User @relation("FriendshipUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB       User @relation("FriendshipUserB", fields: [userBId], references: [id], onDelete: Cascade)
+  requestedBy User @relation("FriendshipRequestedBy", fields: [requestedById], references: [id], onDelete: Cascade)
+
+  @@unique([userAId, userBId])
+  @@index([userAId, status])
+  @@index([userBId, status])
+  @@index([requestedById])
+  @@map("friendships")
+}
+
