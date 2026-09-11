@@ -148,7 +148,15 @@ test('book forms preserve drafts through likes, review pages, shelf saves and fa
   await click('Save changes'); await flush(); preserved();
   assert.equal(reviewForm.querySelector('select').value, '3', 'clean review rating follows a saved shelf');
 
+  let confirmDialogMessage = '';
+  dom.window.confirm = (msg) => {
+    confirmDialogMessage = msg;
+    return true;
+  };
+  assert.ok(document.body.textContent.includes('Deleting your review keeps your rating.'));
   await click('Delete review');
+  assert.equal(confirmDialogMessage, 'Delete your review? Your rating will remain.');
+  assert.ok(document.body.textContent.includes('Your review has been deleted. Your rating remains.'));
   assert.deepEqual(deletions, ['/api/reviews/own']);
   assert.equal(document.querySelector('.review-form legend').textContent, 'What stayed with you?');
   assert.equal(document.querySelector('.review-form textarea').value, '');
