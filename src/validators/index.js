@@ -25,6 +25,7 @@ export const bookSchema = z.object({ params: z.object({ id: uuid }), query: z.ob
 export const shelvesQuerySchema = z.object({ query: z.object({
   ...pagination,
   status: z.enum(['want_to_read', 'currently_reading', 'read']).optional(),
+  q: z.string().trim().min(1).max(200).optional(),
 }).strict() });
 export const shelfSchema = z.object({ body: z.object({
   bookId: uuid,

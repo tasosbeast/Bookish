@@ -16,8 +16,17 @@ export async function personalBook(userId, bookId) {
   }, { isolationLevel: 'RepeatableRead' });
 }
 
-export async function listShelves(userId, { status, page, limit }) {
-  const where = { userId, ...(status !== undefined && { status }) };
+export async function listShelves(userId, { status, q, page, limit }) {
+  const search = q?.replace(/[\\%_]/g, '\\$&');
+  const where = {
+    userId,
+    ...(status !== undefined && { status }),
+    ...(search && {
+      book: {
+        OR: ['title', 'author'].map(field => ({ [field]: { contains: search, mode: 'insensitive' } })),
+      },
+    }),
+  };
   const [entries, total] = await prisma.$transaction([
     prisma.userBook.findMany({ where, skip: (page - 1) * limit, take: limit,
       orderBy: [{ updatedAt: 'desc' }, { bookId: 'asc' }],

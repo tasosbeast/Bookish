@@ -117,9 +117,9 @@ Like states are fetched in one query restricted to the current reader and return
 
 All following routes require `Authorization: Bearer <accessToken>`. Successful operations return 200, including an already-satisfied like/unlike request.
 
-`GET /api/user-books?status=read&page=1&limit=20`
+`GET /api/user-books?status=read&q=dune&page=1&limit=20`
 
-Returns only the user identified by the verified access token. `status` is optional and accepts `want_to_read`, `currently_reading` or `read`. `page` is 1–10000 (default 1); `limit` is 1–100 (default 20). Entries sort by `updatedAt` descending, then `bookId` ascending, including when timestamps tie. Count and page share a repeatable-read snapshot. Unknown parameters, including a caller-supplied `userId`, return 400. An empty or out-of-range page returns an empty `data` array with accurate pagination metadata.
+Returns only the user identified by the verified access token. `status` is optional and accepts `want_to_read`, `currently_reading` or `read`. `q` is an optional trimmed search string (1–200 characters) that filters entries by literal case-insensitive substring match on book title or author. `page` is 1–10000 (default 1); `limit` is 1–100 (default 20). Entries sort by `updatedAt` descending, then `bookId` ascending, including when timestamps tie. Count and page share a repeatable-read snapshot. Unknown parameters, including a caller-supplied `userId`, return 400. An empty or out-of-range page returns an empty `data` array with accurate pagination metadata.
 
 ```json
 {
