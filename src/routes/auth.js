@@ -4,7 +4,7 @@ import * as controller from '../controllers/auth.js';
 import { validate } from '../middleware/validate.js';
 import { requireCsrf } from '../middleware/csrf.js';
 import { requireAuth } from '../middleware/auth.js';
-import { signupSchema, loginSchema } from '../validators/index.js';
+import { signupSchema, loginSchema, updateProfileSchema } from '../validators/index.js';
 
 export const authRouter = Router();
 const message = { error: { code: 'RATE_LIMITED', message: 'Too many attempts; try again later' } };
@@ -12,6 +12,7 @@ const credentialsLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standa
 const sessionLimit = rateLimit({ windowMs: 60 * 1000, limit: 30, standardHeaders: 'draft-8', legacyHeaders: false, message });
 authRouter.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 authRouter.get('/me', requireAuth, controller.me);
+authRouter.patch('/me', requireAuth, sessionLimit, validate(updateProfileSchema), controller.updateProfile);
 authRouter.post('/signup', credentialsLimit, requireCsrf, validate(signupSchema), controller.signup);
 authRouter.post('/login', credentialsLimit, requireCsrf, validate(loginSchema), controller.login);
 authRouter.post('/refresh', sessionLimit, requireCsrf, controller.refresh);

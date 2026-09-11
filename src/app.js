@@ -19,7 +19,7 @@ app.set('trust proxy', env.TRUST_PROXY_HOPS);
 app.use((req, res, next) => { req.id = randomUUID(); res.set('X-Request-ID', req.id); next(); });
 app.use(helmet());
 app.use(cors({ origin: env.CLIENT_ORIGIN, credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE'], allowedHeaders: ['Content-Type', 'Authorization', 'X-Bookish-CSRF'] }));
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], allowedHeaders: ['Content-Type', 'Authorization', 'X-Bookish-CSRF'] }));
 app.use('/api', rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false,
   message: { error: { code: 'RATE_LIMITED', message: 'Too many requests; try again later' } } }));
 app.use(express.json({ limit: '32kb' }));

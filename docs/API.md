@@ -31,6 +31,7 @@ Send `X-Bookish-CSRF: 1` on **all auth POST requests**, including signup/login. 
 | POST /api/auth/refresh | No body; refresh cookie required | 200, new access token and rotated refresh cookie |
 | POST /api/auth/logout | No body; refresh cookie | 204, session revoked and cookie cleared |
 | GET /api/auth/me | No body; bearer access token required | 200, `{ "user": { "id": "...", "username": "reader_1", "email": "reader@example.com", "profilePicture": null, "bio": null } }` |
+| PATCH /api/auth/me | Optional `{ "bio": "...", "profilePicture": "https://..." }`; bearer access token required | 200, `{ "user": { "id": "...", "username": "reader_1", "email": "reader@example.com", "profilePicture": "...", "bio": "..." } }` |
 
 Username/email are trimmed and lowercased; username is 3–30 ASCII letters/digits/underscores. Passwords are never trimmed and must be at least 12 characters and at most 72 UTF-8 bytes, avoiding bcrypt's silent truncation. Password hashes use bcrypt cost 12 and never appear in responses.
 

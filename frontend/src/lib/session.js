@@ -111,10 +111,14 @@ export function createSession({ baseUrl, fetcher = fetch, locks, storage, channe
       if (state.status === 'restoring') void refresh().catch(() => {});
     } catch (error) { clear('error', error); }
   }
+  function updateUser(nextUser) {
+    if (!nextUser || state.status !== 'authenticated' || !state.user || state.user.id !== nextUser.id) return;
+    emit({ user: nextUser });
+  }
   if (channel) channel.onmessage = changed;
   const unlisten = listenStorage(event => { if (event.key === key) changed(); });
   return {
-    initialize, refresh, authenticate, logout, credentials, invalidate, accountUnchanged,
+    initialize, refresh, authenticate, logout, credentials, invalidate, accountUnchanged, updateUser,
     isExpired: value => {
       // Another request may already have replaced this token while its response was in flight.
       try { return JSON.parse(atob(value.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).exp * 1000 <= now(); }

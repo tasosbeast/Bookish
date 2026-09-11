@@ -10,6 +10,12 @@ export async function currentUser(userId) {
   if (!user) throw new AppError(401, 'SESSION_EXPIRED', 'Session is no longer active');
   return user;
 }
+export async function updateProfile(userId, data) {
+  const updateData = {};
+  if (data.bio !== undefined) updateData.bio = data.bio;
+  if (data.profilePicture !== undefined) updateData.profilePicture = data.profilePicture;
+  return prisma.user.update({ where: { id: userId }, data: updateData, select: safeUser });
+}
 // Real cost-equivalent comparison for unknown accounts, without hashing on every failed request.
 const dummyHash = await bcrypt.hash(randomUUID(), 12);
 

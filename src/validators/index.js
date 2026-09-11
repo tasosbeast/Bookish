@@ -37,3 +37,36 @@ export const reviewSchema = z.object({ body: z.object({
 export const likeSchema = z.object({ params: z.object({ id: uuid }) });
 export const personalBookSchema = z.object({ params: z.object({ bookId: uuid }), query: z.object({}).strict() });
 export const removeShelfSchema = z.object({ params: z.object({ bookId: uuid }), query: z.object({ deleteReview: z.enum(['true', 'false']).optional() }).strict() });
+
+const bioSchema = z.union([
+  z.string().transform(s => s.trim()).pipe(z.string().max(500)).transform(s => (s === '' ? null : s)),
+  z.null(),
+]).optional();
+
+const profilePictureSchema = z.union([
+  z.string()
+    .transform(s => s.trim())
+    .pipe(z.string().max(2048))
+    .transform(s => (s === '' ? null : s))
+    .refine(
+      val => {
+        if (val === null) return true;
+        try {
+          const url = new URL(val);
+          return url.protocol === 'http:' || url.protocol === 'https:';
+        } catch {
+          return false;
+        }
+      },
+      { message: 'Must be a valid http:// or https:// URL' }
+    ),
+  z.null(),
+]).optional();
+
+export const updateProfileSchema = z.object({
+  body: z.object({
+    bio: bioSchema,
+    profilePicture: profilePictureSchema,
+  }).strict().refine(data => data.bio !== undefined || data.profilePicture !== undefined, 'Provide at least one editable field'),
+});
+
