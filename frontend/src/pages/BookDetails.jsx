@@ -41,7 +41,8 @@ export default function BookDetails() {
     if (options?.scrollToReview) {
       document.getElementById('review')?.scrollIntoView({ behavior: 'smooth' });
     }
-    setNotice(message); book.reload(); personal.reload();
+    if (message) { setNotice(message); } else { setNotice(''); }
+    book.reload(); personal.reload();
   }
   
   useEffect(() => {

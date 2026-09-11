@@ -49,6 +49,8 @@ test('reading flow shelf management and rating/review separation', { timeout: 60
   };
   let failPost = false;
   let writes = [];
+  let reviewWrites = [];
+  let reviewDeletions = [];
 
   const response = (data, status = 200) => new Response(JSON.stringify(data), { status });
   
@@ -71,6 +73,26 @@ test('reading flow shelf management and rating/review separation', { timeout: 60
         shelf: { ...personal.shelf, status: body.status, updatedAt: 'updated' }
       };
       return response({ data: personal.shelf });
+    }
+    if (url.pathname === '/api/reviews' && options.method === 'POST') {
+      if (failPost) {
+        return response({ error: { code: 'UNAVAILABLE', message: 'Failed save' } }, 500);
+      }
+      const body = JSON.parse(options.body);
+      reviewWrites.push(body);
+      personal = {
+        ...personal,
+        review: { id: 'rev-flow', rating: body.rating, reviewText: body.reviewText, updatedAt: 'saved' }
+      };
+      return response({ data: personal.review });
+    }
+    if (url.pathname.startsWith('/api/reviews/') && options.method === 'DELETE') {
+      if (failPost) {
+        return response({ error: { code: 'UNAVAILABLE', message: 'Failed delete' } }, 500);
+      }
+      reviewDeletions.push(url.pathname);
+      personal = { ...personal, review: null };
+      return response({ data: { deleted: true } });
     }
     return response({
       data: {
@@ -131,6 +153,9 @@ test('reading flow shelf management and rating/review separation', { timeout: 60
   assert.equal(writes[0].userRating, undefined, 'shelf save must not send userRating');
   assert.equal(personal.shelf.userRating, 4, 'userRating preserved in personal shelf');
   assert.equal(scrolledElements.length, 0, 'want_to_read should not scroll to #review');
+  // Check global page-level notice for shelf save
+  const globalNotice = document.querySelector('.detail-copy .success-notice');
+  assert.ok(globalNotice && globalNotice.textContent.includes('Your bookshelf has been updated.'));
 
   // 4. transitioning currently_reading / want_to_read -> read with successful API save: smooth-scrolls to #review
   scrolledElements = [];
@@ -161,4 +186,29 @@ test('reading flow shelf management and rating/review separation', { timeout: 60
   await click('Save changes'); // will fail
   assert.equal(scrolledElements.length, 0, 'failed save must not scroll');
   failPost = false;
+
+  // 7. Local review success notice on save
+  await click('Save review');
+  const localReviewNotice = document.querySelector('.review-form .success-notice');
+  assert.ok(localReviewNotice && localReviewNotice.textContent.includes('Your review has been saved.'), 'ReviewForm renders local success notice');
+  const globalNoticeAfterReviewSave = document.querySelector('.detail-copy .success-notice');
+  assert.equal(globalNoticeAfterReviewSave, null, 'Global notice is NOT rendered for review save');
+
+  // 8. Starting another action (save/delete) clears previous local success notice
+  failPost = true;
+  await click('Save review'); // will fail
+  const localNoticeAfterFailedSave = document.querySelector('.review-form .success-notice');
+  assert.equal(localNoticeAfterFailedSave, null, 'Failed save clears local success notice');
+  failPost = false;
+
+  // Save review again successfully
+  await click('Save review');
+  assert.ok(document.querySelector('.review-form .success-notice')?.textContent.includes('Your review has been saved.'));
+
+  // 9. Local review success notice on delete
+  await click('Delete review');
+  const localDeleteNotice = document.querySelector('.review-form .success-notice');
+  assert.ok(localDeleteNotice && localDeleteNotice.textContent.includes('Your review has been deleted. Your rating remains.'), 'ReviewForm renders local delete notice');
+  const globalNoticeAfterDelete = document.querySelector('.detail-copy .success-notice');
+  assert.equal(globalNoticeAfterDelete, null, 'Global notice is NOT rendered for review delete');
 });
