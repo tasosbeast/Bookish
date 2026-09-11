@@ -215,6 +215,10 @@ export default function MyBooks() {
                 ))}
               </div>
             </>
+          ) : shelves.loading ? (
+            <p className="muted small shelf-count" role="status" aria-live="polite">
+              Updating shelf…
+            </p>
           ) : (
             <EmptyState title={noResultsTitle} action={emptyAction}>
               {noResultsBody}
