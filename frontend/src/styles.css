@@ -216,8 +216,8 @@
   .discover-page .top-picks-section { margin-top: 32px; }
   .discover-page .genre-filter { scroll-snap-align: start; }
   .discover-page .filter-line { align-items: flex-start; gap: 8px; }
-  .discover-page .filter-item { width: 100%; }
-  .discover-page .active-filter { min-height: 44px; flex: 1 1 auto; }
+  .discover-page .filter-item { width: 100%; align-items: center; }
+  .discover-page .active-filter { min-height: 44px; flex: 0 1 auto; width: fit-content; max-width: calc(100% - 60px); }
 }
 @media (max-width: 480px) {
   .my-books-page .shelf-tabs { gap: 12px; margin: 28px 0 18px; overscroll-behavior-x: contain; scroll-snap-type: x proximity; scrollbar-width: thin; }
