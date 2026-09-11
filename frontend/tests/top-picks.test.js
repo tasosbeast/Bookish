@@ -135,7 +135,9 @@ test('Top Picks frontend: rendering rules, states, filters, and error isolation'
   ));
 
   assert.ok(requests.some(r => r.includes('/recommendations/top-picks')), 'Authenticated page 1 fetches top-picks');
-  assert.ok(document.querySelector('.top-picks-section'), 'Renders Top Picks section');
+  const sectionRec = document.querySelector('.top-picks-section');
+  assert.ok(sectionRec, 'Renders Top Picks section');
+  assert.equal(sectionRec.getAttribute('aria-label'), 'Top Picks for You', 'Section is labeled via aria-label in recommendations state');
   assert.ok(document.body.textContent.includes('Recommended Book 1'));
   assert.ok(document.body.textContent.includes("Because you've enjoyed books by Top Author"));
   assert.ok(document.body.textContent.includes('Because you often rate Thriller highly'));
@@ -183,7 +185,9 @@ test('Top Picks frontend: rendering rules, states, filters, and error isolation'
     )
   ));
 
-  assert.ok(document.querySelector('.top-picks-section'), 'Renders Top Picks section for insufficient ratings');
+  const sectionLocked = document.querySelector('.top-picks-section');
+  assert.ok(sectionLocked, 'Renders Top Picks section for insufficient ratings');
+  assert.equal(sectionLocked.getAttribute('aria-label'), 'Top Picks for You', 'Section is labeled via aria-label in locked state');
   assert.ok(document.body.textContent.includes("Rate at least 3 books you've read and we'll start learning your taste."));
   const myBooksBtn = document.querySelector('a[href="/my-books"]');
   assert.ok(myBooksBtn, 'Contains button linking to /my-books');
@@ -198,6 +202,8 @@ test('Top Picks frontend: rendering rules, states, filters, and error isolation'
     )
   ));
 
-  assert.ok(document.querySelector('.top-picks-section .error-notice'), 'Renders local error notice in Top Picks');
+  const sectionErr = document.querySelector('.top-picks-section');
+  assert.ok(sectionErr.querySelector('.error-notice'), 'Renders local error notice in Top Picks');
+  assert.equal(sectionErr.getAttribute('aria-label'), 'Top Picks for You', 'Section is labeled via aria-label in error state');
   assert.ok(document.body.textContent.includes('Catalog Book 1'), 'Normal catalog continues to display despite Top Picks error');
 });

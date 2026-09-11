@@ -44,7 +44,7 @@ export default function Discover() {
       <div className="hero-aside" aria-hidden="true"><span className="chapter-number">01 /</span><Icon size={56} /><span className="hero-aside-note">One more<br /><em>chapter.</em></span><div className="hero-line" /></div>
     </section>
     {showTopPicks && (
-      <section aria-labelledby="top-picks-heading" className="top-picks-section">
+      <section aria-label="Top Picks for You" className="top-picks-section">
         {topPicksResource.data?.meta?.personalized && (
           <div className="section-heading">
             <div>
