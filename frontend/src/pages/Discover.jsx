@@ -54,6 +54,7 @@ export default function Discover() {
   const author = params.get('author') ?? '';
   const page = pageNumber(params.get('page'));
   const catalogRef = useRef(null);
+  const searchInputRef = useRef(null);
   const previousPageRef = useRef(page);
 
   useEffect(() => {
@@ -99,7 +100,7 @@ export default function Discover() {
       <div className="hero-aside" aria-hidden="true"><span className="chapter-number">01 /</span><Icon size={56} /><span className="hero-aside-note">One more<br /><em>chapter.</em></span><div className="hero-line" /></div>
     </section>
     <section aria-label="Find books" className="discovery-controls">
-      <form className="search-box" onSubmit={event => { event.preventDefault(); change({ q: search.trim() }); }} role="search"><Icon name="search" size={22} /><label className="sr-only" htmlFor="book-search">Search by title or author</label><input id="book-search" type="search" value={search} maxLength={200} onChange={event => setSearch(event.target.value)} placeholder="Search by title or author" /><button type="submit" className="button compact">Search</button></form>
+      <form className="search-box" onSubmit={event => { event.preventDefault(); searchInputRef.current?.blur(); change({ q: search.trim() }); }} role="search"><Icon name="search" size={22} /><label className="sr-only" htmlFor="book-search">Search by title or author</label><input ref={searchInputRef} id="book-search" type="search" enterKeyHint="search" value={search} maxLength={200} onChange={event => setSearch(event.target.value)} placeholder="Search by title or author" /><button type="submit" className="button compact">Search</button></form>
       <div className="sort-box"><label htmlFor="book-sort">Sort by</label><select id="book-sort" value={`${sort}:${order}`} onChange={event => { const [sort, order] = event.target.value.split(':'); change({ sort, order }); }}><option value="rating:desc">Highest rated</option><option value="rating:asc">Lowest rated</option><option value="publicationYear:desc">Newest published</option><option value="publicationYear:asc">Oldest published</option></select></div>
     </section>
     <nav className="genre-filters" aria-label="Browse by genre"><span className="genre-filter-label">Browse genres</span>{[{ slug: '', name: 'All' }, ...fetchedGenres].map(({ slug, name }) => <button type="button" className={`genre-filter${genre === slug ? ' active' : ''}`} aria-pressed={genre === slug} key={slug || 'all'} onClick={() => change({ genre: slug })}>{name}</button>)}{genresResource.error && <span className="muted small" style={{ marginLeft: '8px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>Couldn’t load genres. <button type="button" className="text-button" onClick={genresResource.reload}>Retry</button></span>}</nav>

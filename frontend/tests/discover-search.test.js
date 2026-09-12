@@ -84,4 +84,71 @@ test('Discover defaults to newest published and clearing search preserves explic
   await act(async () => clear.click());
   assert.equal(document.querySelector('#location').textContent, '?sort=publicationYear&order=asc');
   assert.equal(document.querySelector('#book-search').value, '');
+
+  const setInputValue = (el, val) => {
+    const proto = dom.window.HTMLInputElement.prototype;
+    const valueSetter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+    valueSetter.call(el, val);
+    el.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  };
+
+  const searchInput = document.querySelector('#book-search');
+  assert.equal(searchInput.getAttribute('enterKeyHint'), 'search');
+  searchInput.focus();
+  assert.equal(document.activeElement, searchInput, 'search input can receive focus');
+
+  let blurCount = 0;
+  const originalBlur = searchInput.blur;
+  searchInput.blur = function() {
+    blurCount++;
+    return originalBlur.apply(this, arguments);
+  };
+
+  await act(async () => {
+    setInputValue(searchInput, 'Persuasion');
+  });
+
+  const searchForm = document.querySelector('form.search-box');
+  await act(async () => {
+    searchForm.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+  });
+  assert.equal(blurCount, 1, 'submitting the form calls blur on the search input');
+  assert.notEqual(document.activeElement, searchInput, 'submitting the form removes focus from the search input');
+  assert.equal(document.querySelector('#location').textContent, '?sort=publicationYear&order=asc&q=Persuasion');
+  assert.ok(requests.some(url => url.searchParams.get('q') === 'Persuasion'));
+
+  searchInput.focus();
+  assert.equal(document.activeElement, searchInput, 'search input can receive focus again');
+  await act(async () => {
+    setInputValue(searchInput, 'Emma');
+  });
+
+  const submitButton = searchForm.querySelector('button[type="submit"]');
+  await act(async () => {
+    submitButton.click();
+  });
+  assert.equal(blurCount, 2, 'clicking the website Search button calls blur on the search input');
+  assert.notEqual(document.activeElement, searchInput, 'clicking the website Search button removes focus from the search input');
+  assert.equal(document.querySelector('#location').textContent, '?sort=publicationYear&order=asc&q=Emma');
+
+  await act(async () => root.unmount());
+  root = createRoot(document.getElementById('root'));
+  await act(async () => root.render(h(MemoryRouter, { initialEntries: ['/?page=3&sort=publicationYear&order=asc'] }, h(Discover), h(Location))));
+
+  const paginatedInput = document.querySelector('#book-search');
+  let paginatedBlurCalled = false;
+  paginatedInput.blur = () => { paginatedBlurCalled = true; };
+  paginatedInput.focus();
+  assert.equal(document.activeElement, paginatedInput);
+
+  await act(async () => {
+    setInputValue(paginatedInput, 'Mansfield');
+  });
+
+  const paginatedForm = document.querySelector('form.search-box');
+  await act(async () => {
+    paginatedForm.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+  });
+  assert.ok(paginatedBlurCalled, 'blur is called when searching from a paginated view');
+  assert.equal(document.querySelector('#location').textContent, '?sort=publicationYear&order=asc&q=Mansfield', 'page param is reset on search');
 });
