@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { AppError } from '../lib/errors.js';
 import { serializable } from '../lib/transaction.js';
+import { sendFriendRequestPush } from './pushService.js';
 
 export function canonicalPair(idA, idB) {
   return idA < idB ? [idA, idB] : [idB, idA];
@@ -168,7 +169,13 @@ export async function sendRequest(currentUserId, targetUserId) {
 
   const [userAId, userBId] = canonicalPair(currentUserId, targetUserId);
 
-  return serializable(prisma, async tx => {
+  // Fetch actor username before the transaction (read-only, outside tx).
+  const actor = await prisma.user.findUnique({
+    where: { id: currentUserId },
+    select: { username: true },
+  });
+
+  const result = await serializable(prisma, async tx => {
     const targetUser = await tx.user.findUnique({
       where: { id: targetUserId },
       select: { id: true },
@@ -213,6 +220,11 @@ export async function sendRequest(currentUserId, targetUserId) {
 
     return { data: friendship };
   });
+
+  // Best-effort push — must not throw or affect the friend request result.
+  sendFriendRequestPush(actor?.username ?? 'Someone', targetUserId, result.data.id).catch(() => {});
+
+  return result;
 }
 
 export async function acceptRequest(currentUserId, requestId) {

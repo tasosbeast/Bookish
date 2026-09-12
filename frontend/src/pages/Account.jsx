@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth.js';
 import { api, session } from '../lib/api.js';
 import { ErrorNotice } from '../components/shared.jsx';
+import { isPushSupported, getExistingSubscription, subscribeToPush, unsubscribeFromPush } from '../lib/push.js';
 
 export default function Account() {
   const { user } = useAuth();
@@ -12,9 +13,77 @@ export default function Account() {
   const [busy, setBusy] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
 
+  // Browser push notification state
+  const [pushSupported, setPushSupported] = useState(false);
+  const [pushPermission, setPushPermission] = useState('default');
+  const [pushSubscribed, setPushSubscribed] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushError, setPushError] = useState(null);
+  const [pushLoading, setPushLoading] = useState(true);
+
   useEffect(() => {
     setImageFailed(false);
   }, [user?.profilePicture]);
+
+  useEffect(() => {
+    let active = true;
+    async function checkPush() {
+      const supported = isPushSupported();
+      if (!supported) {
+        if (active) {
+          setPushSupported(false);
+          setPushLoading(false);
+        }
+        return;
+      }
+      if (active) {
+        setPushSupported(true);
+        setPushPermission(Notification.permission);
+      }
+      try {
+        const sub = await getExistingSubscription();
+        if (active) {
+          setPushSubscribed(Boolean(sub));
+        }
+      } catch {
+        // Ignore check errors so profile editing is never broken
+      } finally {
+        if (active) setPushLoading(false);
+      }
+    }
+    checkPush();
+    return () => { active = false; };
+  }, []);
+
+  async function handleEnablePush() {
+    setPushBusy(true);
+    setPushError(null);
+    try {
+      await subscribeToPush();
+      setPushPermission('granted');
+      setPushSubscribed(true);
+    } catch (err) {
+      if (typeof Notification !== 'undefined') {
+        setPushPermission(Notification.permission);
+      }
+      setPushError(err.message || 'Could not enable notifications');
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
+  async function handleDisablePush() {
+    setPushBusy(true);
+    setPushError(null);
+    try {
+      await unsubscribeFromPush();
+      setPushSubscribed(false);
+    } catch (err) {
+      setPushError(err.message || 'Could not disable notifications');
+    } finally {
+      setPushBusy(false);
+    }
+  }
 
   const hasPicture = user?.profilePicture && !imageFailed;
 
@@ -134,6 +203,54 @@ export default function Account() {
               </div>
             </fieldset>
           </form>
+        )}
+      </section>
+
+      <section className="account-card" aria-labelledby="notifications-heading" style={{ marginTop: '24px' }}>
+        <h2 id="notifications-heading" style={{ fontSize: '1.25rem', marginBottom: '8px' }}>
+          Browser notifications
+        </h2>
+        {!pushLoading && (
+          <>
+            {!pushSupported ? (
+              <p className="muted small">Browser notifications aren't supported on this device.</p>
+            ) : pushPermission === 'denied' ? (
+              <p className="muted small">Notifications are blocked in your browser settings.</p>
+            ) : pushSubscribed ? (
+              <div>
+                <p className="muted small">Browser notifications are enabled on this device.</p>
+                <div style={{ marginTop: '16px' }}>
+                  <button
+                    type="button"
+                    className="button secondary compact"
+                    disabled={pushBusy}
+                    onClick={handleDisablePush}
+                  >
+                    {pushBusy ? 'Disabling…' : 'Disable notifications'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <p className="muted small">Get notified when someone sends you a friend request.</p>
+                <div style={{ marginTop: '16px' }}>
+                  <button
+                    type="button"
+                    className="button secondary compact"
+                    disabled={pushBusy}
+                    onClick={handleEnablePush}
+                  >
+                    {pushBusy ? 'Enabling…' : 'Enable notifications'}
+                  </button>
+                </div>
+              </div>
+            )}
+            {pushError && (
+              <p className="reader-error small-error" role="alert" style={{ marginTop: '8px' }}>
+                {pushError}
+              </p>
+            )}
+          </>
         )}
       </section>
     </div>

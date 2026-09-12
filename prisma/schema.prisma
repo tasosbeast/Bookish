@@ -37,6 +37,8 @@ model User {
   friendshipsAsUserB     Friendship[]     @relation("FriendshipUserB")
   friendshipsRequestedBy Friendship[]     @relation("FriendshipRequestedBy")
 
+  pushSubscriptions  PushSubscription[]
+
   @@map("users")
 }
 
@@ -201,3 +203,17 @@ model Friendship {
   @@map("friendships")
 }
 
+model PushSubscription {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  endpoint  String   @unique @db.Text
+  p256dh    String   @db.Text
+  auth      String   @db.Text
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_subscriptions")
+}

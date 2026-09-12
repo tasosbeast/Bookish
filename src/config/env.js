@@ -24,3 +24,17 @@ export function parseEnv(source) {
 }
 
 export const env = parseEnv(process.env);
+
+// VAPID configuration is optional; missing vars disable push without crashing unrelated features.
+export function parseVapid(source = process.env) {
+  if (!source.VAPID_PUBLIC_KEY || !source.VAPID_PRIVATE_KEY || !source.VAPID_SUBJECT) {
+    return null;
+  }
+  return {
+    publicKey: source.VAPID_PUBLIC_KEY,
+    privateKey: source.VAPID_PRIVATE_KEY,
+    subject: source.VAPID_SUBJECT,
+  };
+}
+
+export const vapid = parseVapid(process.env);

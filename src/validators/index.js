@@ -125,5 +125,21 @@ export const listFriendsSchema = z.object({
   query: z.object({}).strict(),
 });
 
+export const pushSubscriptionSchema = z.object({
+  body: z.object({
+    endpoint: z.string().url(),
+    keys: z.object({
+      p256dh: z.string().min(1),
+      auth: z.string().min(1),
+    }).strict(),
+  }).strict(),
+});
 
-
+export const deletePushSubscriptionSchema = z.object({
+  body: z.object({
+    endpoint: z.string().url().optional(),
+  }).strict().optional().default({}),
+  query: z.object({
+    endpoint: z.string().url().optional(),
+  }).strict().optional().default({}),
+}).refine(data => Boolean(data.body?.endpoint || data.query?.endpoint), 'Endpoint is required');
