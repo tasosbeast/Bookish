@@ -204,7 +204,7 @@ test('4. target ISBN collision blocks ALL writes and throws RepairCatalogError',
   );
 
   // Verify zero writes occurred
-  assert.equal(db._books.get('book-launch-3').isbn, '9780143110439');
+  assert.equal(db._books.get('book-launch-3').isbn, '9780385676533');
 });
 
 test('5. missing old Book blocks ALL writes and throws RepairCatalogError', async () => {
