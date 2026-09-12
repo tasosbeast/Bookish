@@ -38,6 +38,27 @@ export function validateManifestEntry(entry, index) {
   };
 }
 
+function isCompatibleWork(book, entry) {
+  const normBookTitle = titleForWorkIdentity(book.title);
+  const normBookAuthor = normalizeAuthorName(book.author);
+
+  const normExpectedTitle = titleForWorkIdentity(entry.expectedCurrentTitle);
+  const normExpectedAuthor = normalizeAuthorName(entry.expectedCurrentAuthor);
+
+  if (normBookTitle === normExpectedTitle && normBookAuthor === normExpectedAuthor) {
+    return true;
+  }
+
+  const normDesiredTitle = titleForWorkIdentity(entry.desiredTitle);
+  const normDesiredAuthor = normalizeAuthorName(entry.desiredAuthor);
+
+  if (normBookTitle === normDesiredTitle && normBookAuthor === normDesiredAuthor) {
+    return true;
+  }
+
+  return false;
+}
+
 export async function preflightLaunchRepair(db, manifest = LAUNCH_REPAIR_MANIFEST) {
   const validatedEntries = manifest.map((entry, idx) => validateManifestEntry(entry, idx));
 
@@ -64,9 +85,13 @@ export async function preflightLaunchRepair(db, manifest = LAUNCH_REPAIR_MANIFES
 
   const repairsToApply = [];
   const alreadyRepairedList = [];
+  const genuinelyMissingList = [];
   const missingErrors = [];
+  const alternateIdentityMatches = [];
+  const ambiguousIdentityMatches = [];
   const identityConflictErrors = [];
   const isbnCollisionErrors = [];
+  const unresolvedEntries = [];
 
   for (const entry of validatedEntries) {
     const bookWithOldIsbn = booksByIsbn.get(entry.oldIsbn);
@@ -75,10 +100,7 @@ export async function preflightLaunchRepair(db, manifest = LAUNCH_REPAIR_MANIFES
     if (entry.desiredIsbn === entry.oldIsbn) {
       // Same-ISBN title/author repair (e.g. Harry Potter, The Painted Man, Captain Corelli, Notes from a Big Country)
       if (!bookWithOldIsbn) {
-        missingErrors.push({
-          isbn: entry.oldIsbn,
-          message: `Book with ISBN ${entry.oldIsbn} was not found in the database`,
-        });
+        unresolvedEntries.push(entry);
         continue;
       }
 
@@ -179,10 +201,64 @@ export async function preflightLaunchRepair(db, manifest = LAUNCH_REPAIR_MANIFES
           });
         }
       } else {
-        missingErrors.push({
-          isbn: entry.oldIsbn,
-          message: `Book with old ISBN ${entry.oldIsbn} was not found in the database`,
+        // Neither oldIsbn nor desiredIsbn exists in the database
+        unresolvedEntries.push(entry);
+      }
+    }
+  }
+
+  // Identity fallback search for unresolved entries
+  if (unresolvedEntries.length > 0) {
+    const candidateBooks = await db.book.findMany({
+      select: {
+        id: true,
+        title: true,
+        author: true,
+        isbn: true,
+      },
+    });
+
+    for (const entry of unresolvedEntries) {
+      const matching = candidateBooks.filter(
+        book =>
+          isCompatibleWork(book, entry) &&
+          book.isbn !== entry.oldIsbn &&
+          book.isbn !== entry.desiredIsbn
+      );
+
+      if (matching.length === 1) {
+        alternateIdentityMatches.push({
+          bookId: matching[0].id,
+          title: matching[0].title,
+          author: matching[0].author,
+          currentIsbn: matching[0].isbn,
+          manifestOldIsbn: entry.oldIsbn,
+          desiredIsbn: entry.desiredIsbn,
         });
+      } else if (matching.length > 1) {
+        ambiguousIdentityMatches.push({
+          manifestOldIsbn: entry.oldIsbn,
+          desiredIsbn: entry.desiredIsbn,
+          expectedTitle: entry.expectedCurrentTitle,
+          expectedAuthor: entry.expectedCurrentAuthor,
+          candidates: matching.map(b => ({
+            bookId: b.id,
+            title: b.title,
+            author: b.author,
+            currentIsbn: b.isbn,
+          })),
+          message: `Multiple candidate books (${matching.length}) found for work "${entry.expectedCurrentTitle}" by "${entry.expectedCurrentAuthor}"`,
+        });
+      } else {
+        const errorItem = {
+          isbn: entry.oldIsbn,
+          desiredIsbn: entry.desiredIsbn,
+          title: entry.expectedCurrentTitle,
+          author: entry.expectedCurrentAuthor,
+          message: `Book with old ISBN ${entry.oldIsbn} was not found in the database, and no compatible work was found`,
+        };
+        genuinelyMissingList.push(errorItem);
+        missingErrors.push(errorItem);
       }
     }
   }
@@ -194,6 +270,9 @@ export async function preflightLaunchRepair(db, manifest = LAUNCH_REPAIR_MANIFES
     found: foundCount,
     alreadyRepaired: alreadyRepairedList.length,
     missing: missingErrors.length,
+    genuinelyMissing: genuinelyMissingList.length,
+    alternateIdentityMatches: alternateIdentityMatches.length,
+    ambiguousIdentityMatches: ambiguousIdentityMatches.length,
     identityConflicts: identityConflictErrors.length,
     isbnCollisions: isbnCollisionErrors.length,
     readyToRepair: repairsToApply.length,
@@ -206,6 +285,9 @@ export async function preflightLaunchRepair(db, manifest = LAUNCH_REPAIR_MANIFES
       repairsToApply,
       alreadyRepairedList,
       missingErrors,
+      genuinelyMissingList,
+      alternateIdentityMatches,
+      ambiguousIdentityMatches,
       identityConflictErrors,
       isbnCollisionErrors,
     },
@@ -216,13 +298,26 @@ export async function repairLaunchCatalog(db, { apply = false, manifest = LAUNCH
   const preflight = await preflightLaunchRepair(db, manifest);
   const { summary, details } = preflight;
 
-  const hasErrors = summary.missing > 0 || summary.identityConflicts > 0 || summary.isbnCollisions > 0;
+  const hasErrors =
+    summary.missing > 0 ||
+    summary.genuinelyMissing > 0 ||
+    summary.alternateIdentityMatches > 0 ||
+    summary.ambiguousIdentityMatches > 0 ||
+    summary.identityConflicts > 0 ||
+    summary.isbnCollisions > 0;
 
   if (apply) {
     if (hasErrors) {
+      const parts = [];
+      if (summary.genuinelyMissing > 0) parts.push(`${summary.genuinelyMissing} genuinely missing`);
+      if (summary.alternateIdentityMatches > 0) parts.push(`${summary.alternateIdentityMatches} alternate matches`);
+      if (summary.ambiguousIdentityMatches > 0) parts.push(`${summary.ambiguousIdentityMatches} ambiguous matches`);
+      if (summary.identityConflicts > 0) parts.push(`${summary.identityConflicts} identity conflicts`);
+      if (summary.isbnCollisions > 0) parts.push(`${summary.isbnCollisions} collisions`);
+
       throw new RepairCatalogError(
         'preflight_failed',
-        `Preflight checks failed with ${summary.missing} missing, ${summary.identityConflicts} conflicts, and ${summary.isbnCollisions} collisions`,
+        `Preflight checks failed with ${parts.join(', ')}`,
         { summary, details }
       );
     }

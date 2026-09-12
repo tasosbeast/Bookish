@@ -305,3 +305,186 @@ test('8. transaction rollback when mid-update error occurs', async () => {
     assert.equal(b.isbn, f.isbn);
   }
 });
+
+test('9. old ISBN missing + desired ISBN missing + exactly one normalized match under third ISBN => ALTERNATE_IDENTITY_MATCH', async () => {
+  const manifest = [
+    {
+      oldIsbn: '9780143110439',
+      expectedCurrentTitle: 'Thinking, Fast and Slow',
+      expectedCurrentAuthor: 'Daniel Kahneman',
+      desiredTitle: 'Thinking, Fast and Slow',
+      desiredAuthor: 'Daniel Kahneman',
+      desiredIsbn: '9780374533557',
+    },
+  ];
+
+  // In DB, book exists under third ISBN: 9780385676533
+  const db = createMockDb([
+    {
+      id: 'book-alt-1',
+      title: 'Thinking, Fast and Slow',
+      author: 'Daniel Kahneman',
+      isbn: '9780385676533',
+    },
+  ]);
+
+  const result = await preflightLaunchRepair(db, manifest);
+  assert.equal(result.summary.alternateIdentityMatches, 1);
+  assert.equal(result.summary.genuinelyMissing, 0);
+  assert.equal(result.summary.ambiguousIdentityMatches, 0);
+  assert.equal(result.summary.readyToRepair, 0);
+
+  assert.equal(result.details.alternateIdentityMatches.length, 1);
+  const match = result.details.alternateIdentityMatches[0];
+  assert.equal(match.bookId, 'book-alt-1');
+  assert.equal(match.title, 'Thinking, Fast and Slow');
+  assert.equal(match.author, 'Daniel Kahneman');
+  assert.equal(match.currentIsbn, '9780385676533');
+  assert.equal(match.manifestOldIsbn, '9780143110439');
+  assert.equal(match.desiredIsbn, '9780374533557');
+});
+
+test('10. no ISBN match and no identity match => genuinely missing', async () => {
+  const manifest = [
+    {
+      oldIsbn: '9780143110439',
+      expectedCurrentTitle: 'Thinking, Fast and Slow',
+      expectedCurrentAuthor: 'Daniel Kahneman',
+      desiredTitle: 'Thinking, Fast and Slow',
+      desiredAuthor: 'Daniel Kahneman',
+      desiredIsbn: '9780374533557',
+    },
+  ];
+
+  // In DB, only unrelated book exists
+  const db = createMockDb([
+    {
+      id: 'book-unrelated-1',
+      title: 'Dune',
+      author: 'Frank Herbert',
+      isbn: '9780441172719',
+    },
+  ]);
+
+  const result = await preflightLaunchRepair(db, manifest);
+  assert.equal(result.summary.genuinelyMissing, 1);
+  assert.equal(result.summary.missing, 1);
+  assert.equal(result.summary.alternateIdentityMatches, 0);
+  assert.equal(result.summary.ambiguousIdentityMatches, 0);
+  assert.equal(result.details.genuinelyMissingList.length, 1);
+  assert.equal(result.details.genuinelyMissingList[0].isbn, '9780143110439');
+});
+
+test('11. multiple identity matches => ambiguous identity match', async () => {
+  const manifest = [
+    {
+      oldIsbn: '9780140328721',
+      expectedCurrentTitle: 'Matilda',
+      expectedCurrentAuthor: 'Roald Dahl',
+      desiredTitle: 'Matilda',
+      desiredAuthor: 'Roald Dahl',
+      desiredIsbn: '9780142410370',
+    },
+  ];
+
+  // In DB, two books match the work under different third ISBNs
+  const db = createMockDb([
+    {
+      id: 'book-matilda-1',
+      title: 'Matilda',
+      author: 'Roald Dahl',
+      isbn: '9780613371896',
+    },
+    {
+      id: 'book-matilda-2',
+      title: 'Matilda (Puffin Books)',
+      author: 'Roald Dahl',
+      isbn: '9780141301068',
+    },
+  ]);
+
+  const result = await preflightLaunchRepair(db, manifest);
+  assert.equal(result.summary.ambiguousIdentityMatches, 1);
+  assert.equal(result.summary.alternateIdentityMatches, 0);
+  assert.equal(result.summary.genuinelyMissing, 0);
+  assert.equal(result.summary.readyToRepair, 0);
+
+  assert.equal(result.details.ambiguousIdentityMatches.length, 1);
+  const amb = result.details.ambiguousIdentityMatches[0];
+  assert.equal(amb.manifestOldIsbn, '9780140328721');
+  assert.equal(amb.desiredIsbn, '9780142410370');
+  assert.equal(amb.candidates.length, 2);
+  const ids = amb.candidates.map(c => c.bookId).sort();
+  assert.deepEqual(ids, ['book-matilda-1', 'book-matilda-2']);
+});
+
+test('12. alternate identity match blocks apply and throws RepairCatalogError', async () => {
+  const manifest = [
+    {
+      oldIsbn: '9780143110439',
+      expectedCurrentTitle: 'Thinking, Fast and Slow',
+      expectedCurrentAuthor: 'Daniel Kahneman',
+      desiredTitle: 'Thinking, Fast and Slow',
+      desiredAuthor: 'Daniel Kahneman',
+      desiredIsbn: '9780374533557',
+    },
+  ];
+
+  const db = createMockDb([
+    {
+      id: 'book-alt-1',
+      title: 'Thinking, Fast and Slow',
+      author: 'Daniel Kahneman',
+      isbn: '9780385676533',
+    },
+  ]);
+
+  await assert.rejects(
+    async () => repairLaunchCatalog(db, { apply: true, manifest }),
+    err => {
+      assert.ok(err instanceof RepairCatalogError);
+      assert.equal(err.code, 'preflight_failed');
+      assert.equal(err.details.summary.alternateIdentityMatches, 1);
+      assert.equal(err.details.summary.updated, 0);
+      return true;
+    }
+  );
+
+  // Assert Book in DB is untouched
+  const book = db._books.get('book-alt-1');
+  assert.equal(book.isbn, '9780385676533');
+});
+
+test('13. dry-run performs zero writes when alternate identity matches are detected', async () => {
+  const manifest = [
+    {
+      oldIsbn: '9780143110439',
+      expectedCurrentTitle: 'Thinking, Fast and Slow',
+      expectedCurrentAuthor: 'Daniel Kahneman',
+      desiredTitle: 'Thinking, Fast and Slow',
+      desiredAuthor: 'Daniel Kahneman',
+      desiredIsbn: '9780374533557',
+    },
+  ];
+
+  const db = createMockDb([
+    {
+      id: 'book-alt-1',
+      title: 'Thinking, Fast and Slow',
+      author: 'Daniel Kahneman',
+      isbn: '9780385676533',
+    },
+  ]);
+
+  const result = await repairLaunchCatalog(db, { apply: false, manifest });
+  assert.equal(result.applied, false);
+  assert.equal(result.summary.updated, 0);
+  assert.equal(result.summary.alternateIdentityMatches, 1);
+  assert.equal(result.summary.readyToRepair, 0);
+
+  // Assert Book in DB is untouched
+  const book = db._books.get('book-alt-1');
+  assert.equal(book.isbn, '9780385676533');
+  assert.equal(book.title, 'Thinking, Fast and Slow');
+});
+

@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../../src/lib/prisma.js';
-import { repairLaunchCatalog, RepairCatalogError } from '../../scripts/catalog/repair-launch.js';
+import { preflightLaunchRepair, repairLaunchCatalog, RepairCatalogError } from '../../scripts/catalog/repair-launch.js';
 import { coverImageUrl, importCatalogCsv } from '../../scripts/catalog/csv-import.js';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -361,4 +361,81 @@ test('PostgreSQL: CSV import dry-run no longer reports conflicts caused by repai
     assert.ok(!afterConflictIsbns.has(r.desiredIsbn), `Expected no conflict for ${r.desiredIsbn} after repair`);
   }
 });
+
+test('PostgreSQL: launch catalog repair preflight detects alternate identity match, performs zero writes, and blocks apply', { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async t => {
+  const tag = randomUUID().slice(0, 8);
+  const seed = Number.parseInt(tag, 16) % 800000000 + 100000000;
+
+  const oldIsbn = isbnAt(seed);
+  const desiredIsbn = isbnAt(seed + 1);
+  const thirdIsbn = isbnAt(seed + 2);
+
+  const trackedIsbns = [oldIsbn, desiredIsbn, thirdIsbn];
+  assert.equal(await prisma.book.count({ where: { isbn: { in: trackedIsbns } } }), 0, 'Test requires unused disposable ISBNs');
+
+  // Book in DB exists under third ISBN
+  const book = await prisma.book.create({
+    data: {
+      isbn: thirdIsbn,
+      title: `Alternate Work ${tag}`,
+      author: `Alternate Author ${tag}`,
+      description: 'Preserved description',
+    },
+  });
+
+  t.after(async () => {
+    await prisma.book.deleteMany({ where: { id: book.id } });
+    await prisma.$disconnect();
+  });
+
+  const manifest = [
+    {
+      oldIsbn,
+      expectedCurrentTitle: `Alternate Work ${tag}`,
+      expectedCurrentAuthor: `Alternate Author ${tag}`,
+      desiredTitle: `Alternate Work ${tag}`,
+      desiredAuthor: `Alternate Author ${tag}`,
+      desiredIsbn,
+    },
+  ];
+
+  // 1. Preflight identifies ALTERNATE_IDENTITY_MATCH
+  const preflight = await preflightLaunchRepair(prisma, manifest);
+  assert.equal(preflight.summary.alternateIdentityMatches, 1);
+  assert.equal(preflight.summary.genuinelyMissing, 0);
+  assert.equal(preflight.summary.readyToRepair, 0);
+
+  assert.equal(preflight.details.alternateIdentityMatches.length, 1);
+  const alt = preflight.details.alternateIdentityMatches[0];
+  assert.equal(alt.bookId, book.id);
+  assert.equal(alt.title, `Alternate Work ${tag}`);
+  assert.equal(alt.author, `Alternate Author ${tag}`);
+  assert.equal(alt.currentIsbn, thirdIsbn);
+  assert.equal(alt.manifestOldIsbn, oldIsbn);
+  assert.equal(alt.desiredIsbn, desiredIsbn);
+
+  // 2. Dry run performs zero writes
+  const dryRun = await repairLaunchCatalog(prisma, { apply: false, manifest });
+  assert.equal(dryRun.applied, false);
+  assert.equal(dryRun.summary.updated, 0);
+  assert.equal(dryRun.summary.alternateIdentityMatches, 1);
+
+  // 3. Apply is strictly blocked
+  await assert.rejects(
+    async () => repairLaunchCatalog(prisma, { apply: true, manifest }),
+    err => {
+      assert.ok(err instanceof RepairCatalogError);
+      assert.equal(err.code, 'preflight_failed');
+      assert.equal(err.details.summary.alternateIdentityMatches, 1);
+      assert.equal(err.details.summary.updated, 0);
+      return true;
+    }
+  );
+
+  // 4. Assert book in DB is completely untouched
+  const bookReloaded = await prisma.book.findUnique({ where: { id: book.id } });
+  assert.equal(bookReloaded.isbn, thirdIsbn);
+  assert.equal(bookReloaded.title, `Alternate Work ${tag}`);
+});
+
 

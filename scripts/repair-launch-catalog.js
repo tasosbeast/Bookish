@@ -30,7 +30,16 @@ try {
 
   console.log(JSON.stringify(result.summary, null, 2));
 
-  const { repairsToApply, alreadyRepairedList, missingErrors, identityConflictErrors, isbnCollisionErrors } = result.details;
+  const {
+    repairsToApply,
+    alreadyRepairedList,
+    missingErrors,
+    genuinelyMissingList,
+    alternateIdentityMatches,
+    ambiguousIdentityMatches,
+    identityConflictErrors,
+    isbnCollisionErrors,
+  } = result.details;
 
   if (repairsToApply.length > 0) {
     console.log(`\nReady to repair (${repairsToApply.length}):`);
@@ -49,30 +58,60 @@ try {
     }
   }
 
-  const hasIssues = missingErrors.length > 0 || identityConflictErrors.length > 0 || isbnCollisionErrors.length > 0;
+  if (alternateIdentityMatches && alternateIdentityMatches.length > 0) {
+    console.log(`\nAlternate identity matches (diagnostic only) (${alternateIdentityMatches.length}):`);
+    for (const a of alternateIdentityMatches) {
+      console.log(`  [${a.bookId}]`);
+      console.log(`    Title:          "${a.title}"`);
+      console.log(`    Author:         "${a.author}"`);
+      console.log(`    Current ISBN:   ${a.currentIsbn}`);
+      console.log(`    Manifest Old:   ${a.manifestOldIsbn}`);
+      console.log(`    Desired ISBN:   ${a.desiredIsbn}`);
+    }
+  }
 
-  if (hasIssues) {
-    if (missingErrors.length > 0) {
-      console.error(`\nMissing old books (${missingErrors.length}):`);
-      for (const m of missingErrors) {
-        console.error(`  ISBN ${m.isbn}: ${m.message}`);
+  if (ambiguousIdentityMatches && ambiguousIdentityMatches.length > 0) {
+    console.error(`\nAmbiguous identity matches (${ambiguousIdentityMatches.length}):`);
+    for (const amb of ambiguousIdentityMatches) {
+      console.error(`  Expected: "${amb.expectedTitle}" by "${amb.expectedAuthor}" (old ISBN: ${amb.manifestOldIsbn}, desired ISBN: ${amb.desiredIsbn})`);
+      console.error(`  Candidates (${amb.candidates.length}):`);
+      for (const c of amb.candidates) {
+        console.error(`    [${c.bookId}] "${c.title}" by "${c.author}" (ISBN: ${c.currentIsbn})`);
       }
     }
-    if (identityConflictErrors.length > 0) {
-      console.error(`\nIdentity conflicts (${identityConflictErrors.length}):`);
-      for (const c of identityConflictErrors) {
-        console.error(`  ${c.message}`);
-      }
+  }
+
+  const missingList = genuinelyMissingList?.length > 0 ? genuinelyMissingList : missingErrors;
+  if (missingList && missingList.length > 0) {
+    console.error(`\nGenuinely missing (${missingList.length}):`);
+    for (const m of missingList) {
+      console.error(`  ISBN ${m.isbn}: ${m.message}`);
     }
-    if (isbnCollisionErrors.length > 0) {
-      console.error(`\nTarget ISBN collisions (${isbnCollisionErrors.length}):`);
-      for (const c of isbnCollisionErrors) {
-        console.error(`  ${c.message}`);
-      }
+  }
+
+  if (identityConflictErrors.length > 0) {
+    console.error(`\nIdentity conflicts (${identityConflictErrors.length}):`);
+    for (const c of identityConflictErrors) {
+      console.error(`  ${c.message}`);
     }
-    if (apply) {
-      process.exitCode = 1;
+  }
+
+  if (isbnCollisionErrors.length > 0) {
+    console.error(`\nTarget ISBN collisions (${isbnCollisionErrors.length}):`);
+    for (const c of isbnCollisionErrors) {
+      console.error(`  ${c.message}`);
     }
+  }
+
+  const hasIssues =
+    (missingList?.length ?? 0) > 0 ||
+    (alternateIdentityMatches?.length ?? 0) > 0 ||
+    (ambiguousIdentityMatches?.length ?? 0) > 0 ||
+    identityConflictErrors.length > 0 ||
+    isbnCollisionErrors.length > 0;
+
+  if (hasIssues && apply) {
+    process.exitCode = 1;
   }
 } catch (error) {
   console.error(`Launch catalog repair failed: ${error?.message ?? String(error)}`);
