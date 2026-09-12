@@ -2,7 +2,13 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth.js';
 import { api, session } from '../lib/api.js';
 import { ErrorNotice } from '../components/shared.jsx';
-import { isPushSupported, getExistingSubscription, subscribeToPush, unsubscribeFromPush } from '../lib/push.js';
+import {
+  isPushSupported,
+  getExistingSubscription,
+  subscribeToPush,
+  unsubscribeFromPush,
+  checkSubscriptionStatus,
+} from '../lib/push.js';
 
 export default function Account() {
   const { user } = useAuth();
@@ -42,18 +48,24 @@ export default function Account() {
       }
       try {
         const sub = await getExistingSubscription();
-        if (active) {
-          setPushSubscribed(Boolean(sub));
+        if (!sub) {
+          if (active) setPushSubscribed(false);
+        } else {
+          const isOwned = await checkSubscriptionStatus(sub.endpoint);
+          if (active) {
+            setPushSubscribed(isOwned);
+          }
         }
       } catch {
         // Ignore check errors so profile editing is never broken
+        if (active) setPushSubscribed(false);
       } finally {
         if (active) setPushLoading(false);
       }
     }
     checkPush();
     return () => { active = false; };
-  }, []);
+  }, [user?.id]);
 
   async function handleEnablePush() {
     setPushBusy(true);

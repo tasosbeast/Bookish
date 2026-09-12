@@ -182,4 +182,62 @@ test('PostgreSQL: Web Push subscriptions and friend request push delivery',
     await sendFriendRequestPush(userA.username, userB.userId, friendshipId, expiredSender);
     const cleanedUpSub = await prisma.pushSubscription.findUnique({ where: { endpoint: endpoint1 } });
     assert.equal(cleanedUpSub, null, 'Stale 410 subscription was automatically removed');
+
+    // ==========================================
+    // Ownership and status verification sequence:
+    // 1. User A registers endpoint E.
+    // 2. status as User A => subscribed true.
+    // 3. status as User B => subscribed false.
+    // 4. status must not reveal User A identity.
+    // 5. User B POSTs the same subscription via normal subscribe endpoint.
+    // 6. endpoint E is reassigned to User B.
+    // 7. status as User B => true.
+    // 8. status as User A => false.
+    // ==========================================
+    const endpointE = `https://fcm.googleapis.com/fcm/send/${tag}-endpoint-e`;
+    endpoints.push(endpointE);
+
+    // 1. User A registers endpoint E.
+    await auth(userA, 'post', '/api/push/subscriptions').send({
+      endpoint: endpointE,
+      keys: { p256dh: 'key-e', auth: 'auth-e' },
+    }).expect(201);
+
+    // 2. status as User A => subscribed true.
+    const statusResA = await auth(userA, 'post', '/api/push/subscriptions/status').send({
+      endpoint: endpointE,
+    }).expect(200);
+    assert.deepEqual(statusResA.body, { data: { subscribed: true } });
+
+    // 3. status as User B => subscribed false.
+    const statusResB = await auth(userB, 'post', '/api/push/subscriptions/status').send({
+      endpoint: endpointE,
+    }).expect(200);
+    assert.deepEqual(statusResB.body, { data: { subscribed: false } });
+
+    // 4. status must not reveal User A identity.
+    assert.strictEqual(statusResB.body.data.userId, undefined);
+    assert.strictEqual(statusResB.body.data.owner, undefined);
+
+    // 5. User B POSTs the same subscription via normal subscribe endpoint.
+    await auth(userB, 'post', '/api/push/subscriptions').send({
+      endpoint: endpointE,
+      keys: { p256dh: 'key-e-b', auth: 'auth-e-b' },
+    }).expect(201);
+
+    // 6. endpoint E is reassigned to User B.
+    const reassignedE = await prisma.pushSubscription.findUnique({ where: { endpoint: endpointE } });
+    assert.equal(reassignedE.userId, userB.userId);
+
+    // 7. status as User B => true.
+    const statusResB2 = await auth(userB, 'post', '/api/push/subscriptions/status').send({
+      endpoint: endpointE,
+    }).expect(200);
+    assert.deepEqual(statusResB2.body, { data: { subscribed: true } });
+
+    // 8. status as User A => false.
+    const statusResA2 = await auth(userA, 'post', '/api/push/subscriptions/status').send({
+      endpoint: endpointE,
+    }).expect(200);
+    assert.deepEqual(statusResA2.body, { data: { subscribed: false } });
   });

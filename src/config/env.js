@@ -25,9 +25,15 @@ export function parseEnv(source) {
 
 export const env = parseEnv(process.env);
 
+let warnedVapid = false;
+
 // VAPID configuration is optional; missing vars disable push without crashing unrelated features.
 export function parseVapid(source = process.env) {
   if (!source.VAPID_PUBLIC_KEY || !source.VAPID_PRIVATE_KEY || !source.VAPID_SUBJECT) {
+    if (!warnedVapid && source.NODE_ENV !== 'test') {
+      warnedVapid = true;
+      console.warn('[push] VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT not set — Web Push is disabled');
+    }
     return null;
   }
   return {

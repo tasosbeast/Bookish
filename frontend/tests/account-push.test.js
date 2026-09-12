@@ -41,6 +41,8 @@ test('Account page: browser push notifications UI states and interactions', { ti
   const testPublicKey = 'BGouzo1xJ7_lwbhCB1DsNprRI7yu1PeBoyThiRRlIrwG_S9ZrJW7hkNOnH2_vAZH1U6zB-wTBFkbm5xStaPLKWk';
   const testEndpoint = 'https://push.example.com/sub/account-test';
 
+  let ownedByCurrentUser = false;
+
   globalThis.fetch = async (input, options = {}) => {
     const url = new URL(input);
     const method = options.method || 'GET';
@@ -58,10 +60,15 @@ test('Account page: browser push notifications UI states and interactions', { ti
     if (url.pathname === '/api/push/public-key') {
       return Response.json({ data: { publicKey: testPublicKey } });
     }
+    if (url.pathname === '/api/push/subscriptions/status' && method === 'POST') {
+      return Response.json({ data: { subscribed: ownedByCurrentUser } });
+    }
     if (url.pathname === '/api/push/subscriptions' && method === 'POST') {
+      ownedByCurrentUser = true;
       return Response.json({ data: { status: 'subscribed' } }, { status: 201 });
     }
     if (url.pathname === '/api/push/subscriptions' && method === 'DELETE') {
+      ownedByCurrentUser = false;
       return Response.json({ data: { status: 'unsubscribed' } });
     }
     return Response.json({ data: [] });
@@ -167,6 +174,7 @@ test('Account page: browser push notifications UI states and interactions', { ti
   dom.window.Notification.permission = 'default';
   requestPermissionCalled = false;
   mockSubscription = null;
+  ownedByCurrentUser = false;
 
   await act(async () => root.render(h(Account, { key: 'step3' })));
   await act(async () => { await new Promise(r => setTimeout(r, 10)); });
@@ -183,14 +191,107 @@ test('Account page: browser push notifications UI states and interactions', { ti
   assert.ok(enableBtn, 'Offers explicit Enable notifications button');
 
   // ==========================================
-  // 4, 5, 6. Enable button requests permission, subscribes, posts to backend, shows enabled state
+  // 3b. Browser has an existing PushSubscription, but backend says current user does NOT own it
   // ==========================================
+  // Simulates User A's browser subscription lingering after User B logged in
+  mockSubscription = {
+    endpoint: testEndpoint,
+    toJSON: () => ({
+      endpoint: testEndpoint,
+      keys: { p256dh: 'mock-p256dh', auth: 'mock-auth' },
+    }),
+    unsubscribe: async () => {
+      unsubscribeCalled = true;
+      mockSubscription = null;
+      return true;
+    },
+  };
+  ownedByCurrentUser = false;
+  requestPermissionCalled = false;
+  let subscribeMethodCalled = false;
+  mockPushManager.subscribe = async () => {
+    subscribeMethodCalled = true;
+    return mockSubscription;
+  };
+
+  await act(async () => root.render(h(Account, { key: 'step3b' })));
+  await act(async () => { await new Promise(r => setTimeout(r, 15)); });
+
+  assert.equal(requestPermissionCalled, false, 'Permission is NOT requested automatically on mount');
+  assert.ok(
+    !document.body.textContent.includes('Browser notifications are enabled on this device.'),
+    'Must NOT show enabled when backend ownership is false'
+  );
+  assert.ok(
+    document.body.textContent.includes('Get notified when someone sends you a friend request.'),
+    'Must offer Enable notifications prompt when unowned'
+  );
+
+  const enableBtnUnowned = Array.from(document.querySelectorAll('button')).find(
+    b => b.textContent.trim() === 'Enable notifications'
+  );
+  assert.ok(enableBtnUnowned, 'Offers Enable notifications button for unowned subscription');
+
+  // Clicking Enable reuses the existing subscription without re-subscribing
   await act(async () => {
-    enableBtn.click();
-    await new Promise(r => setTimeout(r, 10));
+    enableBtnUnowned.click();
+    await new Promise(r => setTimeout(r, 15));
+  });
+
+  assert.equal(requestPermissionCalled, true, 'Clicking Enable requests permission');
+  assert.equal(subscribeMethodCalled, false, 'Reused existing browser subscription without calling pushManager.subscribe()');
+  assert.ok(
+    apiCalls.some(c => c.path === '/api/push/subscriptions' && c.method === 'POST'),
+    'Posted existing subscription to backend to reassign ownership'
+  );
+  assert.ok(
+    document.body.textContent.includes('Browser notifications are enabled on this device.'),
+    'UI becomes enabled after reassigning'
+  );
+
+  // ==========================================
+  // 4, 5, 6. Enable button requests permission, subscribes, posts to backend, shows enabled state (clean subscribe)
+  // ==========================================
+  mockSubscription = null;
+  ownedByCurrentUser = false;
+  requestPermissionCalled = false;
+  subscribeMethodCalled = false;
+  mockPushManager.subscribe = async options => {
+    subscribeMethodCalled = true;
+    mockSubscription = {
+      endpoint: testEndpoint,
+      options,
+      toJSON: () => ({
+        endpoint: testEndpoint,
+        keys: {
+          p256dh: 'mock-p256dh',
+          auth: 'mock-auth',
+        },
+      }),
+      unsubscribe: async () => {
+        unsubscribeCalled = true;
+        mockSubscription = null;
+        return true;
+      },
+    };
+    return mockSubscription;
+  };
+
+  await act(async () => root.render(h(Account, { key: 'step4' })));
+  await act(async () => { await new Promise(r => setTimeout(r, 15)); });
+
+  const freshEnableBtn = Array.from(document.querySelectorAll('button')).find(
+    b => b.textContent.trim() === 'Enable notifications'
+  );
+  assert.ok(freshEnableBtn);
+
+  await act(async () => {
+    freshEnableBtn.click();
+    await new Promise(r => setTimeout(r, 15));
   });
 
   assert.equal(requestPermissionCalled, true, 'Clicking Enable notifications requested permission');
+  assert.equal(subscribeMethodCalled, true, 'Called pushManager.subscribe when no existing subscription was present');
   assert.ok(
     apiCalls.some(c => c.path === '/api/push/public-key'),
     'Fetched VAPID public key from backend'
@@ -217,7 +318,7 @@ test('Account page: browser push notifications UI states and interactions', { ti
   unsubscribeCalled = false;
   await act(async () => {
     disableBtn.click();
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise(r => setTimeout(r, 15));
   });
 
   assert.equal(unsubscribeCalled, true, 'Unsubscribed from PushManager locally');

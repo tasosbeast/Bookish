@@ -143,3 +143,9 @@ export const deletePushSubscriptionSchema = z.object({
     endpoint: z.string().url().optional(),
   }).strict().optional().default({}),
 }).refine(data => Boolean(data.body?.endpoint || data.query?.endpoint), 'Endpoint is required');
+
+export const pushSubscriptionStatusSchema = z.object({
+  body: z.object({
+    endpoint: z.string().url(),
+  }).strict(),
+});

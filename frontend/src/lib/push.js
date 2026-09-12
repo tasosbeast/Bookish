@@ -29,6 +29,20 @@ export async function getExistingSubscription() {
   return registration.pushManager.getSubscription();
 }
 
+export async function checkSubscriptionStatus(endpoint) {
+  if (!endpoint || !isPushSupported()) return false;
+  try {
+    const result = await api('/push/subscriptions/status', {
+      method: 'POST',
+      auth: 'required',
+      body: { endpoint },
+    });
+    return Boolean(result?.data?.subscribed);
+  } catch {
+    return false;
+  }
+}
+
 export async function subscribeToPush() {
   if (!isPushSupported()) {
     throw new Error('Browser notifications are not supported on this device.');
@@ -50,11 +64,14 @@ export async function subscribeToPush() {
     throw new Error('Push notifications are currently unavailable.');
   }
 
-  const convertedKey = urlBase64ToUint8Array(publicKey);
-  const subscription = await registration.pushManager.subscribe({
-    userVisibleOnly: true,
-    applicationServerKey: convertedKey,
-  });
+  let subscription = await registration.pushManager.getSubscription();
+  if (!subscription) {
+    const convertedKey = urlBase64ToUint8Array(publicKey);
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: convertedKey,
+    });
+  }
 
   const json = subscription.toJSON ? subscription.toJSON() : {};
   const p256dh = json.keys?.p256dh;

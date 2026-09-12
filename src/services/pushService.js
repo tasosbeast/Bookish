@@ -38,6 +38,18 @@ export async function removeSubscription(userId, endpoint) {
 }
 
 /**
+ * Check whether a push subscription endpoint belongs to the given user.
+ * Returns boolean true/false without exposing who owns it.
+ */
+export async function hasSubscription(userId, endpoint) {
+  const sub = await prisma.pushSubscription.findUnique({
+    where: { endpoint },
+    select: { userId: true },
+  });
+  return sub?.userId === userId;
+}
+
+/**
  * Send a best-effort friend-request push to all of the target user's subscriptions.
  * Never throws — failures are logged but must not affect the caller.
  */

@@ -25,3 +25,9 @@ export async function unsubscribe(req, res) {
   await pushService.removeSubscription(req.auth.userId, endpoint);
   res.json({ data: { status: 'unsubscribed' } });
 }
+
+export async function status(req, res) {
+  const { endpoint } = req.validated.body;
+  const subscribed = await pushService.hasSubscription(req.auth.userId, endpoint);
+  res.json({ data: { subscribed } });
+}

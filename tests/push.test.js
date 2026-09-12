@@ -1,7 +1,11 @@
 import './setup.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pushSubscriptionSchema, deletePushSubscriptionSchema } from '../src/validators/index.js';
+import {
+  pushSubscriptionSchema,
+  deletePushSubscriptionSchema,
+  pushSubscriptionStatusSchema,
+} from '../src/validators/index.js';
 import { sendFriendRequestPush } from '../src/services/pushService.js';
 import { prisma } from '../src/lib/prisma.js';
 
@@ -54,6 +58,22 @@ test('Push validation: deletePushSubscriptionSchema accepts endpoint in body or 
   assert.throws(() => deletePushSubscriptionSchema.parse({
     body: {},
     query: {},
+  }));
+});
+
+test('Push validation: pushSubscriptionStatusSchema validates endpoint', () => {
+  const valid = {
+    body: { endpoint: 'https://example.com/endpoint' },
+  };
+  const parsed = pushSubscriptionStatusSchema.parse(valid);
+  assert.equal(parsed.body.endpoint, 'https://example.com/endpoint');
+
+  assert.throws(() => pushSubscriptionStatusSchema.parse({
+    body: { endpoint: 'invalid-url' },
+  }));
+
+  assert.throws(() => pushSubscriptionStatusSchema.parse({
+    body: {},
   }));
 });
 
