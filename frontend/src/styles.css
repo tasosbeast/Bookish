@@ -72,7 +72,7 @@
   .sort-box label { margin: 0; white-space: nowrap; font-weight: 400; color: #767d70; font-size: 12px; }
   .sort-box select { background: none; border: 0; font-size: 13px; width: 165px; }
   .genre-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 17px; }.genre-filter-label { color: #70796a; font-size: 12px; margin-right: 3px; }.genre-filter { min-height: 34px; border: 1px solid #d7ded0; border-radius: 30px; background: #fffef9; color: var(--color-leaf); padding: 6px 12px; font-size: 12px; white-space: nowrap; }.genre-filter:hover { background: var(--color-paper); }.genre-filter.active { border-color: var(--color-leaf); background: var(--color-leaf); color: #fff; font-weight: 600; }
-  .catalog-section { padding: 48px 0 20px; }
+  .catalog-section { padding: 48px 0 20px; scroll-margin-top: 20px; }
   .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 20px; }
   .section-heading h2 { font-size: 30px; letter-spacing: -.6px; overflow-wrap: anywhere; }
   .section-heading .eyebrow { margin-bottom: 10px; }

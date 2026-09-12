@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth.js';
 import { useResource } from '../hooks/useResource.js';
@@ -53,6 +53,19 @@ export default function Discover() {
   const genre = params.get('genre') ?? '';
   const author = params.get('author') ?? '';
   const page = pageNumber(params.get('page'));
+  const catalogRef = useRef(null);
+  const previousPageRef = useRef(page);
+
+  useEffect(() => {
+    if (previousPageRef.current !== page) {
+      previousPageRef.current = page;
+      const prefersReducedMotion = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+      catalogRef.current?.scrollIntoView?.({
+        behavior: prefersReducedMotion ? 'auto' : 'smooth',
+        block: 'start',
+      });
+    }
+  }, [page]);
   const genresResource = useResource('/genres', 'none');
   const fetchedGenres = genresResource.data?.data ?? [];
   const hasExplicitSort = params.has('sort') || params.has('order');
@@ -147,7 +160,7 @@ export default function Discover() {
         ) : null}
       </section>
     )}
-    <section aria-labelledby="discover-heading" className="catalog-section"><div className="section-heading"><div><p className="eyebrow">The bookshelf</p><h2 id="discover-heading">{author ? `Books by “${author}”` : q ? `Results for “${q}”` : 'Discover something good'}</h2></div>{resource.data && <span className="muted small" role="status" aria-live="polite">{resource.loading ? 'Updating results…' : resource.error ? 'Showing previous results.' : `${resource.data.pagination.total} ${resource.data.pagination.total === 1 ? 'book' : 'books'}`}</span>}</div>
+    <section ref={catalogRef} aria-labelledby="discover-heading" className="catalog-section"><div className="section-heading"><div><p className="eyebrow">The bookshelf</p><h2 id="discover-heading">{author ? `Books by “${author}”` : q ? `Results for “${q}”` : 'Discover something good'}</h2></div>{resource.data && <span className="muted small" role="status" aria-live="polite">{resource.loading ? 'Updating results…' : resource.error ? 'Showing previous results.' : `${resource.data.pagination.total} ${resource.data.pagination.total === 1 ? 'book' : 'books'}`}</span>}</div>
       {q || genre || author ? <div className="filter-line">{q && <div className="filter-item"><span>Search</span><button type="button" className="active-filter" aria-label={`Clear search filter: ${q}`} onClick={() => { setSearch(''); change({ q: null }); }}><span className="active-filter-label">{q}</span><Icon name="close" size={14} /></button></div>}{genre && <div className="filter-item"><span>Genre</span><button type="button" className="active-filter" aria-label={`Clear genre filter: ${genreName}`} onClick={() => change({ genre: null })}><span className="active-filter-label">{genreName}</span><Icon name="close" size={14} /></button></div>}{author && <div className="filter-item"><span>Author</span><button type="button" className="active-filter" aria-label={`Clear author filter: ${author}`} onClick={() => change({ author: null })}><span className="active-filter-label">{author}</span><Icon name="close" size={14} /></button></div>}</div> : <p className="genre-hint">See something you like? Choose a genre label on a book to explore more.</p>}
       {resource.error && <ErrorNotice error={resource.error} retry={resource.reload} />}
       {initialLoading ? <Loading cards /> : resource.data?.data.length ? <>
