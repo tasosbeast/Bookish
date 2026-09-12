@@ -1,6 +1,6 @@
 import { serializable } from '../../src/lib/transaction.js';
 import { CatalogContractError, validateSourceManifest } from './contracts.js';
-import { normalizeAuthorName, normalizeTitle } from './normalize.js';
+import { compatibleIdentity, workIdentity } from './work-identity.js';
 
 const LAUNCH_CATALOG_SIZE = 250;
 
@@ -15,22 +15,6 @@ export class LaunchCatalogError extends Error {
 
 function coverUrl(isbn) {
   return `https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg?default=false`;
-}
-
-function titleForWorkIdentity(title) {
-  const suffix = title.match(/\s*\(([^()]*)\)\s*$/);
-  if (!suffix || /\b(audio|audiobook|graphic|guide|study|summary|companion|omnibus|collection|box set|movie|film|adaptation)\b/i.test(suffix[1])) {
-    return normalizeTitle(title);
-  }
-  return normalizeTitle(title.slice(0, suffix.index));
-}
-
-function workIdentity(book) {
-  return `${titleForWorkIdentity(book.title)}\u0000${normalizeAuthorName(book.author)}`;
-}
-
-function compatibleIdentity(book, entry) {
-  return workIdentity(book) === workIdentity(entry);
 }
 
 export function prepareLaunchCatalog(sourceValue) {
