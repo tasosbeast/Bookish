@@ -285,4 +285,71 @@ test('Friends frontend: protection, tabs, reader suggestions, request flows, emp
   });
   assert.ok(document.body.textContent.includes('We need a little more reading history first.'), 'Renders insufficient reading history title');
   assert.ok(document.querySelector('a[href="/my-books"]'), 'Renders link to My Books');
+
+  // 9. Requests tab badge syncs after actions
+  // Reset fixture to 1 incoming request so badge shows "(1)"
+  requestsData = {
+    data: {
+      incoming: [
+        { id: 'req-badge-1', user: { id: 'user-badge-1', username: 'Badge_Sam', profilePicture: null, bio: null }, createdAt: '2026-09-10T00:00:00.000Z' },
+      ],
+      sent: [],
+    },
+  };
+
+  await act(async () => root.render(
+    h(MemoryRouter, { key: 'step9', initialEntries: ['/friends?tab=requests'] },
+      h(Routes, null,
+        h(Route, { path: '/friends', element: h(Friends) })
+      )
+    )
+  ));
+  await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+
+  const requestsTabLabel9 = document.getElementById('tab-requests');
+  assert.ok(requestsTabLabel9.textContent.includes('(1)'), 'Tab badge shows (1) with one incoming request');
+
+  // Simulate decline: update fixture to empty incoming, then click Decline
+  requestsData = { data: { incoming: [], sent: [] } };
+  const declineBtn9 = document.querySelector('.decline-request-button');
+  assert.ok(declineBtn9, 'Decline button present');
+  await act(async () => {
+    declineBtn9.click();
+    await new Promise(r => setTimeout(r, 0));
+  });
+
+  assert.ok(!requestsTabLabel9.textContent.includes('('), 'Tab badge clears after Decline');
+
+  // Now test Accept: reset fixture to 1 incoming
+  requestsData = {
+    data: {
+      incoming: [
+        { id: 'req-badge-2', user: { id: 'user-badge-2', username: 'Badge_Lee', profilePicture: null, bio: null }, createdAt: '2026-09-10T00:00:00.000Z' },
+      ],
+      sent: [],
+    },
+  };
+
+  await act(async () => root.render(
+    h(MemoryRouter, { key: 'step9b', initialEntries: ['/friends?tab=requests'] },
+      h(Routes, null,
+        h(Route, { path: '/friends', element: h(Friends) })
+      )
+    )
+  ));
+  await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+
+  const requestsTabLabel9b = document.getElementById('tab-requests');
+  assert.ok(requestsTabLabel9b.textContent.includes('(1)'), 'Tab badge shows (1) before Accept');
+
+  // Simulate accept: update fixture to empty incoming
+  requestsData = { data: { incoming: [], sent: [] } };
+  const acceptBtn9 = document.querySelector('.accept-request-button');
+  assert.ok(acceptBtn9, 'Accept button present');
+  await act(async () => {
+    acceptBtn9.click();
+    await new Promise(r => setTimeout(r, 0));
+  });
+
+  assert.ok(!requestsTabLabel9b.textContent.includes('('), 'Tab badge clears after Accept');
 });

@@ -318,7 +318,7 @@ function FriendsTab({ onExploreSuggestions, relationshipRevision }) {
   );
 }
 
-function RequestsTab({ relationshipRevision }) {
+function RequestsTab({ relationshipRevision, onRequestsChanged }) {
   const requests = useResource('/friends/requests', 'required');
   const hasMounted = useRef(false);
   const [busyIds, setBusyIds] = useState(() => new Set());
@@ -346,6 +346,7 @@ function RequestsTab({ relationshipRevision }) {
         auth: 'required',
       });
       requests.reload();
+      onRequestsChanged?.();
     } catch (err) {
       setErrorMap(prev => ({ ...prev, [id]: messageFor(err) }));
     } finally {
@@ -368,6 +369,7 @@ function RequestsTab({ relationshipRevision }) {
         auth: 'required',
       });
       requests.reload();
+      onRequestsChanged?.();
     } catch (err) {
       setErrorMap(prev => ({ ...prev, [id]: messageFor(err) }));
     } finally {
@@ -561,7 +563,7 @@ export default function Friends() {
       >
         {activeTab === 'suggestions' && <SuggestionsTab onSentRequest={requestsResource.reload} relationshipRevision={relationshipRevision} />}
         {activeTab === 'friends' && <FriendsTab onExploreSuggestions={() => setTab('suggestions')} relationshipRevision={relationshipRevision} />}
-        {activeTab === 'requests' && <RequestsTab relationshipRevision={relationshipRevision} />}
+        {activeTab === 'requests' && <RequestsTab relationshipRevision={relationshipRevision} onRequestsChanged={() => requestsResource.reload()} />}
       </div>
     </div>
   );
