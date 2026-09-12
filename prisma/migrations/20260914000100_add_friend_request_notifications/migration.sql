@@ -1,5 +1,5 @@
-﻿-- AlterEnum
-ALTER TYPE NotificationType ADD VALUE 'friend_request';
+-- AlterEnum
+ALTER TYPE "NotificationType" ADD VALUE 'friend_request';
 
 -- DropForeignKey
 ALTER TABLE notifications DROP CONSTRAINT notifications_review_id_fkey;
