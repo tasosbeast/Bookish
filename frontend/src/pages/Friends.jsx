@@ -110,11 +110,17 @@ function ReaderSearch({ onRelationshipChange }) {
   </section>;
 }
 
-function SuggestionsTab({ onSentRequest }) {
+function SuggestionsTab({ onSentRequest, relationshipRevision }) {
   const suggestions = useResource('/friends/suggestions?limit=12', 'required');
+  const hasMounted = useRef(false);
   const [busyIds, setBusyIds] = useState(() => new Set());
   const [sentIds, setSentIds] = useState(() => new Set());
   const [errorMap, setErrorMap] = useState({});
+
+  useEffect(() => {
+    if (hasMounted.current) suggestions.reload();
+    else hasMounted.current = true;
+  }, [relationshipRevision, suggestions.reload]);
 
   if (suggestions.loading && !suggestions.data) return <Loading />;
   if (suggestions.error) return <ErrorNotice error={suggestions.error} retry={suggestions.reload} />;
@@ -218,10 +224,16 @@ function SuggestionsTab({ onSentRequest }) {
   );
 }
 
-function FriendsTab({ onExploreSuggestions }) {
+function FriendsTab({ onExploreSuggestions, relationshipRevision }) {
   const friends = useResource('/friends', 'required');
+  const hasMounted = useRef(false);
   const [busyIds, setBusyIds] = useState(() => new Set());
   const [errorMap, setErrorMap] = useState({});
+
+  useEffect(() => {
+    if (hasMounted.current) friends.reload();
+    else hasMounted.current = true;
+  }, [relationshipRevision, friends.reload]);
 
   if (friends.loading && !friends.data) return <Loading />;
   if (friends.error) return <ErrorNotice error={friends.error} retry={friends.reload} />;
@@ -306,10 +318,16 @@ function FriendsTab({ onExploreSuggestions }) {
   );
 }
 
-function RequestsTab() {
+function RequestsTab({ relationshipRevision }) {
   const requests = useResource('/friends/requests', 'required');
+  const hasMounted = useRef(false);
   const [busyIds, setBusyIds] = useState(() => new Set());
   const [errorMap, setErrorMap] = useState({});
+
+  useEffect(() => {
+    if (hasMounted.current) requests.reload();
+    else hasMounted.current = true;
+  }, [relationshipRevision, requests.reload]);
 
   if (requests.loading && !requests.data) return <Loading />;
   if (requests.error) return <ErrorNotice error={requests.error} retry={requests.reload} />;
@@ -466,12 +484,18 @@ function RequestsTab() {
 
 export default function Friends() {
   const [params, setParams] = useSearchParams();
+  const [relationshipRevision, setRelationshipRevision] = useState(0);
   const activeTab = ['suggestions', 'friends', 'requests'].includes(params.get('tab'))
     ? params.get('tab')
     : 'suggestions';
 
   const requestsResource = useResource('/friends/requests', 'required');
   const incomingCount = requestsResource.data?.data?.incoming?.length ?? 0;
+
+  function refreshRelationships() {
+    setRelationshipRevision(revision => revision + 1);
+    requestsResource.reload();
+  }
 
   function setTab(tab) {
     const next = new URLSearchParams(params);
@@ -491,7 +515,7 @@ export default function Friends() {
         <p className="muted">Find readers who live between the same kinds of pages.</p>
       </div>
 
-      <ReaderSearch onRelationshipChange={requestsResource.reload} />
+      <ReaderSearch onRelationshipChange={refreshRelationships} />
 
       <nav className="shelf-tabs friends-tabs" role="tablist" aria-label="Friends tabs">
         <button
@@ -535,9 +559,9 @@ export default function Friends() {
         aria-labelledby={`tab-${activeTab}`}
         className="friends-tab-panel"
       >
-        {activeTab === 'suggestions' && <SuggestionsTab onSentRequest={requestsResource.reload} />}
-        {activeTab === 'friends' && <FriendsTab onExploreSuggestions={() => setTab('suggestions')} />}
-        {activeTab === 'requests' && <RequestsTab />}
+        {activeTab === 'suggestions' && <SuggestionsTab onSentRequest={requestsResource.reload} relationshipRevision={relationshipRevision} />}
+        {activeTab === 'friends' && <FriendsTab onExploreSuggestions={() => setTab('suggestions')} relationshipRevision={relationshipRevision} />}
+        {activeTab === 'requests' && <RequestsTab relationshipRevision={relationshipRevision} />}
       </div>
     </div>
   );

@@ -28,6 +28,20 @@ test('Friends reader search debounces, ignores stale results, and updates relati
     element.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
   };
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+  let suggestionsData = {
+    data: [{ user: readers[0].user, reason: { type: 'genres', genres: ['Mystery'], commonRatedBooks: 0, sharedBooks: 1 } }],
+    meta: { personalized: true },
+  };
+  let friendsData = { data: [] };
+  let requestsData = {
+    data: {
+      incoming: [
+        { id: 'request-in', user: readers[2].user },
+        { id: 'request-decline', user: readers[3].user },
+      ],
+      sent: [],
+    },
+  };
 
   t.after(async () => {
     if (root) { const { act } = await import('react'); await act(async () => root.unmount()); }
@@ -39,8 +53,9 @@ test('Friends reader search debounces, ignores stale results, and updates relati
     const url = new URL(input);
     const method = options.method || 'GET';
     if (url.pathname === '/api/auth/login') return Promise.resolve(response({ user: { id: 'reader', username: 'reader' }, accessToken: `header.${btoa(JSON.stringify({ exp: Date.now() / 1000 + 900 }))}.signature`, expiresIn: 900 }));
-    if (url.pathname === '/api/friends/suggestions') return Promise.resolve(response({ data: [], meta: { personalized: false } }));
-    if (url.pathname === '/api/friends/requests' && method === 'GET') return Promise.resolve(response({ data: { incoming: [], sent: [] } }));
+    if (url.pathname === '/api/friends/suggestions') return Promise.resolve(response(suggestionsData));
+    if (url.pathname === '/api/friends/requests' && method === 'GET') return Promise.resolve(response(requestsData));
+    if (url.pathname === '/api/friends' && method === 'GET') return Promise.resolve(response(friendsData));
     if (url.pathname === '/api/friends/search') {
       searchCalls++;
       const q = url.searchParams.get('q');
@@ -49,9 +64,20 @@ test('Friends reader search debounces, ignores stale results, and updates relati
       if (q === 'err') return Promise.resolve(response({ error: { code: 'SEARCH_FAILED', message: 'Reader search is unavailable' } }, 500));
       return Promise.resolve(response({ data: readers }));
     }
-    if (url.pathname === '/api/friends/requests' && method === 'POST') return Promise.resolve(response({ data: { id: 'request-new', status: 'pending' } }, 201));
-    if (url.pathname.endsWith('/accept') && method === 'POST') return Promise.resolve(response({ data: { id: 'friendship-in', status: 'accepted' } }));
-    if (url.pathname.startsWith('/api/friends/requests/') && method === 'DELETE') return Promise.resolve(response({ data: { status: 'deleted' } }));
+    if (url.pathname === '/api/friends/requests' && method === 'POST') {
+      suggestionsData = { data: [], meta: { personalized: true } };
+      return Promise.resolve(response({ data: { id: 'request-new', status: 'pending' } }, 201));
+    }
+    if (url.pathname.endsWith('/accept') && method === 'POST') {
+      requestsData = { data: { incoming: requestsData.data.incoming.filter(item => item.id !== 'request-in'), sent: [] } };
+      friendsData = { data: [{ friendshipId: 'friendship-in', friend: readers[2].user, acceptedAt: '2026-09-12T00:00:00.000Z' }] };
+      return Promise.resolve(response({ data: { id: 'friendship-in', status: 'accepted' } }));
+    }
+    if (url.pathname.startsWith('/api/friends/requests/') && method === 'DELETE') {
+      if (url.pathname.endsWith('request-new')) suggestionsData = { data: [{ user: readers[0].user, reason: { type: 'genres', genres: ['Mystery'], commonRatedBooks: 0, sharedBooks: 1 } }], meta: { personalized: true } };
+      if (url.pathname.endsWith('request-decline')) requestsData = { data: { incoming: requestsData.data.incoming.filter(item => item.id !== 'request-decline'), sent: [] } };
+      return Promise.resolve(response({ data: { status: 'deleted' } }));
+    }
     return Promise.resolve(response({ data: [] }));
   };
 
@@ -79,19 +105,26 @@ test('Friends reader search debounces, ignores stale results, and updates relati
   await act(async () => { resolveStaleSearch(); await pause(0); });
   assert.ok(!document.body.textContent.includes('Old Maria'), 'older slow results cannot replace the latest query');
 
-  const click = async label => {
-    const button = [...document.querySelectorAll('button')].find(item => item.textContent.trim() === label);
-    assert.ok(button, `${label} action is available`);
+  const clickSearchAction = async (username, label) => {
+    const card = [...document.querySelectorAll('.reader-search-result')].find(item => item.querySelector('h3')?.textContent === username);
+    const button = [...card.querySelectorAll('button')].find(item => item.textContent.trim() === label);
+    assert.ok(button, `${label} action is available for ${username}`);
     await act(async () => { button.click(); await pause(0); });
   };
-  await click('Add Friend');
+  await clickSearchAction('Maria', 'Add Friend');
   assert.ok(document.body.textContent.includes('Request sent'));
-  await click('Cancel');
+  assert.equal([...document.querySelectorAll('.friends-tab-panel h3')].filter(item => item.textContent === 'Maria').length, 0, 'the suggested reader disappears after a search request succeeds');
+  await clickSearchAction('Maria', 'Cancel');
   assert.ok(document.body.textContent.includes('Add Friend'));
-  await click('Accept');
+  const requestsTab = document.getElementById('tab-requests');
+  await act(async () => { requestsTab.click(); await pause(0); });
+  await clickSearchAction('Maribel', 'Decline');
+  assert.ok(!document.getElementById('panel-requests').textContent.includes('Maribel'), 'the visible requests list refreshes after a search decline');
+  const friendsTab = document.getElementById('tab-friends');
+  await act(async () => { friendsTab.click(); await pause(0); });
+  await clickSearchAction('Marina', 'Accept');
+  assert.ok(document.getElementById('panel-friends').textContent.includes('Marina'), 'the visible friends list refreshes after a search acceptance');
   assert.ok(document.body.textContent.includes('✓ Friends'));
-  await click('Decline');
-  assert.ok(document.body.textContent.includes('Add Friend'));
   assert.equal(document.querySelector('#location').textContent, '/friends', 'search actions do not navigate away');
 
   await act(async () => { setInputValue(input, 'none'); await pause(300); });
