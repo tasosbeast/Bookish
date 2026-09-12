@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { AppError } from '../lib/errors.js';
+import { serializable } from '../lib/transaction.js';
 
 export function canonicalPair(idA, idB) {
   return idA < idB ? [idA, idB] : [idB, idA];
@@ -165,71 +166,91 @@ export async function sendRequest(currentUserId, targetUserId) {
     throw new AppError(400, 'CANNOT_FRIEND_SELF', 'You cannot send a friend request to yourself.');
   }
 
-  const targetUser = await prisma.user.findUnique({
-    where: { id: targetUserId },
-    select: { id: true },
-  });
-
-  if (!targetUser) {
-    throw new AppError(404, 'USER_NOT_FOUND', 'User not found.');
-  }
-
   const [userAId, userBId] = canonicalPair(currentUserId, targetUserId);
 
-  const existing = await prisma.friendship.findUnique({
-    where: {
-      userAId_userBId: { userAId, userBId },
-    },
-  });
+  return serializable(prisma, async tx => {
+    const targetUser = await tx.user.findUnique({
+      where: { id: targetUserId },
+      select: { id: true },
+    });
 
-  if (existing) {
-    if (existing.status === 'accepted') {
-      throw new AppError(409, 'ALREADY_FRIENDS', 'You are already friends with this user.');
+    if (!targetUser) {
+      throw new AppError(404, 'USER_NOT_FOUND', 'User not found.');
     }
-    if (existing.status === 'pending') {
-      throw new AppError(409, 'REQUEST_PENDING', 'A friend request is already pending between you and this user.');
+
+    const existing = await tx.friendship.findUnique({
+      where: {
+        userAId_userBId: { userAId, userBId },
+      },
+    });
+
+    if (existing) {
+      if (existing.status === 'accepted') {
+        throw new AppError(409, 'ALREADY_FRIENDS', 'You are already friends with this user.');
+      }
+      if (existing.status === 'pending') {
+        throw new AppError(409, 'REQUEST_PENDING', 'A friend request is already pending between you and this user.');
+      }
     }
-  }
 
-  const friendship = await prisma.friendship.create({
-    data: {
-      userAId,
-      userBId,
-      requestedById: currentUserId,
-      status: 'pending',
-    },
+    const friendship = await tx.friendship.create({
+      data: {
+        userAId,
+        userBId,
+        requestedById: currentUserId,
+        status: 'pending',
+      },
+    });
+
+    await tx.notification.create({
+      data: {
+        recipientId: targetUserId,
+        actorId: currentUserId,
+        friendshipId: friendship.id,
+        type: 'friend_request',
+      },
+    });
+
+    return { data: friendship };
   });
-
-  return { data: friendship };
 }
 
 export async function acceptRequest(currentUserId, requestId) {
-  const friendship = await prisma.friendship.findUnique({
-    where: { id: requestId },
+  return serializable(prisma, async tx => {
+    const friendship = await tx.friendship.findUnique({
+      where: { id: requestId },
+    });
+
+    if (!friendship) {
+      throw new AppError(404, 'REQUEST_NOT_FOUND', 'Friend request not found.');
+    }
+
+    if (friendship.status !== 'pending') {
+      throw new AppError(400, 'INVALID_REQUEST_STATUS', 'Request is not pending.');
+    }
+
+    const isMember = friendship.userAId === currentUserId || friendship.userBId === currentUserId;
+    if (!isMember || friendship.requestedById === currentUserId) {
+      throw new AppError(403, 'FORBIDDEN', 'Only the recipient of a friend request can accept it.');
+    }
+
+    const updated = await tx.friendship.update({
+      where: { id: requestId },
+      data: {
+        status: 'accepted',
+        acceptedAt: new Date(),
+      },
+    });
+
+    await tx.notification.deleteMany({
+      where: {
+        friendshipId: requestId,
+        type: 'friend_request',
+      },
+    });
+
+    return { data: updated };
   });
-
-  if (!friendship) {
-    throw new AppError(404, 'REQUEST_NOT_FOUND', 'Friend request not found.');
-  }
-
-  if (friendship.status !== 'pending') {
-    throw new AppError(400, 'INVALID_REQUEST_STATUS', 'Request is not pending.');
-  }
-
-  const isMember = friendship.userAId === currentUserId || friendship.userBId === currentUserId;
-  if (!isMember || friendship.requestedById === currentUserId) {
-    throw new AppError(403, 'FORBIDDEN', 'Only the recipient of a friend request can accept it.');
-  }
-
-  const updated = await prisma.friendship.update({
-    where: { id: requestId },
-    data: {
-      status: 'accepted',
-      acceptedAt: new Date(),
-    },
-  });
-
-  return { data: updated };
 }
 
 export async function deleteRequest(currentUserId, requestId) {

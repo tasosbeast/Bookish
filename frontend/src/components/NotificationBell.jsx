@@ -113,9 +113,13 @@ export function NotificationBell({ userId }) {
       }
     }
     setOpen(false);
-    navigate(`/books/${item.review.bookId}?reviewId=${item.review.id}#review-${item.review.id}`, {
-      state: { jump: Date.now() }
-    });
+    if (item.type === 'friend_request') {
+      navigate('/friends?tab=requests');
+    } else {
+      navigate(`/books/${item.review.bookId}?reviewId=${item.review.id}#review-${item.review.id}`, {
+        state: { jump: Date.now() }
+      });
+    }
   };
 
   const unreadCount = notificationsData.unreadCount;
@@ -176,7 +180,15 @@ export function NotificationBell({ userId }) {
                     </span>
                     <div className="notification-content">
                       <p className="notification-text">
-                        <strong>{actorName}</strong> liked your review of <em>{bookTitle}</em>
+                        {item.type === 'friend_request' ? (
+                          <>
+                            <strong>{actorName}</strong> sent you a friend request
+                          </>
+                        ) : (
+                          <>
+                            <strong>{actorName}</strong> liked your review of <em>{bookTitle}</em>
+                          </>
+                        )}
                       </p>
                       <time dateTime={item.createdAt}>
                         {new Date(item.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}

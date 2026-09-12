@@ -252,6 +252,7 @@ Returns the authenticated recipient's notifications, ordered by `createdAt` desc
       "type": "review_like",
       "readAt": null,
       "createdAt": "2026-09-12T00:00:00.000Z",
+      "friendshipId": null,
       "actor": {
         "id": "22222222-2222-4222-8222-222222222222",
         "username": "maria",
@@ -264,9 +265,22 @@ Returns the authenticated recipient's notifications, ordered by `createdAt` desc
           "title": "The Hobbit"
         }
       }
+    },
+    {
+      "id": "55555555-5555-4555-8555-555555555555",
+      "type": "friend_request",
+      "readAt": null,
+      "createdAt": "2026-09-14T00:00:00.000Z",
+      "friendshipId": "66666666-6666-4666-8666-666666666666",
+      "actor": {
+        "id": "77777777-7777-4777-8777-777777777777",
+        "username": "alex",
+        "profilePicture": null
+      },
+      "review": null
     }
   ],
-  "unreadCount": 1
+  "unreadCount": 2
 }
 ```
 
@@ -282,6 +296,9 @@ Marks all unread notifications belonging to the authenticated recipient as read.
 - When user B likes user A's review (`PUT /api/reviews/:id/like`), a `review_like` notification is generated for user A.
 - Liking one's own review (`B === A`) creates no notification.
 - Removing a like (`DELETE /api/reviews/:id/like`) automatically removes the corresponding `review_like` notification.
+- When user B sends a friend request to user A (`POST /api/friends/requests`), a `friend_request` notification is generated for user A.
+- When a pending request is canceled or declined (`DELETE /api/friends/requests/:id`), the corresponding `friend_request` notification is automatically removed.
+- When an incoming friend request is accepted (`POST /api/friends/requests/:id/accept`), the corresponding `friend_request` notification is removed.
 - Notifications rely on client-initiated fetches when the app header mounts or the notification popover opens (v1 has no WebSocket/SSE push).
 
 ## Recommendations

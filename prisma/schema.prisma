@@ -15,6 +15,7 @@ enum ReadingStatus {
 
 enum NotificationType {
   review_like
+  friend_request
 }
 
 model User {
@@ -151,21 +152,25 @@ model ReviewLike {
 }
 
 model Notification {
-  id          String           @id @default(uuid()) @db.Uuid
-  recipientId String           @map("recipient_id") @db.Uuid
-  actorId     String           @map("actor_id") @db.Uuid
-  reviewId    String           @map("review_id") @db.Uuid
-  type        NotificationType
-  readAt      DateTime?        @map("read_at") @db.Timestamptz(3)
-  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  id           String           @id @default(uuid()) @db.Uuid
+  recipientId  String           @map("recipient_id") @db.Uuid
+  actorId      String           @map("actor_id") @db.Uuid
+  reviewId     String?          @map("review_id") @db.Uuid
+  friendshipId String?          @map("friendship_id") @db.Uuid
+  type         NotificationType
+  readAt       DateTime?        @map("read_at") @db.Timestamptz(3)
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  recipient   User             @relation("NotificationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
-  actor       User             @relation("NotificationActor", fields: [actorId], references: [id], onDelete: Cascade)
-  review      Review           @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  recipient    User             @relation("NotificationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  actor        User             @relation("NotificationActor", fields: [actorId], references: [id], onDelete: Cascade)
+  review       Review?          @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  friendship   Friendship?      @relation(fields: [friendshipId], references: [id], onDelete: Cascade)
 
   @@unique([recipientId, actorId, reviewId, type])
+  @@unique([recipientId, friendshipId, type])
   @@index([recipientId, readAt, createdAt(sort: Desc)])
   @@index([reviewId])
+  @@index([friendshipId])
   @@map("notifications")
 }
 
@@ -184,9 +189,10 @@ model Friendship {
   updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
   acceptedAt    DateTime?        @map("accepted_at") @db.Timestamptz(3)
 
-  userA       User @relation("FriendshipUserA", fields: [userAId], references: [id], onDelete: Cascade)
-  userB       User @relation("FriendshipUserB", fields: [userBId], references: [id], onDelete: Cascade)
-  requestedBy User @relation("FriendshipRequestedBy", fields: [requestedById], references: [id], onDelete: Cascade)
+  userA         User             @relation("FriendshipUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB         User             @relation("FriendshipUserB", fields: [userBId], references: [id], onDelete: Cascade)
+  requestedBy   User             @relation("FriendshipRequestedBy", fields: [requestedById], references: [id], onDelete: Cascade)
+  notifications Notification[]
 
   @@unique([userAId, userBId])
   @@index([userAId, status])

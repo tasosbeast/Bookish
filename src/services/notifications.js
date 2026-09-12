@@ -15,6 +15,7 @@ export async function listNotifications(userId, { limit = 10 }) {
       type: true,
       readAt: true,
       createdAt: true,
+      friendshipId: true,
       actor: {
         select: {
           id: true,

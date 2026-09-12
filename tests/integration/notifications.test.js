@@ -154,5 +154,74 @@ test('PostgreSQL: review like notifications lifecycle and isolation',
     const page2Res = await request(app).get(`/api/books/${book2.id}?page=1&limit=10&reviewId=${oldestReviewId}`).expect(200);
     assert.equal(page2Res.body.data.reviews.pagination.page, 2);
     assert.ok(page2Res.body.data.reviews.data.some(r => r.id === oldestReviewId));
+
+    // ==========================================
+    // 11. Friend request notifications lifecycle
+    // ==========================================
+    const userC = await signup('c');
+    const userD = await signup('d');
+
+    // C sends friend request to D
+    const reqRes = await auth(userC, 'post', '/api/friends/requests').send({ userId: userD.userId }).expect(201);
+    const requestId = reqRes.body.data.id;
+
+    // Recipient D receives friend_request notification
+    const dNotifs = await auth(userD, 'get', '/api/notifications').expect(200);
+    assert.equal(dNotifs.body.unreadCount, 1);
+    assert.equal(dNotifs.body.data.length, 1);
+    const friendReqNotif = dNotifs.body.data[0];
+    assert.equal(friendReqNotif.type, 'friend_request');
+    assert.equal(friendReqNotif.readAt, null);
+    assert.equal(friendReqNotif.friendshipId, requestId);
+    assert.equal(friendReqNotif.actor.id, userC.userId);
+    assert.equal(friendReqNotif.actor.username, userC.username);
+    assert.equal(friendReqNotif.review, null);
+
+    // Sender C does NOT get a notification
+    const cNotifs = await auth(userC, 'get', '/api/notifications').expect(200);
+    assert.equal(cNotifs.body.unreadCount, 0);
+    assert.equal(cNotifs.body.data.length, 0);
+
+    // Recipient D marks the notification as read
+    const markReadRes = await auth(userD, 'put', `/api/notifications/${friendReqNotif.id}/read`).expect(200);
+    assert.ok(markReadRes.body.data.readAt);
+    const dNotifsRead = await auth(userD, 'get', '/api/notifications').expect(200);
+    assert.equal(dNotifsRead.body.unreadCount, 0);
+    assert.ok(dNotifsRead.body.data[0].readAt);
+
+    // Case: Sender cancels request -> notification is deleted (cascade)
+    await auth(userC, 'delete', `/api/friends/requests/${requestId}`).expect(200);
+    const dNotifsAfterCancel = await auth(userD, 'get', '/api/notifications').expect(200);
+    assert.equal(dNotifsAfterCancel.body.unreadCount, 0);
+    assert.equal(dNotifsAfterCancel.body.data.length, 0);
+
+    // Case: Sender sends another request -> Recipient declines -> notification is deleted (cascade)
+    const req2Res = await auth(userC, 'post', '/api/friends/requests').send({ userId: userD.userId }).expect(201);
+    const requestId2 = req2Res.body.data.id;
+    const dNotifs2 = await auth(userD, 'get', '/api/notifications').expect(200);
+    assert.equal(dNotifs2.body.unreadCount, 1);
+    assert.equal(dNotifs2.body.data[0].friendshipId, requestId2);
+
+    // D declines
+    await auth(userD, 'delete', `/api/friends/requests/${requestId2}`).expect(200);
+    const dNotifsAfterDecline = await auth(userD, 'get', '/api/notifications').expect(200);
+    assert.equal(dNotifsAfterDecline.body.unreadCount, 0);
+    assert.equal(dNotifsAfterDecline.body.data.length, 0);
+
+    // Case: Request is accepted -> notification is deleted
+    // First, unfriend so they can send another request
+    const userE = await signup('e');
+    const req3Res = await auth(userC, 'post', '/api/friends/requests').send({ userId: userE.userId }).expect(201);
+    const requestId3 = req3Res.body.data.id;
+    const eNotifs = await auth(userE, 'get', '/api/notifications').expect(200);
+    assert.equal(eNotifs.body.unreadCount, 1);
+    assert.equal(eNotifs.body.data[0].type, 'friend_request');
+
+    // E accepts request
+    await auth(userE, 'post', `/api/friends/requests/${requestId3}/accept`).expect(200);
+    const eNotifsAfterAccept = await auth(userE, 'get', '/api/notifications').expect(200);
+    assert.equal(eNotifsAfterAccept.body.unreadCount, 0);
+    assert.equal(eNotifsAfterAccept.body.data.length, 0);
   }
 );
+

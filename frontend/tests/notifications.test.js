@@ -278,4 +278,43 @@ test('Notification bell, dropdown, unread badge, and navigation', { timeout: 600
   assert.ok(dropdownB, "User B popover dropdown opens");
   assert.ok(dropdownB.textContent.includes('alice liked your review of 1984'), "User B sees B's notification");
   assert.equal(dropdownB.textContent.includes('maria liked your review of The Hobbit'), false, "User A's notification never populates User B's UI");
+
+  // 10. friend_request notification rendering and click navigation to /friends?tab=requests
+  notificationsListB = [
+    {
+      id: 'notif-req-1',
+      type: 'friend_request',
+      readAt: null,
+      createdAt: '2026-09-14T10:00:00Z',
+      friendshipId: 'friendship-uuid-1',
+      actor: { id: 'user-c', username: 'charlie', profilePicture: null },
+      review: null
+    }
+  ];
+  unreadCountB = 1;
+
+  // Re-open bell for User B to refresh list
+  await act(async () => {
+    // close first
+    const btn = document.querySelector('.bell-button');
+    btn.click();
+  });
+  await act(async () => {
+    // open to trigger fetch
+    const btn = document.querySelector('.bell-button');
+    btn.click();
+  });
+
+  const dropdownReq = document.querySelector('.notification-dropdown');
+  assert.ok(dropdownReq, "Dropdown opens for friend request test");
+  assert.ok(dropdownReq.textContent.includes('charlie sent you a friend request'), "Renders friend request notification text");
+
+  // Click friend_request item
+  await act(async () => {
+    const itemBtn = document.querySelector('.notification-item');
+    itemBtn.click();
+  });
+
+  assert.equal(document.querySelector('#location-display').textContent, '/friends?tab=requests', "Navigates to /friends?tab=requests on friend request click");
+  assert.equal(document.querySelector('.notification-dropdown'), null, "Dropdown closed after friend request click");
 });
