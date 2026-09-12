@@ -16,7 +16,7 @@ export const LAUNCH_REPAIR_MANIFEST = [
     desiredIsbn: '9780140268867',
   },
   {
-    oldIsbn: '9780143110439',
+    oldIsbn: '9780385676533',
     expectedCurrentTitle: 'Thinking, Fast and Slow',
     expectedCurrentAuthor: 'Daniel Kahneman',
     desiredTitle: 'Thinking, Fast and Slow',
@@ -24,7 +24,7 @@ export const LAUNCH_REPAIR_MANIFEST = [
     desiredIsbn: '9780374533557',
   },
   {
-    oldIsbn: '9780140328721',
+    oldIsbn: '9780613371896',
     expectedCurrentTitle: 'Matilda',
     expectedCurrentAuthor: 'Roald Dahl',
     desiredTitle: 'Matilda',
