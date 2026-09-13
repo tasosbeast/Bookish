@@ -63,7 +63,7 @@ export default function Challenges() {
         <h1>
           Reading Challenges<span className="brand-dot">.</span>
         </h1>
-        <p className="muted">Set a reading goal and track your monthly progress.</p>
+        <p className="muted">Finish books and track your monthly reading progress.</p>
       </div>
 
       <section className="challenge-card" aria-labelledby="challenge-title">
@@ -90,10 +90,10 @@ export default function Challenges() {
           <div
             className="challenge-progress-bar-track"
             role="progressbar"
-            aria-valuenow={progress}
+            aria-valuenow={Math.min(progress, goal)}
             aria-valuemin={0}
             aria-valuemax={goal}
-            aria-valuetext={`${progress} of ${goal} books`}
+            aria-valuetext={completed ? `${progress} of ${goal} books — challenge complete` : `${progress} of ${goal} books`}
           >
             <div
               className="challenge-progress-bar-fill"

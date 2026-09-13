@@ -191,12 +191,15 @@ test('Challenges frontend: protection, navigation, progress states, completed st
     );
   });
 
+  assert.ok(document.body.textContent.includes('Finish books and track your monthly reading progress.'), 'Displays updated intro copy');
   assert.ok(document.body.textContent.includes('September Reading Challenge'), 'Displays challenge title');
   assert.ok(document.body.textContent.includes('2 of 3 books'), 'Displays progress count');
   const progressBar = document.querySelector('[role="progressbar"]');
   assert.ok(progressBar, 'Progress bar exists with role="progressbar"');
   assert.equal(progressBar.getAttribute('aria-valuenow'), '2');
+  assert.equal(progressBar.getAttribute('aria-valuemin'), '0');
   assert.equal(progressBar.getAttribute('aria-valuemax'), '3');
+  assert.equal(progressBar.getAttribute('aria-valuetext'), '2 of 3 books');
 
   // Books displayed and link to /books/:id
   const bookLinks = Array.from(document.querySelectorAll('.challenge-book-name a'));
@@ -274,6 +277,11 @@ test('Challenges frontend: protection, navigation, progress states, completed st
   assert.ok(document.body.textContent.includes('5 books finished — trophy earned.'), 'Shows trophy earned message');
   const barFill = document.querySelector('.challenge-progress-bar-fill');
   assert.equal(barFill.style.width, '100%', 'Progress bar fill capped visually at 100%');
+  const completedProgressBar = document.querySelector('[role="progressbar"]');
+  assert.equal(completedProgressBar.getAttribute('aria-valuenow'), '3', 'aria-valuenow is capped at goal');
+  assert.equal(completedProgressBar.getAttribute('aria-valuemin'), '0', 'aria-valuemin is 0');
+  assert.equal(completedProgressBar.getAttribute('aria-valuemax'), '3', 'aria-valuemax remains goal');
+  assert.equal(completedProgressBar.getAttribute('aria-valuetext'), '5 of 3 books — challenge complete', 'aria-valuetext communicates real progress');
 
   // 6. Error and retry on Challenges page
   challengeApiError = true;
