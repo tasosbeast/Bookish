@@ -18,6 +18,13 @@ enum NotificationType {
   friend_request
 }
 
+enum ActivityType {
+  started_reading
+  finished_reading
+  rated_book
+  reviewed_book
+}
+
 model User {
   id                    String           @id @default(uuid()) @db.Uuid
   username              String           @unique @db.VarChar(30)
@@ -38,6 +45,7 @@ model User {
   friendshipsRequestedBy Friendship[]     @relation("FriendshipRequestedBy")
 
   pushSubscriptions  PushSubscription[]
+  activities         Activity[]
 
   @@map("users")
 }
@@ -74,6 +82,7 @@ model Book {
   reviews         Review[]
   userBooks       UserBook[]
   bookGenres      BookGenre[]
+  activities      Activity[]
 
   @@index([publicationYear, id])
   @@index([averageRating(sort: Desc), id])
@@ -93,6 +102,7 @@ model Review {
   book          Book           @relation(fields: [bookId], references: [id], onDelete: Cascade)
   likes         ReviewLike[]
   notifications Notification[]
+  activity      Activity?
 
   @@unique([userId, bookId])
   @@index([bookId, createdAt(sort: Desc), id])
@@ -217,3 +227,22 @@ model PushSubscription {
   @@index([userId])
   @@map("push_subscriptions")
 }
+
+model Activity {
+  id        String       @id @default(uuid()) @db.Uuid
+  userId    String       @map("user_id") @db.Uuid
+  bookId    String       @map("book_id") @db.Uuid
+  reviewId  String?      @unique @map("review_id") @db.Uuid
+  type      ActivityType
+  rating    Int?         @db.SmallInt
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  book      Book         @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  review    Review?      @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc), id])
+  @@index([createdAt(sort: Desc), id])
+  @@map("activities")
+}
+

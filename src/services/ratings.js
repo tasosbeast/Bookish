@@ -21,6 +21,13 @@ export async function saveShelf(userId, { bookId, status, userRating }) {
     if (userRating === null && await tx.review.findUnique({ where: key, select: { id: true } })) {
       throw new AppError(409, 'REVIEW_REQUIRES_RATING', 'Cannot clear a rating while a review exists');
     }
+    const existingUserBook = await tx.userBook.findUnique({
+      where: key,
+      select: { status: true, userRating: true },
+    });
+    const previousStatus = existingUserBook?.status ?? null;
+    const previousRating = existingUserBook?.userRating ?? null;
+
     const updateData = {
       ...(status !== undefined && { status }),
       ...(userRating !== undefined && { userRating }),
@@ -35,6 +42,35 @@ export async function saveShelf(userId, { bookId, status, userRating }) {
     if (userRating !== undefined) {
       if (userRating !== null) await tx.review.updateMany({ where: { userId, bookId }, data: { rating: userRating } });
       await refreshRating(tx, bookId);
+    }
+    if (status !== undefined && status !== previousStatus) {
+      if (status === 'currently_reading') {
+        await tx.activity.create({
+          data: {
+            userId,
+            bookId,
+            type: 'started_reading',
+          },
+        });
+      } else if (status === 'read') {
+        await tx.activity.create({
+          data: {
+            userId,
+            bookId,
+            type: 'finished_reading',
+          },
+        });
+      }
+    }
+    if (userRating !== undefined && userRating !== null && userRating !== previousRating) {
+      await tx.activity.create({
+        data: {
+          userId,
+          bookId,
+          type: 'rated_book',
+          rating: userRating,
+        },
+      });
     }
     return shelf;
   });
@@ -64,8 +100,20 @@ export async function saveReview(userId, { bookId, rating, reviewText }) {
     } else {
       await tx.userBook.update({ where: key, data: { userRating: rating } });
     }
+    const existingReview = await tx.review.findUnique({ where: key, select: { id: true } });
     const text = reviewText === undefined ? {} : { reviewText };
     const review = await tx.review.upsert({ where: key, create: { userId, bookId, rating, ...text }, update: { rating, ...text } });
+    if (!existingReview) {
+      await tx.activity.create({
+        data: {
+          userId,
+          bookId,
+          reviewId: review.id,
+          type: 'reviewed_book',
+          rating,
+        },
+      });
+    }
     await refreshRating(tx, bookId);
     return review;
   });

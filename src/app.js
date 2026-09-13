@@ -17,6 +17,7 @@ import { notificationsRouter } from './routes/notifications.js';
 import { recommendationsRouter } from './routes/recommendations.js';
 import { friendsRouter } from './routes/friends.js';
 import { pushRouter } from './routes/push.js';
+import { feedRouter } from './routes/feed.js';
 
 export const app = express();
 app.disable('x-powered-by');
@@ -48,6 +49,7 @@ app.use('/api/notifications', notificationsRouter);
 app.use('/api/recommendations', recommendationsRouter);
 app.use('/api/friends', friendsRouter);
 app.use('/api/push', pushRouter);
+app.use('/api/feed', feedRouter);
 app.use((req, res, next) => next(new AppError(404, 'NOT_FOUND', 'Route not found')));
 
 app.use(errorHandler);
