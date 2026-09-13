@@ -10,6 +10,12 @@ import {
   checkSubscriptionStatus,
 } from '../lib/push.js';
 
+function formatTrophyDate(dateString) {
+  if (!dateString) return '';
+  const date = new Date(dateString);
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+}
+
 export default function Account() {
   const { user } = useAuth();
   const [editing, setEditing] = useState(false);
@@ -26,6 +32,28 @@ export default function Account() {
   const [pushBusy, setPushBusy] = useState(false);
   const [pushError, setPushError] = useState(null);
   const [pushLoading, setPushLoading] = useState(true);
+
+  // Challenges trophies state
+  const [trophies, setTrophies] = useState([]);
+  const [trophiesLoading, setTrophiesLoading] = useState(true);
+  const [trophiesError, setTrophiesError] = useState(null);
+
+  async function loadTrophies() {
+    setTrophiesLoading(true);
+    setTrophiesError(null);
+    try {
+      const res = await api('/challenges/trophies', { auth: 'required' });
+      setTrophies(res.data || []);
+    } catch (err) {
+      setTrophiesError(err);
+    } finally {
+      setTrophiesLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadTrophies();
+  }, [user?.id]);
 
   useEffect(() => {
     setImageFailed(false);
@@ -263,6 +291,54 @@ export default function Account() {
               </p>
             )}
           </>
+        )}
+      </section>
+
+      <section className="account-card" aria-labelledby="trophies-heading" style={{ marginTop: '24px' }}>
+        <h2 id="trophies-heading" style={{ fontSize: '1.25rem', marginBottom: '8px' }}>
+          My Bookish Trophies
+        </h2>
+        {trophiesLoading ? (
+          <p className="muted small">Loading trophies…</p>
+        ) : trophiesError ? (
+          <div>
+            <p className="reader-error small-error" role="alert">
+              {trophiesError.message || 'Could not load trophies'}
+            </p>
+            <div style={{ marginTop: '8px' }}>
+              <button type="button" className="button secondary compact" onClick={loadTrophies}>
+                Retry
+              </button>
+            </div>
+          </div>
+        ) : trophies.length === 0 ? (
+          <div>
+            <p className="muted small">
+              No trophies yet. Finish 3 different books in a month to earn your first one.
+            </p>
+            <div style={{ marginTop: '12px' }}>
+              <a href="/challenges" className="button secondary compact">
+                View challenges
+              </a>
+            </div>
+          </div>
+        ) : (
+          <div className="trophies-grid" style={{ marginTop: '16px' }}>
+            {trophies.map(trophy => (
+              <article key={trophy.key} className="trophy-card">
+                <span className="trophy-icon" aria-hidden="true">🏆</span>
+                <div className="trophy-info">
+                  <h3 className="trophy-title">{trophy.title}</h3>
+                  <p className="trophy-completed muted small">
+                    Completed {formatTrophyDate(trophy.completedAt)}
+                  </p>
+                  <p className="trophy-count small">
+                    {trophy.booksRead} books finished
+                  </p>
+                </div>
+              </article>
+            ))}
+          </div>
         )}
       </section>
     </div>

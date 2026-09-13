@@ -290,3 +290,59 @@
   .load-more-button { min-height: 44px; width: 100%; }
 }
 
+/* Challenges Page */
+.challenges-page { padding-block: 55px 70px; }
+.challenge-card { background: #fffef9; border: 1px solid #dfe4d6; border-radius: 12px; padding: 28px; display: flex; flex-direction: column; gap: 24px; box-shadow: 0 4px 16px rgba(47, 66, 38, 0.04); max-width: 760px; margin-top: 28px; }
+.challenge-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.challenge-title { font-size: 24px; font-family: var(--font-serif); margin: 0; color: var(--color-ink); }
+.challenge-desc { font-size: 14px; margin-top: 4px; }
+.challenge-completed-badge { display: inline-flex; align-items: center; gap: 6px; background: var(--color-leaf-soft); border: 1px solid var(--color-leaf-border); color: var(--color-leaf); font-size: 12px; font-weight: 600; padding: 6px 12px; border-radius: 20px; }
+
+.challenge-progress-section { display: flex; flex-direction: column; gap: 10px; background: #f8faf5; border: 1px solid #e5e9df; border-radius: 10px; padding: 20px; }
+.challenge-progress-header { display: flex; justify-content: space-between; align-items: baseline; }
+.challenge-progress-count { font-size: 16px; color: var(--color-ink); }
+.challenge-progress-count strong { font-size: 20px; color: var(--color-leaf); }
+.challenge-progress-bar-track { width: 100%; height: 12px; background: #e3e7db; border-radius: 6px; overflow: hidden; position: relative; }
+.challenge-progress-bar-fill { height: 100%; background: var(--color-leaf); border-radius: 6px; transition: width 0.3s ease; }
+.challenge-status-message { margin-top: 6px; padding: 12px 14px; border-radius: 8px; font-size: 14px; }
+.challenge-status-message.completed-msg { display: flex; align-items: center; gap: 12px; background: #eef6ed; border: 1px solid #c9e2c6; color: #2e5927; }
+.challenge-status-message.completed-msg .status-icon { font-size: 24px; flex-shrink: 0; }
+.challenge-status-message.completed-msg strong { display: block; font-size: 14px; color: #23491c; }
+.challenge-status-message.empty-msg { background: #fffefa; border: 1px dashed #d5dacb; border-radius: 8px; text-align: center; padding: 20px 16px; }
+.challenge-hint { font-style: italic; margin-top: 4px; }
+
+.challenge-books-section { border-top: 1px solid #e5e9df; padding-top: 20px; }
+.challenge-books-title { font-size: 16px; margin-bottom: 16px; font-family: var(--font-serif); }
+.challenge-books-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+.challenge-book-item { display: flex; align-items: center; gap: 14px; background: #fafbf7; border: 1px solid #e5e9df; border-radius: 8px; padding: 12px; }
+.challenge-book-cover-link { flex-shrink: 0; width: 44px; border-radius: 3px; overflow: hidden; }
+.challenge-book-cover { width: 44px; }
+.challenge-book-info { flex: 1; min-width: 0; }
+.challenge-book-name { font-size: 14px; font-family: var(--font-serif); margin: 0; line-height: 1.3; overflow-wrap: anywhere; }
+.challenge-book-name a:hover { color: var(--color-leaf); }
+.challenge-book-author { margin-top: 2px; }
+.challenge-book-date { display: block; margin-top: 4px; }
+
+/* Trophies in Account */
+.trophies-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+.trophy-card { display: flex; align-items: flex-start; gap: 14px; background: #f9faf5; border: 1px solid #e3e7db; border-radius: 10px; padding: 16px; }
+.trophy-icon { font-size: 28px; flex-shrink: 0; line-height: 1; }
+.trophy-info { flex: 1; min-width: 0; }
+.trophy-title { font-size: 14px; font-family: var(--font-serif); margin: 0 0 4px; font-weight: 600; color: var(--color-ink); }
+.trophy-completed { margin-bottom: 2px; }
+.trophy-count { color: var(--color-leaf); font-weight: 600; }
+
+@media (max-width: 760px) {
+  .challenges-page { padding-top: 35px; }
+  .challenge-card { padding: 20px; max-width: none; }
+  .challenge-books-grid { grid-template-columns: 1fr; }
+  .trophies-grid { grid-template-columns: 1fr; }
+  .main-nav { overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; gap: 20px; }
+  .main-nav::-webkit-scrollbar { display: none; }
+}
+
+@media (max-width: 480px) {
+  .main-nav { gap: 16px; }
+}
+
+
