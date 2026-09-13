@@ -2,69 +2,99 @@
   "sourceBooks": 1002,
   "mappedBooks": 1002,
   "unmappedBooks": 0,
-  "booksWith1Genre": 272,
-  "booksWith2Genres": 716,
+  "booksWith1Genre": 274,
+  "booksWith2Genres": 714,
   "booksWith3Genres": 14,
   "booksWithMoreThan3Genres": 0,
   "genreCounts": {
-    "fiction": 10,
+    "fiction": 8,
     "classics": 211,
-    "literary-fiction": 120,
-    "historical-fiction": 80,
-    "contemporary": 44,
+    "literary-fiction": 124,
+    "historical-fiction": 81,
+    "contemporary": 46,
     "adventure": 40,
-    "romance": 56,
-    "mystery": 43,
-    "thriller": 54,
-    "crime": 48,
-    "horror": 41,
-    "fantasy": 127,
+    "romance": 59,
+    "mystery": 42,
+    "thriller": 52,
+    "crime": 46,
+    "horror": 42,
+    "fantasy": 129,
     "epic-fantasy": 46,
     "urban-fantasy": 15,
     "magical-realism": 16,
-    "science-fiction": 106,
-    "dystopian": 22,
-    "space-opera": 37,
-    "young-adult": 57,
+    "science-fiction": 109,
+    "dystopian": 20,
+    "space-opera": 38,
+    "young-adult": 54,
     "children": 39,
-    "biography": 25,
-    "memoir": 34,
-    "history": 71,
+    "biography": 23,
+    "memoir": 33,
+    "history": 72,
     "true-crime": 6,
     "science": 78,
     "psychology": 45,
-    "philosophy": 49,
+    "philosophy": 48,
     "politics": 29,
-    "economics": 20,
+    "economics": 19,
     "business": 36,
     "self-help": 49,
-    "religion-spirituality": 10,
-    "travel": 9,
+    "religion-spirituality": 9,
+    "travel": 8,
     "humor": 36,
     "essays": 8,
-    "poetry": 12,
+    "poetry": 11,
     "drama": 17
   },
   "largestGenres": [
     {
       "slug": "classics",
+      "name": "Classics",
       "count": 211
     },
     {
       "slug": "fantasy",
-      "count": 127
+      "name": "Fantasy",
+      "count": 129
     },
     {
       "slug": "literary-fiction",
-      "count": 120
+      "name": "Literary Fiction",
+      "count": 124
     },
     {
       "slug": "science-fiction",
-      "count": 106
+      "name": "Science Fiction",
+      "count": 109
     },
     {
       "slug": "historical-fiction",
-      "count": 80
+      "name": "Historical Fiction",
+      "count": 81
+    },
+    {
+      "slug": "science",
+      "name": "Science",
+      "count": 78
+    },
+    {
+      "slug": "history",
+      "name": "History",
+      "count": 72
+    },
+    {
+      "slug": "romance",
+      "name": "Romance",
+      "count": 59
+    },
+    {
+      "slug": "young-adult",
+      "name": "Young Adult",
+      "count": 54
+    },
+    {
+      "slug": "thriller",
+      "name": "Thriller",
+      "count": 52
     }
   ],
   "borderlineBooks": [
@@ -90,9 +120,10 @@
       "title": "Frankenstein",
       "genres": [
         "horror",
+        "science-fiction",
         "classics"
       ],
-      "reason": "Widely recognized as an early foundational science fiction work, but universally categorized as a gothic horror classic."
+      "reason": "Widely recognized as both the foundational pioneer of science fiction and a gothic horror classic; assigned all three canonical genres to maximize discoverability."
     },
     {
       "isbn": "9780312924584",
@@ -173,6 +204,23 @@
         "religion-spirituality"
       ],
       "reason": "A comic retelling of Jesus's hidden years blending humor, satire, and religion & spirituality."
+    },
+    {
+      "isbn": "9780393324815",
+      "title": "Moneyball",
+      "genres": [
+        "business"
+      ],
+      "reason": "Examines baseball player valuation and market inefficiency; classified under business rather than general economics."
+    },
+    {
+      "isbn": "9780140283297",
+      "title": "On the Road",
+      "genres": [
+        "classics",
+        "literary-fiction"
+      ],
+      "reason": "A defining novel of the Beat Generation; road trip travel serves as the narrative backdrop rather than a nonfiction travelogue."
     }
   ]
 }

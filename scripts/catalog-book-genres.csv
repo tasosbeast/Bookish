@@ -80,7 +80,7 @@ isbn,genres
 9780393354324,history;science
 9780525951650,historical-fiction;adventure
 9780670024780,historical-fiction
-9780141043760,fiction;mystery
+9780141043760,contemporary;romance
 9780441014910,urban-fantasy;fantasy
 9781406321340,urban-fantasy;fantasy
 9780670241330,children
@@ -149,7 +149,7 @@ isbn,genres
 9780395401460,children
 9780441627400,epic-fantasy;fantasy
 9780812550290,epic-fantasy;fantasy
-9780452297548,young-adult
+9780452297548,contemporary;romance
 9781857988840,science-fiction;humor
 9780765330420,epic-fantasy;fantasy
 9780452286030,urban-fantasy;fantasy
@@ -184,7 +184,7 @@ isbn,genres
 9780312864590,epic-fantasy;fantasy
 9780440235590,fiction;contemporary
 9780345504975,horror;dystopian
-9781932416640,historical-fiction;biography
+9781932416640,historical-fiction;literary-fiction
 9780062085610,young-adult;fantasy
 9780440800460,children;humor
 9781416523710,poetry;classics
@@ -246,7 +246,7 @@ isbn,genres
 9780758216410,urban-fantasy;fantasy
 9780061558245,horror;thriller
 9780312282998,literary-fiction;historical-fiction
-9780156004800,fiction;politics
+9780156004800,classics;politics
 9780143037149,contemporary;historical-fiction
 9780553271980,thriller
 9780140447941,poetry;classics
@@ -265,7 +265,7 @@ isbn,genres
 9780141439587,classics;romance
 9780141439662,classics;romance
 9780141439686,classics;romance
-9780141439471,horror;classics
+9780141439471,horror;science-fiction;classics
 9780141439563,classics;literary-fiction
 9780140439441,classics;literary-fiction
 9780141439723,classics;literary-fiction
@@ -280,7 +280,7 @@ isbn,genres
 9781400079988,classics;historical-fiction
 9780143035008,classics;romance
 9780307951335,classics;literary-fiction
-9780140441475,classics;philosophy
+9780140441475,classics;literary-fiction
 9780679776444,classics;humor
 9780141439549,classics;literary-fiction
 9780141439570,classics;horror
@@ -332,8 +332,8 @@ isbn,genres
 9781451626650,classics;humor
 9780316769488,classics;young-adult
 9780316769501,classics;literary-fiction
-9780140283297,travel;classics
-9780060837020,poetry;classics
+9780140283297,classics;literary-fiction
+9780060837020,classics;literary-fiction
 9780399501487,classics;dystopian
 9780451163967,classics;literary-fiction
 9780393312836,dystopian;classics
@@ -420,7 +420,7 @@ isbn,genres
 9781101972120,science-fiction
 9781101972083,science-fiction
 9780765334794,science-fiction;humor
-9780316129084,philosophy;classics
+9780316129084,space-opera;science-fiction
 9780316129060,space-opera;science-fiction
 9780316129077,space-opera;science-fiction
 9780553283686,space-opera;science-fiction
@@ -546,7 +546,7 @@ isbn,genres
 9780345313867,horror
 9780812974416,horror
 9780141182346,horror
-9780765318749,young-adult;dystopian
+9780765318749,horror;science-fiction
 9780061007224,horror
 9780060080846,thriller;science-fiction
 9780380729401,horror
@@ -588,7 +588,7 @@ isbn,genres
 9781501110368,romance;contemporary
 9781668001226,romance;contemporary
 9781538724736,thriller;romance
-9781250244499,romance;young-adult
+9781250244499,romance;contemporary
 9780593336823,romance;contemporary
 9780593336847,romance;contemporary
 9780440212560,historical-fiction;romance
@@ -596,7 +596,7 @@ isbn,genres
 9780446605236,romance;contemporary
 9780446608954,romance;contemporary
 9780143124542,romance;contemporary
-9780062353597,romance;contemporary
+9780062353597,historical-fiction;romance
 9780062439598,romance;contemporary
 9781501128035,romance;contemporary
 9780451490803,romance;contemporary
@@ -611,7 +611,7 @@ isbn,genres
 9780142414934,young-adult
 9780786838653,young-adult;fantasy
 9780786856862,young-adult;fantasy
-9781423101499,crime;thriller
+9781423101499,young-adult;fantasy
 9781423101475,young-adult;fantasy
 9780062024039,young-adult;dystopian
 9780062024046,young-adult
@@ -671,17 +671,17 @@ isbn,genres
 9780385513531,travel;adventure
 9780385534260,history;adventure
 9780385494786,travel;adventure
-9780385486804,travel;adventure;memoir
+9780385486804,travel;adventure
 9781400032808,true-crime;religion-spirituality
 9780060838652,history
 9780593230251,politics;history
 9780465031474,politics
 9780804190114,politics;history
 9781101912379,history
-9780143118183,crime;thriller
+9780143118183,history
 9780316023740,history
 9780143037750,history
-9780743226721,biography;history
+9780743226721,history
 9781476728759,biography
 9781451651683,history
 9780805086843,history
@@ -754,7 +754,7 @@ isbn,genres
 9780465025275,science
 9780198788607,science
 9780393351491,science
-9780618918249,science;religion-spirituality
+9780618918249,science;philosophy
 9780393058581,science
 9780375727207,science
 9780399184413,science
@@ -800,7 +800,7 @@ isbn,genres
 9781501135927,business;memoir
 9781524731656,true-crime;business
 9780393338829,economics;business
-9780393324815,economics;business
+9780393324815,business
 9780393351590,economics;business
 9780393027501,economics;business
 9780060555665,economics;business
@@ -925,7 +925,7 @@ isbn,genres
 9781250313188,fantasy;science-fiction
 9781250313225,fantasy;science-fiction
 9781250854117,fantasy;science-fiction
-9781250886088,young-adult;dystopian
+9781250886088,fantasy;romance
 9780765387424,fantasy
 9781250813893,fantasy;mystery
 9781250217288,fantasy;contemporary
