@@ -43,26 +43,23 @@ export async function saveShelf(userId, { bookId, status, userRating }) {
       if (userRating !== null) await tx.review.updateMany({ where: { userId, bookId }, data: { rating: userRating } });
       await refreshRating(tx, bookId);
     }
-    if (status !== undefined && status !== previousStatus) {
-      if (status === 'currently_reading') {
-        await tx.activity.create({
-          data: {
-            userId,
-            bookId,
-            type: 'started_reading',
-          },
-        });
-      } else if (status === 'read') {
-        await tx.activity.create({
-          data: {
-            userId,
-            bookId,
-            type: 'finished_reading',
-          },
-        });
-      }
-    }
-    if (userRating !== undefined && userRating !== null && userRating !== previousRating) {
+    if (status !== undefined && status !== previousStatus && status === 'currently_reading') {
+      await tx.activity.create({
+        data: {
+          userId,
+          bookId,
+          type: 'started_reading',
+        },
+      });
+    } else if (status !== undefined && status !== previousStatus && status === 'read') {
+      await tx.activity.create({
+        data: {
+          userId,
+          bookId,
+          type: 'finished_reading',
+        },
+      });
+    } else if (userRating !== undefined && userRating !== null && userRating !== previousRating) {
       await tx.activity.create({
         data: {
           userId,
@@ -111,6 +108,7 @@ export async function saveReview(userId, { bookId, rating, reviewText }) {
           reviewId: review.id,
           type: 'reviewed_book',
           rating,
+          reviewTextSnapshot: review.reviewText ?? null,
         },
       });
     }

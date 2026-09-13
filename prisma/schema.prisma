@@ -229,17 +229,18 @@ model PushSubscription {
 }
 
 model Activity {
-  id        String       @id @default(uuid()) @db.Uuid
-  userId    String       @map("user_id") @db.Uuid
-  bookId    String       @map("book_id") @db.Uuid
-  reviewId  String?      @unique @map("review_id") @db.Uuid
-  type      ActivityType
-  rating    Int?         @db.SmallInt
-  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                 String       @id @default(uuid()) @db.Uuid
+  userId             String       @map("user_id") @db.Uuid
+  bookId             String       @map("book_id") @db.Uuid
+  reviewId           String?      @unique @map("review_id") @db.Uuid
+  type               ActivityType
+  rating             Int?         @db.SmallInt
+  reviewTextSnapshot String?      @map("review_text_snapshot") @db.Text
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  book      Book         @relation(fields: [bookId], references: [id], onDelete: Cascade)
-  review    Review?      @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  user               User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  book               Book         @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  review             Review?      @relation(fields: [reviewId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt(sort: Desc), id])
   @@index([createdAt(sort: Desc), id])

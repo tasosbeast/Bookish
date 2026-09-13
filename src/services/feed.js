@@ -87,6 +87,7 @@ export async function listFeed(userId, { limit = 20, cursor } = {}) {
       type: true,
       createdAt: true,
       rating: true,
+      reviewTextSnapshot: true,
       user: {
         select: {
           id: true,
@@ -106,7 +107,6 @@ export async function listFeed(userId, { limit = 20, cursor } = {}) {
       review: {
         select: {
           id: true,
-          reviewText: true,
         },
       },
     },
@@ -132,7 +132,7 @@ export async function listFeed(userId, { limit = 20, cursor } = {}) {
     rating: a.rating ?? null,
     review: a.type === 'reviewed_book' && a.review ? {
       id: a.review.id,
-      reviewText: a.review.reviewText,
+      reviewText: a.reviewTextSnapshot ?? null,
     } : null,
   }));
 

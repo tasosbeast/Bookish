@@ -346,3 +346,228 @@ test('PostgreSQL: Feed v1 lifecycle, event semantics, friendship privacy, cursor
     await auth(alice, 'get', '/api/feed?limit=abc').expect(400);
   }
 );
+
+test('PostgreSQL: Activity snapshot immutability and combined shelf-mutation priority',
+  { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async t => {
+    const tag = randomUUID().replaceAll('-', '').slice(0, 10);
+    const userIds = [];
+    const bookIds = [];
+
+    t.after(async () => {
+      if (userIds.length) {
+        await prisma.activity.deleteMany({ where: { userId: { in: userIds } } });
+        await prisma.friendship.deleteMany({
+          where: {
+            OR: [
+              { userAId: { in: userIds } },
+              { userBId: { in: userIds } },
+            ],
+          },
+        });
+        await prisma.review.deleteMany({ where: { userId: { in: userIds } } });
+        await prisma.userBook.deleteMany({ where: { userId: { in: userIds } } });
+        await prisma.refreshSession.deleteMany({ where: { userId: { in: userIds } } });
+      }
+      if (bookIds.length) {
+        await prisma.book.deleteMany({ where: { id: { in: bookIds } } });
+      }
+      if (userIds.length) {
+        await prisma.user.deleteMany({ where: { id: { in: userIds } } });
+      }
+      await prisma.$disconnect();
+    });
+
+    const signup = async suffix => {
+      const user = await prisma.user.create({
+        data: {
+          username: `snp${tag}${suffix}`,
+          email: `snp${tag}${suffix}@example.com`,
+          passwordHash: 'feed-snap-password-hash',
+        },
+      });
+      userIds.push(user.id);
+      const sessionId = randomUUID();
+      const expiresAt = new Date(Date.now() + 86400000);
+      const { accessToken } = signTokens(user.id, sessionId, expiresAt);
+      await prisma.refreshSession.create({
+        data: { id: sessionId, userId: user.id, expiresAt, tokenHash: digest(`dummy-${sessionId}`) },
+      });
+      return { token: accessToken, userId: user.id, username: user.username };
+    };
+
+    const createBook = async title => {
+      const book = await prisma.book.create({
+        data: {
+          title: `${title} ${tag}`,
+          author: `Author ${tag}`,
+          isbn: `${Math.floor(1000000000000 + Math.random() * 9000000000000)}`.slice(0, 13),
+        },
+      });
+      bookIds.push(book.id);
+      return book;
+    };
+
+    const makeFriendship = async (u1, u2, status = 'accepted', acceptedAt = new Date()) => {
+      const [userAId, userBId] = canonicalPair(u1.userId, u2.userId);
+      return prisma.friendship.create({
+        data: {
+          userAId,
+          userBId,
+          requestedById: u1.userId,
+          status,
+          acceptedAt: status === 'accepted' ? acceptedAt : null,
+        },
+      });
+    };
+
+    const auth = (reader, method, path) => request(app)[method](path).auth(reader.token, { type: 'bearer' });
+
+    const [userA, userB] = await Promise.all(['a', 'b'].map(signup));
+    const [bookA, bookB, bookC, bookD] = await Promise.all(['BA', 'BB', 'BC', 'BD'].map(createBook));
+
+    // Make userA and userB friends BEFORE activities so userA sees userB's activities
+    await makeFriendship(userA, userB, 'accepted', new Date(Date.now() - 10000));
+
+    // ==========================================
+    // A. Review snapshot immutability
+    // ==========================================
+
+    // - create new review with rating=5 and text="Loved it"
+    const rev1 = await saveReview(userB.userId, {
+      bookId: bookA.id,
+      rating: 5,
+      reviewText: 'Loved it',
+    });
+
+    // - verify activity snapshot contains 5 / "Loved it"
+    const act1 = await prisma.activity.findFirst({
+      where: { reviewId: rev1.id },
+    });
+    assert.ok(act1, 'reviewed_book activity exists');
+    assert.equal(act1.rating, 5);
+    assert.equal(act1.reviewTextSnapshot, 'Loved it');
+
+    // - edit same review to rating=2 and text="Changed my mind"
+    await saveReview(userB.userId, {
+      bookId: bookA.id,
+      rating: 2,
+      reviewText: 'Changed my mind',
+    });
+
+    // - verify:
+    //   - no second reviewed_book activity
+    const revActs = await prisma.activity.findMany({
+      where: { userId: userB.userId, bookId: bookA.id, type: 'reviewed_book' },
+    });
+    assert.equal(revActs.length, 1, 'no second reviewed_book activity');
+
+    //   - original activity rating is still 5
+    assert.equal(revActs[0].rating, 5, 'original activity rating is still 5');
+
+    //   - original activity text snapshot is still "Loved it"
+    assert.equal(revActs[0].reviewTextSnapshot, 'Loved it', 'original activity text snapshot is still "Loved it"');
+
+    //   - GET /api/feed returns 5 + "Loved it"
+    const feedRes = await auth(userA, 'get', '/api/feed').expect(200);
+    const feedItem = feedRes.body.data.find(item => item.book.id === bookA.id);
+    assert.ok(feedItem, 'Feed item for reviewed book found');
+    assert.equal(feedItem.type, 'reviewed_book');
+    assert.equal(feedItem.rating, 5, 'Feed item rating reflects snapshot 5');
+    assert.ok(feedItem.review);
+    assert.equal(feedItem.review.reviewText, 'Loved it', 'Feed item reviewText reflects snapshot "Loved it"');
+
+    // - delete review
+    await removeReview(userB.userId, rev1.id);
+
+    // - verify reviewed_book activity disappears through cascade
+    const actAfterDelete = await prisma.activity.findFirst({
+      where: { reviewId: rev1.id },
+    });
+    assert.equal(actAfterDelete, null, 'reviewed_book activity disappears through cascade');
+
+    const feedAfterDelete = await auth(userA, 'get', '/api/feed').expect(200);
+    assert.equal(feedAfterDelete.body.data.some(item => item.book.id === bookA.id), false, 'Feed item disappeared');
+
+    // ==========================================
+    // B. Combined shelf mutation
+    // ==========================================
+
+    // 1. null -> read + rating 5 in ONE saveShelf call
+    //    -> exactly one finished_reading
+    //    -> zero rated_book
+    await saveShelf(userB.userId, {
+      bookId: bookB.id,
+      status: 'read',
+      userRating: 5,
+    });
+
+    const finishedActs = await prisma.activity.findMany({
+      where: { userId: userB.userId, bookId: bookB.id, type: 'finished_reading' },
+    });
+    assert.equal(finishedActs.length, 1, 'exactly one finished_reading');
+
+    const ratedActsB = await prisma.activity.findMany({
+      where: { userId: userB.userId, bookId: bookB.id, type: 'rated_book' },
+    });
+    assert.equal(ratedActsB.length, 0, 'zero rated_book');
+
+    // 2. currently_reading -> currently_reading + changed rating
+    //    -> no status event
+    //    -> exactly one rated_book
+    await saveShelf(userB.userId, {
+      bookId: bookC.id,
+      status: 'currently_reading',
+      userRating: 3,
+    });
+    // Set to currently_reading initially created started_reading
+    const startedActsBefore = await prisma.activity.findMany({
+      where: { userId: userB.userId, bookId: bookC.id, type: 'started_reading' },
+    });
+    assert.equal(startedActsBefore.length, 1, 'started_reading created initially');
+
+    // Now update with same status (currently_reading) and changed rating (3 -> 4)
+    await saveShelf(userB.userId, {
+      bookId: bookC.id,
+      status: 'currently_reading',
+      userRating: 4,
+    });
+
+    const startedActsAfter = await prisma.activity.findMany({
+      where: { userId: userB.userId, bookId: bookC.id, type: 'started_reading' },
+    });
+    assert.equal(startedActsAfter.length, 1, 'no status event');
+
+    const ratedActsC = await prisma.activity.findMany({
+      where: { userId: userB.userId, bookId: bookC.id, type: 'rated_book' },
+    });
+    assert.equal(ratedActsC.length, 1, 'exactly one rated_book');
+    assert.equal(ratedActsC[0].rating, 4);
+
+    // 3. want_to_read + changed rating
+    //    -> rated_book only
+    // Start with want_to_read (no activity created)
+    await saveShelf(userB.userId, {
+      bookId: bookD.id,
+      status: 'want_to_read',
+    });
+    const dCount0 = await prisma.activity.count({ where: { userId: userB.userId, bookId: bookD.id } });
+    assert.equal(dCount0, 0, 'want_to_read creates no activity');
+
+    // Now change rating with want_to_read
+    await saveShelf(userB.userId, {
+      bookId: bookD.id,
+      status: 'want_to_read',
+      userRating: 5,
+    });
+
+    const ratedActsD = await prisma.activity.findMany({
+      where: { userId: userB.userId, bookId: bookD.id, type: 'rated_book' },
+    });
+    assert.equal(ratedActsD.length, 1, 'rated_book only');
+    assert.equal(ratedActsD[0].rating, 5);
+
+    const totalActsD = await prisma.activity.count({ where: { userId: userB.userId, bookId: bookD.id } });
+    assert.equal(totalActsD, 1, 'rated_book only for want_to_read + changed rating');
+  }
+);
+
