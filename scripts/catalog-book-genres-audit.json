@@ -1,0 +1,178 @@
+{
+  "sourceBooks": 1002,
+  "mappedBooks": 1002,
+  "unmappedBooks": 0,
+  "booksWith1Genre": 272,
+  "booksWith2Genres": 716,
+  "booksWith3Genres": 14,
+  "booksWithMoreThan3Genres": 0,
+  "genreCounts": {
+    "fiction": 10,
+    "classics": 211,
+    "literary-fiction": 120,
+    "historical-fiction": 80,
+    "contemporary": 44,
+    "adventure": 40,
+    "romance": 56,
+    "mystery": 43,
+    "thriller": 54,
+    "crime": 48,
+    "horror": 41,
+    "fantasy": 127,
+    "epic-fantasy": 46,
+    "urban-fantasy": 15,
+    "magical-realism": 16,
+    "science-fiction": 106,
+    "dystopian": 22,
+    "space-opera": 37,
+    "young-adult": 57,
+    "children": 39,
+    "biography": 25,
+    "memoir": 34,
+    "history": 71,
+    "true-crime": 6,
+    "science": 78,
+    "psychology": 45,
+    "philosophy": 49,
+    "politics": 29,
+    "economics": 20,
+    "business": 36,
+    "self-help": 49,
+    "religion-spirituality": 10,
+    "travel": 9,
+    "humor": 36,
+    "essays": 8,
+    "poetry": 12,
+    "drama": 17
+  },
+  "largestGenres": [
+    {
+      "slug": "classics",
+      "count": 211
+    },
+    {
+      "slug": "fantasy",
+      "count": 127
+    },
+    {
+      "slug": "literary-fiction",
+      "count": 120
+    },
+    {
+      "slug": "science-fiction",
+      "count": 106
+    },
+    {
+      "slug": "historical-fiction",
+      "count": 80
+    }
+  ],
+  "borderlineBooks": [
+    {
+      "isbn": "9780141439570",
+      "title": "The Picture of Dorian Gray",
+      "genres": [
+        "classics",
+        "horror"
+      ],
+      "reason": "Gothic aestheticism classic that bridges philosophical literary fiction and supernatural gothic horror."
+    },
+    {
+      "isbn": "9780375703768",
+      "title": "House of Leaves",
+      "genres": [
+        "horror"
+      ],
+      "reason": "Ergodic postmodern novel combining psychological terror, academic satire, and unconventional literary fiction."
+    },
+    {
+      "isbn": "9780141439471",
+      "title": "Frankenstein",
+      "genres": [
+        "horror",
+        "classics"
+      ],
+      "reason": "Widely recognized as an early foundational science fiction work, but universally categorized as a gothic horror classic."
+    },
+    {
+      "isbn": "9780312924584",
+      "title": "The Silence of the Lambs",
+      "genres": [
+        "thriller",
+        "crime"
+      ],
+      "reason": "Frequently debated between psychological horror vs. forensic crime thriller; categorized here primarily under thriller and crime."
+    },
+    {
+      "isbn": "9780307387899",
+      "title": "The Road",
+      "genres": [
+        "dystopian",
+        "literary-fiction"
+      ],
+      "reason": "Post-apocalyptic desolate journey; classified under dystopian and literary fiction rather than technology-driven science fiction."
+    },
+    {
+      "isbn": "9780804172448",
+      "title": "Station Eleven",
+      "genres": [
+        "dystopian",
+        "literary-fiction"
+      ],
+      "reason": "Post-pandemic civilization collapse focusing on Shakespearean art and human memory; classified as dystopian and literary fiction."
+    },
+    {
+      "isbn": "9781250313225",
+      "title": "Harrow the Ninth",
+      "genres": [
+        "fantasy",
+        "science-fiction"
+      ],
+      "reason": "Science-fantasy space necromancy hybrid blending high magic, dark fantasy atmosphere, and interstellar science fiction."
+    },
+    {
+      "isbn": "9780385542364",
+      "title": "The Underground Railroad",
+      "genres": [
+        "historical-fiction",
+        "magical-realism"
+      ],
+      "reason": "Historical antebellum narrative employing a literal physical underground train system, introducing magical realism elements."
+    },
+    {
+      "isbn": "9780060892999",
+      "title": "A Canticle for Leibowitz",
+      "genres": [
+        "science-fiction"
+      ],
+      "reason": "Post-nuclear multi-century saga bridging monastic theology, dark satire, and speculative science fiction."
+    },
+    {
+      "isbn": "9780449213940",
+      "title": "All Quiet on the Western Front",
+      "genres": [
+        "classics",
+        "historical-fiction"
+      ],
+      "reason": "Semi-autobiographical World War I account published as fiction; canonized as a 20th-century historical fiction classic."
+    },
+    {
+      "isbn": "9780375842207",
+      "title": "The Book Thief",
+      "genres": [
+        "historical-fiction",
+        "literary-fiction"
+      ],
+      "reason": "Narrated by Death in Nazi Germany; often marketed to Young Adults, but classified here under historical fiction and literary fiction."
+    },
+    {
+      "isbn": "9780380813810",
+      "title": "Lamb: The Gospel According to Biff, Christ's Childhood Pal",
+      "genres": [
+        "humor",
+        "religion-spirituality"
+      ],
+      "reason": "A comic retelling of Jesus's hidden years blending humor, satire, and religion & spirituality."
+    }
+  ]
+}
