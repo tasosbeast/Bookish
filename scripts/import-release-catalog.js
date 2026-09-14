@@ -110,6 +110,20 @@ try {
     }
   }
 
+  if (details.missingProvenance?.length > 0) {
+    console.log(`\nExisting books missing provenance (${details.missingProvenance.length}):`);
+    for (const item of details.missingProvenance.slice(0, 25)) {
+      console.log(`  [${item.isbn}] "${item.title}" (id: ${item.bookId})`);
+    }
+  }
+
+  if (details.provenanceConflicts?.length > 0) {
+    console.error(`\nProvenance conflicts (${details.provenanceConflicts.length}):`);
+    for (const item of details.provenanceConflicts.slice(0, 25)) {
+      console.error(`  Line ${item.line ?? '?'}: [${item.isbn}] ${item.message}`);
+    }
+  }
+
   if (details.newBooks?.length > 0 && !apply) {
     console.log(`\nPlanned new books (${details.newBooks.length}):`);
     for (const item of details.newBooks.slice(0, 25)) {

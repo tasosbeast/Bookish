@@ -54,7 +54,7 @@ test('PostgreSQL: Supplemental Release Catalog v1 dry-run, apply, blockers, idem
     fs.writeFileSync(
       dryCsvPath,
       'title,author,isbn,publicationDate,coverImageUrl,genres,sourceUrl\n' +
-      `Dry Run Book,Test Author,${isbn1},2025-06-15,https://example.com/cover1.jpg,fiction;science-fiction,https://example.com/source1\n`
+      `Dry Run Book,Test Author,${isbn1},2025-06-15,https://example.com/cover1.jpg,fiction;science-fiction,https://www.penguinrandomhouse.com/source1\n`
     );
 
     const dryResult = await importReleaseCatalog(prisma, {
@@ -76,7 +76,7 @@ test('PostgreSQL: Supplemental Release Catalog v1 dry-run, apply, blockers, idem
     fs.writeFileSync(
       blockerCsvPath,
       'title,author,isbn,publicationDate,coverImageUrl,genres,sourceUrl\n' +
-      `Invalid Year Book,Test Author,${isbn1},2020-01-01,https://example.com/cover1.jpg,fiction,https://example.com/source1\n`
+      `Invalid Year Book,Test Author,${isbn1},2020-01-01,https://example.com/cover1.jpg,fiction,https://www.penguinrandomhouse.com/source1\n`
     );
 
     await assert.rejects(
@@ -101,7 +101,7 @@ test('PostgreSQL: Supplemental Release Catalog v1 dry-run, apply, blockers, idem
     fs.writeFileSync(
       applyCsvPath,
       'title,author,isbn,publicationDate,coverImageUrl,genres,sourceUrl\n' +
-      `The 2025 Release,Notable Author,${isbn1},2025-09-20,https://example.com/notable.jpg,fiction;science-fiction,https://example.com/source-notable\n`
+      `The 2025 Release,Notable Author,${isbn1},2025-09-20,https://example.com/notable.jpg,fiction;science-fiction,https://www.penguinrandomhouse.com/source-notable\n`
     );
 
     const applyResult = await importReleaseCatalog(prisma, {
@@ -119,6 +119,7 @@ test('PostgreSQL: Supplemental Release Catalog v1 dry-run, apply, blockers, idem
         bookGenres: {
           include: { genre: true },
         },
+        releaseMetadataSource: true,
       },
     });
 
@@ -133,6 +134,10 @@ test('PostgreSQL: Supplemental Release Catalog v1 dry-run, apply, blockers, idem
 
     const connectedGenreSlugs = bookInDb.bookGenres.map(bg => bg.genre.slug).sort();
     assert.deepEqual(connectedGenreSlugs, ['fiction', 'science-fiction']);
+    assert.equal(bookInDb.releaseMetadataSource.provider, 'prh');
+    assert.equal(bookInDb.releaseMetadataSource.sourceIsbn, isbn1);
+    assert.equal(bookInDb.releaseMetadataSource.verifiedPublicationDate.toISOString().slice(0, 10), '2025-09-20');
+    assert.ok(bookInDb.releaseMetadataSource.lastVerifiedAt instanceof Date);
 
     // 4. Idempotency: second run classifies book as alreadyPresent, does not recreate
     const secondRunResult = await importReleaseCatalog(prisma, {
@@ -155,8 +160,8 @@ test('PostgreSQL: Supplemental Release Catalog v1 dry-run, apply, blockers, idem
     fs.writeFileSync(
       staleCsvPath,
       'title,author,isbn,publicationDate,coverImageUrl,genres,sourceUrl\n' +
-      `Batch Book 2,Author Two,${isbn2},2026-04-10,https://example.com/c2.jpg,fiction,https://example.com/s2\n` +
-      `Batch Book Stale,Author Stale,${isbnStale},2026-05-15,https://example.com/cs.jpg,fiction,https://example.com/ss\n`
+      `Batch Book 2,Author Two,${isbn2},2026-04-10,https://example.com/c2.jpg,fiction,https://www.penguinrandomhouse.com/s2\n` +
+      `Batch Book Stale,Author Stale,${isbnStale},2026-05-15,https://example.com/cs.jpg,fiction,https://www.penguinrandomhouse.com/ss\n`
     );
 
     // DB proxy that simulates a concurrent writer inserting isbnStale right after preflight
@@ -197,5 +202,54 @@ test('PostgreSQL: Supplemental Release Catalog v1 dry-run, apply, blockers, idem
     // Verify batch book 2 was NOT created (whole batch rolled back)
     const book2InDb = await prisma.book.findUnique({ where: { isbn: isbn2 } });
     assert.equal(book2InDb, null, 'Concurrent collision rolled back entire batch');
+  }
+);
+
+test('PostgreSQL: release provenance attaches safely and collision rolls back',
+  { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async t => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bookish-release-provenance-test-'));
+    const isbn = '9789999000130';
+    const collisionIsbn = '9789999000147';
+    const createdBookIds = [];
+    t.after(async () => {
+      await prisma.book.deleteMany({ where: { id: { in: createdBookIds } } });
+      await prisma.genre.deleteMany({ where: { slug: 'fiction', bookGenres: { none: {} } } });
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      await prisma.$disconnect();
+    });
+    const fiction = await prisma.genre.upsert({ where: { slug: 'fiction' }, update: {}, create: { name: 'Fiction', slug: 'fiction' } });
+    await prisma.book.deleteMany({ where: { isbn: { in: [isbn, collisionIsbn] } } });
+    const existing = await prisma.book.create({ data: {
+      title: 'Provenance Book', author: 'Test Author', isbn, publicationYear: 2026,
+      publicationDate: new Date('2026-06-15T00:00:00.000Z'), coverImageUrl: 'https://example.com/provenance.jpg',
+      bookGenres: { create: [{ genreId: fiction.id }] },
+    } });
+    createdBookIds.push(existing.id);
+    const csv = 'title,author,isbn,publicationDate,coverImageUrl,genres,sourceUrl\n' +
+      `Provenance Book,Test Author,${isbn},2026-06-15,https://example.com/provenance.jpg,fiction,https://www.penguinrandomhouse.com/provenance\n`;
+    const csvPath = path.join(tempDir, 'provenance.csv');
+    fs.writeFileSync(csvPath, csv);
+    const dry = await importReleaseCatalog(prisma, { source: csvPath, apply: false });
+    assert.equal(dry.summary.missingProvenance, 1);
+    const attached = await importReleaseCatalog(prisma, { source: csvPath, apply: true });
+    assert.equal(attached.summary.provenanceAttached, 1);
+    const withSource = await prisma.book.findUnique({ where: { isbn }, include: { releaseMetadataSource: true } });
+    assert.equal(withSource.id, existing.id);
+    assert.equal(withSource.releaseMetadataSource.sourceIsbn, isbn);
+    assert.equal(withSource.releaseMetadataSource.verifiedPublicationDate.toISOString().slice(0, 10), '2026-06-15');
+    const idempotent = await importReleaseCatalog(prisma, { source: csvPath, apply: true });
+    assert.equal(idempotent.summary.alreadyPresent, 1);
+
+    const sourceOwner = await prisma.book.create({ data: { title: 'Collision Owner', author: 'Test Author', isbn: '9789999000154', publicationYear: 2026 } });
+    createdBookIds.push(sourceOwner.id);
+    await prisma.releaseMetadataSource.create({ data: {
+      bookId: sourceOwner.id, provider: 'prh', sourceUrl: 'https://www.penguinrandomhouse.com/collision-owner', sourceIsbn: collisionIsbn,
+      verifiedPublicationDate: new Date('2026-06-15T00:00:00.000Z'), lastVerifiedAt: new Date(),
+    } });
+    const collisionPath = path.join(tempDir, 'collision.csv');
+    fs.writeFileSync(collisionPath, 'title,author,isbn,publicationDate,coverImageUrl,genres,sourceUrl\n' +
+      `Collision Candidate,Test Author,${collisionIsbn},2026-06-15,https://example.com/collision.jpg,fiction,https://www.penguinrandomhouse.com/collision\n`);
+    await assert.rejects(() => importReleaseCatalog(prisma, { source: collisionPath, apply: true }), error => error.code === 'preflight_blocked');
+    assert.equal(await prisma.book.findUnique({ where: { isbn: collisionIsbn } }), null);
   }
 );

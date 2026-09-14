@@ -24,6 +24,29 @@ export const EXPECTED_HEADERS = [
   'sourceUrl',
 ];
 
+export const RELEASE_PROVIDERS = Object.freeze({
+  'www.penguinrandomhouse.com': 'prh',
+  'us.macmillan.com': 'macmillan',
+  'www.hachettebookgroup.com': 'hachette',
+});
+
+export function deriveReleaseProvider(sourceUrl) {
+  let url;
+  try {
+    url = new URL(sourceUrl);
+  } catch {
+    throw new ReleaseCatalogError('invalid_source_url', 'sourceUrl must be a valid HTTPS URL');
+  }
+  if (url.protocol !== 'https:') {
+    throw new ReleaseCatalogError('invalid_source_url', 'sourceUrl must use HTTPS');
+  }
+  const provider = RELEASE_PROVIDERS[url.hostname.toLowerCase()];
+  if (!provider) {
+    throw new ReleaseCatalogError('unsupported_source_provider', `Unsupported release source hostname: ${url.hostname}`);
+  }
+  return provider;
+}
+
 export function isValidCalendarDate(val) {
   if (typeof val !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(val)) {
     return false;
@@ -201,6 +224,16 @@ export function validateReleaseCatalogRecords(rawRecords) {
       isRecordValid = false;
     }
 
+    let provider = null;
+    if (isRecordValid) {
+      try {
+        provider = deriveReleaseProvider(rawSourceUrl);
+      } catch (error) {
+        invalidRows.push({ line, row, field: 'sourceUrl', value: rawSourceUrl, message: error.message });
+        isRecordValid = false;
+      }
+    }
+
     if (isRecordValid) {
       validRows.push({
         line,
@@ -213,11 +246,38 @@ export function validateReleaseCatalogRecords(rawRecords) {
         coverImageUrl: rawCover,
         genres: genreSlugs,
         sourceUrl: rawSourceUrl,
+        provider,
       });
     }
   }
 
   return { invalidRows, validRows };
+}
+
+function releaseMetadataMatches(book, entry) {
+  const derivedYear = entry.derivedYear;
+  const existingDateStr = serializePublicationDate(book.publicationDate);
+  const existingGenreSlugs = new Set(
+    (book.bookGenres || []).map(bg => bg.genre?.slug || bg.genreSlug).filter(Boolean)
+  );
+  const requestedGenreSlugs = new Set(entry.genres);
+  const genresMatch = existingGenreSlugs.size === requestedGenreSlugs.size &&
+    [...requestedGenreSlugs].every(slug => existingGenreSlugs.has(slug));
+  return {
+    matches: compatibleIdentity(book, entry) &&
+      book.publicationYear === derivedYear &&
+      existingDateStr === entry.publicationDate &&
+      book.coverImageUrl === entry.coverImageUrl && genresMatch,
+    existingDateStr,
+    existingGenreSlugs,
+    requestedGenreSlugs,
+  };
+}
+
+function matchingProvenance(source, entry) {
+  return source && source.provider === entry.provider &&
+    source.sourceUrl === entry.sourceUrl && source.sourceIsbn === entry.isbn &&
+    serializePublicationDate(source.verifiedPublicationDate) === entry.publicationDate;
 }
 
 export async function importReleaseCatalog(db, options = {}) {
@@ -298,6 +358,9 @@ export async function importReleaseCatalog(db, options = {}) {
           genre: { select: { slug: true } },
         },
       },
+      releaseMetadataSource: {
+        select: { id: true, provider: true, sourceUrl: true, sourceIsbn: true, verifiedPublicationDate: true },
+      },
     },
   });
 
@@ -305,6 +368,12 @@ export async function importReleaseCatalog(db, options = {}) {
     select: { id: true, slug: true, name: true },
   });
   const knownGenreSlugs = new Set(existingGenres.map(g => g.slug));
+  const existingSources = await db.releaseMetadataSource.findMany({
+    select: { id: true, bookId: true, provider: true, sourceIsbn: true },
+  });
+  const sourceByProviderIsbn = new Map(existingSources.map(source => [
+    `${source.provider}:${source.sourceIsbn}`, source,
+  ]));
 
   const existingByIsbn = new Map();
   const existingByWork = new Map();
@@ -326,6 +395,8 @@ export async function importReleaseCatalog(db, options = {}) {
     duplicateWorks,
     newBooks: [],
     alreadyPresent: [],
+    missingProvenance: [],
+    provenanceConflicts: [],
     exactIsbnConflicts: [],
     existingWorkCollisions: [],
     missingGenres: [],
@@ -347,24 +418,19 @@ export async function importReleaseCatalog(db, options = {}) {
     }
 
     const exact = existingByIsbn.get(entry.isbn);
+    const sourceCollision = sourceByProviderIsbn.get(`${entry.provider}:${entry.isbn}`);
+    if (sourceCollision && (!exact || sourceCollision.bookId !== exact.id)) {
+      details.provenanceConflicts.push({
+        line: entry.line, row: entry.row, isbn: entry.isbn,
+        reason: 'provider_source_isbn_collision',
+        message: `Provider ${entry.provider} already uses ISBN ${entry.isbn} for another book`,
+      });
+      continue;
+    }
     if (exact) {
-      const derivedYear = parseInt(entry.publicationDate.slice(0, 4), 10);
-      const existingDateStr = serializePublicationDate(exact.publicationDate);
-      const existingGenreSlugs = new Set(
-        (exact.bookGenres || [])
-          .map(bg => bg.genre?.slug || bg.genreSlug)
-          .filter(Boolean)
-      );
-      const requestedGenreSlugs = new Set(entry.genres);
-      const genresMatch = existingGenreSlugs.size === requestedGenreSlugs.size &&
-        [...requestedGenreSlugs].every(s => existingGenreSlugs.has(s));
-
-      const titleMatches = compatibleIdentity(exact, entry);
-      const yearMatches = exact.publicationYear === derivedYear;
-      const dateMatches = existingDateStr === entry.publicationDate;
-      const coverMatches = exact.coverImageUrl === entry.coverImageUrl;
-
-      if (titleMatches && yearMatches && dateMatches && coverMatches && genresMatch) {
+      const comparison = releaseMetadataMatches(exact, entry);
+      if (comparison.matches) {
+        if (matchingProvenance(exact.releaseMetadataSource, entry)) {
         details.alreadyPresent.push({
           line: entry.line,
           row: entry.row,
@@ -373,13 +439,28 @@ export async function importReleaseCatalog(db, options = {}) {
           author: entry.author,
           bookId: exact.id,
         });
+        } else if (!exact.releaseMetadataSource) {
+          details.missingProvenance.push({
+            line: entry.line, row: entry.row, isbn: entry.isbn,
+            title: entry.title, author: entry.author, bookId: exact.id,
+            provider: entry.provider, sourceUrl: entry.sourceUrl,
+            publicationDate: entry.publicationDate, derivedYear: entry.derivedYear,
+            coverImageUrl: entry.coverImageUrl, genres: entry.genres,
+          });
+        } else {
+          details.provenanceConflicts.push({
+            line: entry.line, row: entry.row, isbn: entry.isbn,
+            reason: 'existing_provenance_conflict',
+            message: `Book ${entry.isbn} already has different release provenance`,
+          });
+        }
       } else {
         const differences = [];
-        if (!titleMatches) differences.push(`title/author incompatible (existing "${exact.title}" by "${exact.author}" vs requested "${entry.title}" by "${entry.author}")`);
-        if (!yearMatches) differences.push(`publicationYear mismatch (existing ${exact.publicationYear} vs requested ${derivedYear})`);
-        if (!dateMatches) differences.push(`publicationDate mismatch (existing ${existingDateStr} vs requested ${entry.publicationDate})`);
-        if (!coverMatches) differences.push(`coverImageUrl mismatch (existing "${exact.coverImageUrl}" vs requested "${entry.coverImageUrl}")`);
-        if (!genresMatch) differences.push(`genres mismatch (existing [${[...existingGenreSlugs].sort().join(', ')}] vs requested [${[...requestedGenreSlugs].sort().join(', ')}])`);
+        if (!compatibleIdentity(exact, entry)) differences.push(`title/author incompatible (existing "${exact.title}" by "${exact.author}" vs requested "${entry.title}" by "${entry.author}")`);
+        if (exact.publicationYear !== entry.derivedYear) differences.push(`publicationYear mismatch (existing ${exact.publicationYear} vs requested ${entry.derivedYear})`);
+        if (comparison.existingDateStr !== entry.publicationDate) differences.push(`publicationDate mismatch (existing ${comparison.existingDateStr} vs requested ${entry.publicationDate})`);
+        if (exact.coverImageUrl !== entry.coverImageUrl) differences.push(`coverImageUrl mismatch (existing "${exact.coverImageUrl}" vs requested "${entry.coverImageUrl}")`);
+        if (comparison.existingGenreSlugs.size !== comparison.requestedGenreSlugs.size || ![...comparison.requestedGenreSlugs].every(s => comparison.existingGenreSlugs.has(s))) differences.push(`genres mismatch (existing [${[...comparison.existingGenreSlugs].sort().join(', ')}] vs requested [${[...comparison.requestedGenreSlugs].sort().join(', ')}])`);
 
         details.exactIsbnConflicts.push({
           line: entry.line,
@@ -393,17 +474,17 @@ export async function importReleaseCatalog(db, options = {}) {
             title: exact.title,
             author: exact.author,
             publicationYear: exact.publicationYear,
-            publicationDate: existingDateStr,
+            publicationDate: comparison.existingDateStr,
             coverImageUrl: exact.coverImageUrl,
-            genres: [...existingGenreSlugs].sort(),
+            genres: [...comparison.existingGenreSlugs].sort(),
           },
           requested: {
             title: entry.title,
             author: entry.author,
-            publicationYear: derivedYear,
+            publicationYear: entry.derivedYear,
             publicationDate: entry.publicationDate,
             coverImageUrl: entry.coverImageUrl,
-            genres: [...requestedGenreSlugs].sort(),
+            genres: [...comparison.requestedGenreSlugs].sort(),
           },
         });
       }
@@ -439,7 +520,8 @@ export async function importReleaseCatalog(db, options = {}) {
     details.duplicateWorks.length === 0 &&
     details.exactIsbnConflicts.length === 0 &&
     details.existingWorkCollisions.length === 0 &&
-    details.missingGenres.length === 0
+    details.missingGenres.length === 0 &&
+    details.provenanceConflicts.length === 0
   );
 
   const summary = {
@@ -450,6 +532,9 @@ export async function importReleaseCatalog(db, options = {}) {
     duplicateWorks: details.duplicateWorks.length,
     newBooks: details.newBooks.length,
     alreadyPresent: details.alreadyPresent.length,
+    missingProvenance: details.missingProvenance.length,
+    provenanceConflicts: details.provenanceConflicts.length,
+    provenanceAttached: 0,
     exactIsbnConflicts: details.exactIsbnConflicts.length,
     existingWorkCollisions: details.existingWorkCollisions.length,
     missingGenres: details.missingGenres.length,
@@ -466,6 +551,7 @@ export async function importReleaseCatalog(db, options = {}) {
       if (details.exactIsbnConflicts.length > 0) issues.push(`${details.exactIsbnConflicts.length} exact ISBN conflict(s)`);
       if (details.existingWorkCollisions.length > 0) issues.push(`${details.existingWorkCollisions.length} existing work collision(s)`);
       if (details.missingGenres.length > 0) issues.push(`${details.missingGenres.length} missing genre(s)`);
+      if (details.provenanceConflicts.length > 0) issues.push(`${details.provenanceConflicts.length} provenance conflict(s)`);
       throw new ReleaseCatalogError(
         'preflight_blocked',
         `Cannot apply: preflight blockers detected (${issues.join(', ')})`,
@@ -473,13 +559,12 @@ export async function importReleaseCatalog(db, options = {}) {
       );
     }
 
-    if (details.newBooks.length > 0) {
+    if (details.newBooks.length > 0 || details.missingProvenance.length > 0) {
       await db.$transaction(async tx => {
         // 1. Re-check exact ISBN does not now exist
         const plannedIsbns = details.newBooks.map(b => b.isbn);
-        const existingIsbnBooks = await tx.book.findMany({
-          where: { isbn: { in: plannedIsbns } },
-          select: { id: true, isbn: true },
+        const existingIsbnBooks = plannedIsbns.length === 0 ? [] : await tx.book.findMany({
+          where: { isbn: { in: plannedIsbns } }, select: { id: true, isbn: true },
         });
         if (existingIsbnBooks.length > 0) {
           throw new ReleaseCatalogError(
@@ -506,9 +591,8 @@ export async function importReleaseCatalog(db, options = {}) {
 
         // 3. Re-check requested genres still exist
         const neededSlugs = [...new Set(details.newBooks.flatMap(b => b.genres))];
-        const currentGenres = await tx.genre.findMany({
-          where: { slug: { in: neededSlugs } },
-          select: { id: true, slug: true },
+        const currentGenres = neededSlugs.length === 0 ? [] : await tx.genre.findMany({
+          where: { slug: { in: neededSlugs } }, select: { id: true, slug: true },
         });
         const currentGenreMap = new Map(currentGenres.map(g => [g.slug, g.id]));
         for (const slug of neededSlugs) {
@@ -521,12 +605,24 @@ export async function importReleaseCatalog(db, options = {}) {
           }
         }
 
-        // 4. Create each new book and connect BookGenres
+        // 4. Re-check provenance uniqueness before any writes.
+        const plannedSources = [...details.newBooks, ...details.missingProvenance];
+        for (const item of plannedSources) {
+          const existingSource = await tx.releaseMetadataSource.findUnique({
+            where: { provider_sourceIsbn: { provider: item.provider, sourceIsbn: item.isbn } },
+            select: { id: true, bookId: true },
+          });
+          if (existingSource) {
+            throw new ReleaseCatalogError('stale_preflight', `Stale preflight: release provenance already exists for ${item.provider}:${item.isbn}`);
+          }
+        }
+
+        // 5. Create each new book, genres and provenance in the same transaction.
         for (const item of details.newBooks) {
           const dateObj = new Date(`${item.publicationDate}T00:00:00.000Z`);
           const derivedYear = parseInt(item.publicationDate.slice(0, 4), 10);
           try {
-            await tx.book.create({
+            const book = await tx.book.create({
               data: {
                 title: item.title,
                 author: item.author,
@@ -542,6 +638,12 @@ export async function importReleaseCatalog(db, options = {}) {
                 },
               },
             });
+            await tx.releaseMetadataSource.create({
+              data: {
+                bookId: book.id, provider: item.provider, sourceUrl: item.sourceUrl,
+                sourceIsbn: item.isbn, verifiedPublicationDate: dateObj, lastVerifiedAt: new Date(),
+              },
+            });
           } catch (err) {
             if (err?.code === 'P2002') {
               throw new ReleaseCatalogError(
@@ -553,9 +655,37 @@ export async function importReleaseCatalog(db, options = {}) {
             throw err;
           }
         }
+
+        // 6. Attach only missing provenance after re-checking all matching metadata.
+        for (const item of details.missingProvenance) {
+          const current = await tx.book.findUnique({
+            where: { id: item.bookId },
+            select: {
+              id: true, isbn: true, title: true, author: true, publicationYear: true, publicationDate: true, coverImageUrl: true,
+              bookGenres: { select: { genre: { select: { slug: true } } } },
+              releaseMetadataSource: { select: { id: true } },
+            },
+          });
+          if (!current || current.isbn !== item.isbn || current.releaseMetadataSource || !releaseMetadataMatches(current, item).matches) {
+            throw new ReleaseCatalogError('stale_preflight', `Stale preflight: book ${item.isbn} can no longer receive release provenance`);
+          }
+          const dateObj = new Date(`${item.publicationDate}T00:00:00.000Z`);
+          try {
+            await tx.releaseMetadataSource.create({
+              data: { bookId: current.id, provider: item.provider, sourceUrl: item.sourceUrl, sourceIsbn: item.isbn,
+                verifiedPublicationDate: dateObj, lastVerifiedAt: new Date() },
+            });
+          } catch (error) {
+            if (error?.code === 'P2002') {
+              throw new ReleaseCatalogError('stale_preflight', `Stale preflight: release provenance changed for ${item.isbn}`, { isbn: item.isbn });
+            }
+            throw error;
+          }
+        }
       });
 
       summary.created = details.newBooks.length;
+      summary.provenanceAttached = details.missingProvenance.length;
     }
   }
 
