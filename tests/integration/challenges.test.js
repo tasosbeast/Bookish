@@ -91,6 +91,10 @@ test('PostgreSQL: Reading Challenges v1 and Trophies API, event counting, month 
     assert.equal(cacheRes.body.data.goal, 3);
     assert.ok(cacheRes.body.data.periodStart);
     assert.ok(cacheRes.body.data.periodEnd);
+    const expectedCurrentBounds = getUtcMonthBounds();
+    assert.equal(cacheRes.body.data.key, expectedCurrentBounds.key);
+    assert.equal(cacheRes.body.data.title, expectedCurrentBounds.title);
+    assert.match(cacheRes.body.data.title, /^[A-Z][a-z]+ \d{4} Reading Challenge$/);
     assert.equal(cacheTrophiesRes.body.data.length, 0);
 
     // ====================================================
@@ -261,7 +265,7 @@ test('PostgreSQL: Reading Challenges v1 and Trophies API, event counting, month 
 
     const julyTrophy = trophies.find(t => t.key === '2026-07');
     assert.ok(julyTrophy, 'July trophy exists');
-    assert.equal(julyTrophy.title, 'July Reading Challenge');
+    assert.equal(julyTrophy.title, 'July 2026 Reading Challenge');
     assert.equal(julyTrophy.goal, 3);
     assert.equal(julyTrophy.booksRead, 4, 'booksRead includes all 4 distinct books finished in July');
     assert.equal(julyTrophy.completedAt, july3.toISOString(), 'completedAt is timestamp of 3rd distinct book finish');

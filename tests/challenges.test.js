@@ -13,28 +13,35 @@ test('Challenges unit: getUtcMonthBounds computes exact UTC boundaries and keys'
   assert.equal(boundsSep.year, 2026);
   assert.equal(boundsSep.month, 8); // 0-indexed
   assert.equal(boundsSep.key, '2026-09');
-  assert.equal(boundsSep.title, 'September Reading Challenge');
+  assert.equal(boundsSep.title, 'September 2026 Reading Challenge');
   assert.equal(boundsSep.periodStart.toISOString(), '2026-09-01T00:00:00.000Z');
   assert.equal(boundsSep.periodEnd.toISOString(), '2026-10-01T00:00:00.000Z');
 
   // Leap year February (2024)
   const boundsFebLeap = getUtcMonthBounds(new Date('2024-02-10T08:00:00.000Z'));
   assert.equal(boundsFebLeap.key, '2024-02');
-  assert.equal(boundsFebLeap.title, 'February Reading Challenge');
+  assert.equal(boundsFebLeap.title, 'February 2024 Reading Challenge');
   assert.equal(boundsFebLeap.periodStart.toISOString(), '2024-02-01T00:00:00.000Z');
   assert.equal(boundsFebLeap.periodEnd.toISOString(), '2024-03-01T00:00:00.000Z');
 
   // December to January year transition
   const boundsDec = getUtcMonthBounds(new Date('2025-12-31T23:59:59.999Z'));
   assert.equal(boundsDec.key, '2025-12');
-  assert.equal(boundsDec.title, 'December Reading Challenge');
+  assert.equal(boundsDec.title, 'December 2025 Reading Challenge');
   assert.equal(boundsDec.periodStart.toISOString(), '2025-12-01T00:00:00.000Z');
   assert.equal(boundsDec.periodEnd.toISOString(), '2026-01-01T00:00:00.000Z');
 
   // Boundary timestamp: exactly at month start
   const boundsStart = getUtcMonthBounds(new Date('2026-09-01T00:00:00.000Z'));
   assert.equal(boundsStart.key, '2026-09');
+  assert.equal(boundsStart.title, 'September 2026 Reading Challenge');
   assert.equal(boundsStart.periodStart.toISOString(), '2026-09-01T00:00:00.000Z');
+
+  // Same calendar month in different years produces distinct titles while keys remain YYYY-MM
+  const boundsSep2027 = getUtcMonthBounds(new Date('2027-09-15T15:30:00.000Z'));
+  assert.equal(boundsSep2027.key, '2027-09');
+  assert.equal(boundsSep2027.title, 'September 2027 Reading Challenge');
+  assert.notEqual(boundsSep.title, boundsSep2027.title);
 });
 
 test('Challenges unit: calculateChallengeProgress handles distinct books, duplicates, and completion', () => {
@@ -147,14 +154,31 @@ test('Challenges unit: deriveTrophies groups by month, requires >= 3 distinct bo
 
   // Newest month first: September before August
   assert.equal(trophies[0].key, '2026-09');
-  assert.equal(trophies[0].title, 'September Reading Challenge');
+  assert.equal(trophies[0].title, 'September 2026 Reading Challenge');
   assert.equal(trophies[0].goal, 3);
   assert.equal(trophies[0].booksRead, 4); // includes books beyond 3
   assert.equal(trophies[0].completedAt, '2026-09-12T12:00:00.000Z'); // 3rd distinct book timestamp
 
   assert.equal(trophies[1].key, '2026-08');
-  assert.equal(trophies[1].title, 'August Reading Challenge');
+  assert.equal(trophies[1].title, 'August 2026 Reading Challenge');
   assert.equal(trophies[1].goal, 3);
   assert.equal(trophies[1].booksRead, 3);
   assert.equal(trophies[1].completedAt, '2026-08-25T15:30:00.000Z');
+
+  // Multi-year: same calendar month in different years produces distinct titles with keys YYYY-MM
+  const multiYearActivities = [
+    { bookId: 'b1', createdAt: new Date('2026-09-02T10:00:00Z') },
+    { bookId: 'b2', createdAt: new Date('2026-09-05T10:00:00Z') },
+    { bookId: 'b3', createdAt: new Date('2026-09-12T12:00:00Z') },
+    { bookId: 'b1', createdAt: new Date('2027-09-03T10:00:00Z') },
+    { bookId: 'b2', createdAt: new Date('2027-09-06T10:00:00Z') },
+    { bookId: 'b3', createdAt: new Date('2027-09-15T12:00:00Z') },
+  ];
+  const multiYearTrophies = deriveTrophies(multiYearActivities);
+  assert.equal(multiYearTrophies.length, 2);
+  assert.equal(multiYearTrophies[0].key, '2027-09');
+  assert.equal(multiYearTrophies[0].title, 'September 2027 Reading Challenge');
+  assert.equal(multiYearTrophies[1].key, '2026-09');
+  assert.equal(multiYearTrophies[1].title, 'September 2026 Reading Challenge');
+  assert.notEqual(multiYearTrophies[0].title, multiYearTrophies[1].title);
 });

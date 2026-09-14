@@ -44,7 +44,7 @@ test('Challenges frontend: protection, navigation, progress states, completed st
   let currentChallengeData = {
     data: {
       key: '2026-09',
-      title: 'September Reading Challenge',
+      title: 'September 2026 Reading Challenge',
       description: 'Finish 3 different books this month.',
       goal: 3,
       progress: 2,
@@ -63,14 +63,14 @@ test('Challenges frontend: protection, navigation, progress states, completed st
     data: [
       {
         key: '2026-09',
-        title: 'September Reading Challenge',
+        title: 'September 2026 Reading Challenge',
         goal: 3,
         completedAt: '2026-09-18T15:30:00.000Z',
         booksRead: 5,
       },
       {
         key: '2026-08',
-        title: 'August Reading Challenge',
+        title: 'August 2026 Reading Challenge',
         goal: 3,
         completedAt: '2026-08-20T12:00:00.000Z',
         booksRead: 3,
@@ -192,7 +192,7 @@ test('Challenges frontend: protection, navigation, progress states, completed st
   });
 
   assert.ok(document.body.textContent.includes('Finish books and track your monthly reading progress.'), 'Displays updated intro copy');
-  assert.ok(document.body.textContent.includes('September Reading Challenge'), 'Displays challenge title');
+  assert.ok(document.body.textContent.includes('September 2026 Reading Challenge'), 'Displays challenge title');
   assert.ok(document.body.textContent.includes('2 of 3 books'), 'Displays progress count');
   const progressBar = document.querySelector('[role="progressbar"]');
   assert.ok(progressBar, 'Progress bar exists with role="progressbar"');
@@ -213,7 +213,7 @@ test('Challenges frontend: protection, navigation, progress states, completed st
   currentChallengeData = {
     data: {
       key: '2026-09',
-      title: 'September Reading Challenge',
+      title: 'September 2026 Reading Challenge',
       description: 'Finish 3 different books this month.',
       goal: 3,
       progress: 0,
@@ -244,7 +244,7 @@ test('Challenges frontend: protection, navigation, progress states, completed st
   currentChallengeData = {
     data: {
       key: '2026-09',
-      title: 'September Reading Challenge',
+      title: 'September 2026 Reading Challenge',
       description: 'Finish 3 different books this month.',
       goal: 3,
       progress: 5,
@@ -303,7 +303,7 @@ test('Challenges frontend: protection, navigation, progress states, completed st
   await act(async () => {
     retryBtn.click();
   });
-  assert.ok(document.body.textContent.includes('September Reading Challenge'), 'Restores challenge after retry');
+  assert.ok(document.body.textContent.includes('September 2026 Reading Challenge'), 'Restores challenge after retry');
 
   // ====================================================
   // 7. Account page: My Bookish Trophies section
@@ -323,11 +323,11 @@ test('Challenges frontend: protection, navigation, progress states, completed st
   assert.equal(trophyCards.length, 2, 'Renders 2 trophy cards');
 
   // Check ordering: September before August
-  assert.ok(trophyCards[0].textContent.includes('September Reading Challenge'));
+  assert.ok(trophyCards[0].textContent.includes('September 2026 Reading Challenge'));
   assert.ok(trophyCards[0].textContent.includes('Completed Sep 18, 2026'));
   assert.ok(trophyCards[0].textContent.includes('5 books finished'));
 
-  assert.ok(trophyCards[1].textContent.includes('August Reading Challenge'));
+  assert.ok(trophyCards[1].textContent.includes('August 2026 Reading Challenge'));
   assert.ok(trophyCards[1].textContent.includes('Completed Aug 20, 2026'));
   assert.ok(trophyCards[1].textContent.includes('3 books finished'));
 

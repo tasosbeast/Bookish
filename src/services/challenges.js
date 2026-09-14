@@ -17,7 +17,7 @@ export function getUtcMonthBounds(date = new Date()) {
   const periodStart = new Date(Date.UTC(year, month, 1, 0, 0, 0, 0));
   const periodEnd = new Date(Date.UTC(year, month + 1, 1, 0, 0, 0, 0));
   const key = `${year}-${String(month + 1).padStart(2, '0')}`;
-  const title = `${MONTH_NAMES[month]} Reading Challenge`;
+  const title = `${MONTH_NAMES[month]} ${year} Reading Challenge`;
   return { year, month, key, title, periodStart, periodEnd };
 }
 
@@ -85,6 +85,7 @@ export function deriveTrophies(activities, goal = CHALLENGE_GOAL) {
 
     if (!monthMap.has(key)) {
       monthMap.set(key, {
+        year,
         month,
         seenBooks: new Set(),
         completedAt: null,
@@ -105,7 +106,7 @@ export function deriveTrophies(activities, goal = CHALLENGE_GOAL) {
     if (data.seenBooks.size >= goal) {
       trophies.push({
         key,
-        title: `${MONTH_NAMES[data.month]} Reading Challenge`,
+        title: `${MONTH_NAMES[data.month]} ${data.year} Reading Challenge`,
         goal,
         completedAt: data.completedAt,
         booksRead: data.seenBooks.size,
