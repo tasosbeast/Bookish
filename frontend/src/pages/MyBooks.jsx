@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useResource } from '../hooks/useResource.js';
 import { ShelfForm } from '../components/ReadingForms.jsx';
 import { Cover, Genres, Rating, EmptyState, ErrorNotice, Loading, Pagination, statuses, pageNumber, Icon } from '../components/shared.jsx';
@@ -18,6 +18,7 @@ function ShelfEditor({ bookId, onSaved }) {
 }
 
 export default function MyBooks() {
+  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const [editing, setEditing] = useState(null);
   const [notice, setNotice] = useState('');
@@ -49,10 +50,15 @@ export default function MyBooks() {
     setParams(next);
   }
 
-  function saved(message, removedBookId) {
+  function saved(message, options, bookId) {
+    if (options?.scrollToReview && bookId) {
+      setEditing(null);
+      navigate(`/books/${bookId}#review`);
+      return;
+    }
     setNotice(message);
     setEditing(null);
-    if (removedBookId) setRemovedBookIds(current => new Set([...current, removedBookId]));
+    if (options?.shelf && bookId) setRemovedBookIds(current => new Set([...current, bookId]));
     shelves.reload();
   }
 
@@ -218,7 +224,7 @@ export default function MyBooks() {
                       <div className="inline-editor">
                         <ShelfEditor
                           bookId={entry.bookId}
-                          onSaved={(message, change) => saved(message, change?.shelf ? entry.bookId : null)}
+                          onSaved={(message, options) => saved(message, options, entry.bookId)}
                         />
                       </div>
                     )}
