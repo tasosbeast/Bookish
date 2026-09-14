@@ -71,6 +71,7 @@ export async function listFeed(userId, { limit = 20, cursor } = {}) {
   const where = {
     AND: [
       { OR: friendConditions },
+      { historical: false },
       ...(cursorCondition ? [cursorCondition] : []),
     ],
   };

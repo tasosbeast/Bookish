@@ -10,6 +10,7 @@ import { saveShelf, removeShelf } from '../../src/services/ratings.js';
 import { getCurrentChallenge, getUserTrophies } from '../../src/services/challenges.js';
 import { listFeed } from '../../src/services/feed.js';
 import { personalBook } from '../../src/services/user-books.js';
+import { maxAllowedFinishedOn } from '../../src/validators/index.js';
 
 test('PostgreSQL: Editable Date finished support for books marked Read',
   { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async t => {
@@ -243,5 +244,104 @@ test('PostgreSQL: Editable Date finished support for books marked Read',
     const feedForAlice2 = await listFeed(userA.userId);
     const excludedActivity = feedForAlice2.data.find(item => item.book.id === book6.id);
     assert.equal(excludedActivity, undefined, 'Activity created before friendship is excluded even if finishedOn is after');
+
+    // 22. Legacy Read book with no completion activity can set finishedOn without appearing in Feed
+    const book7 = await createBook('B7');
+    // Simulate legacy book marked Read before activity tracking existed
+    await prisma.userBook.create({
+      data: {
+        userId: userB.userId,
+        bookId: book7.id,
+        status: 'read',
+      },
+    });
+    // Bob sets finishedOn on this legacy read book
+    await saveShelf(userB.userId, { bookId: book7.id, finishedOn: '2026-05-10' });
+
+    // Personal book response returns the finish date
+    const bobBook7Personal = await personalBook(userB.userId, book7.id);
+    assert.equal(bobBook7Personal.data.shelf.finishedOn, '2026-05-10');
+
+    // DB record has historical = true
+    const legacyAct = await prisma.activity.findFirst({
+      where: { userId: userB.userId, bookId: book7.id, type: 'finished_reading' },
+    });
+    assert.ok(legacyAct, 'Historical activity created for legacy read');
+    assert.equal(legacyAct.historical, true, 'Marked as historical activity');
+    assert.equal(legacyAct.finishedOn.toISOString().slice(0, 10), '2026-05-10');
+
+    // Alice's feed does NOT show this historical completion
+    const feedForAlice3 = await listFeed(userA.userId);
+    const legacyInFeed = feedForAlice3.data.find(item => item.book.id === book7.id);
+    assert.equal(legacyInFeed, undefined, 'Legacy read finish date does NOT appear in Friends Feed');
+
+    // 23. Subsequent date edit updates the same historical completion without creating new records
+    await saveShelf(userB.userId, { bookId: book7.id, finishedOn: '2026-05-12' });
+    const legacyActsAfterEdit = await prisma.activity.findMany({
+      where: { userId: userB.userId, bookId: book7.id, type: 'finished_reading' },
+    });
+    assert.equal(legacyActsAfterEdit.length, 1, 'Only one completion record exists after edit');
+    assert.equal(legacyActsAfterEdit[0].finishedOn.toISOString().slice(0, 10), '2026-05-12');
+    assert.equal(legacyActsAfterEdit[0].historical, true);
+
+    const feedForAlice4 = await listFeed(userA.userId);
+    assert.equal(feedForAlice4.data.find(item => item.book.id === book7.id), undefined, 'Still not in Feed after edit');
+
+    // 24. Later genuine reread (read -> currently_reading -> read) DOES appear in Feed
+    await saveShelf(userB.userId, { bookId: book7.id, status: 'currently_reading' });
+    await saveShelf(userB.userId, { bookId: book7.id, status: 'read', finishedOn: '2026-09-22' });
+
+    const bobBook7Acts = await prisma.activity.findMany({
+      where: { userId: userB.userId, bookId: book7.id, type: 'finished_reading' },
+      orderBy: [{ createdAt: 'asc' }],
+    });
+    assert.equal(bobBook7Acts.length, 2, 'Two completion activities exist after genuine reread');
+    assert.equal(bobBook7Acts[0].historical, true, 'First legacy activity remains historical');
+    assert.equal(bobBook7Acts[1].historical, false, 'Genuine reread activity is NOT historical');
+
+    const feedForAlice5 = await listFeed(userA.userId);
+    const rereadInFeed = feedForAlice5.data.find(item => item.book.id === book7.id);
+    assert.ok(rereadInFeed, 'Genuine reread DOES appear in Friends Feed');
+
+    // 25. Midnight/local-vs-UTC edge in API accepts up to tomorrow UTC, rejects 2 days ahead
+    const book8 = await createBook('B8');
+    const validTomorrow = maxAllowedFinishedOn();
+    await auth(userA, 'post', '/api/user-books')
+      .send({ bookId: book8.id, status: 'read', finishedOn: validTomorrow })
+      .expect(200);
+
+    const book9 = await createBook('B9');
+    const nowUtc = new Date();
+    const invalidFuture = new Date(Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), nowUtc.getUTCDate() + 2))
+      .toISOString().slice(0, 10);
+    await auth(userA, 'post', '/api/user-books')
+      .send({ bookId: book9.id, status: 'read', finishedOn: invalidFuture })
+      .expect(400);
+
+    // 26. PostgreSQL UTC backfill semantics: DATE(created_at AT TIME ZONE 'UTC') vs session timezone
+    const actForTz = await prisma.activity.create({
+      data: {
+        userId: userA.userId,
+        bookId: book1.id,
+        type: 'finished_reading',
+        createdAt: new Date('2026-09-14T23:30:00.000Z'),
+      },
+    });
+    // Setting PostgreSQL session timezone to Asia/Tokyo (+09:00):
+    // 23:30 UTC on Sep 14 is 08:30 on Sep 15 in Tokyo.
+    // Plain DATE(created_at) evaluates to 2026-09-15.
+    // Explicit (created_at AT TIME ZONE 'UTC')::DATE evaluates to 2026-09-14.
+    await prisma.$executeRawUnsafe("SET timezone = 'Asia/Tokyo'");
+    const [tzRow] = await prisma.$queryRawUnsafe(`
+      SELECT
+        (created_at AT TIME ZONE 'UTC')::DATE::text as utc_date,
+        DATE(created_at)::text as session_local_date
+      FROM activities
+      WHERE id = '${actForTz.id}'::uuid
+    `);
+    await prisma.$executeRawUnsafe("SET timezone = 'UTC'");
+    assert.equal(tzRow.utc_date, '2026-09-14', 'Explicit UTC conversion produces UTC date');
+    assert.equal(tzRow.session_local_date, '2026-09-15', 'Plain DATE uses session timezone');
   }
 );
+

@@ -106,6 +106,7 @@ export async function saveShelf(userId, { bookId, status, userRating, finishedOn
             bookId,
             type: 'finished_reading',
             finishedOn: targetFinishedOn,
+            historical: true,
           },
         });
       }

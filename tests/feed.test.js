@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { encodeCursor, decodeCursor } from '../src/services/feed.js';
+import { encodeCursor, decodeCursor, listFeed } from '../src/services/feed.js';
 import { feedQuerySchema } from '../src/validators/index.js';
+import { prisma } from '../src/lib/prisma.js';
 
 test('Feed unit: encodeCursor and decodeCursor handle valid inputs and roundtrips', () => {
   const id = randomUUID();
@@ -75,3 +76,31 @@ test('Feed validation: feedQuerySchema sets defaults and validates limit and cur
   assert.throws(() => feedQuerySchema.parse({ query: { page: '1' } }), /unrecognized_keys/);
   assert.throws(() => feedQuerySchema.parse({ query: { extra: 'hello' } }), /unrecognized_keys/);
 });
+
+test('Feed unit: listFeed filters out historical activities', async () => {
+  let capturedWhere = null;
+  const origFriendshipFindMany = prisma.friendship.findMany;
+  const origActivityFindMany = prisma.activity.findMany;
+
+  try {
+    const userId = randomUUID();
+    const friendId = randomUUID();
+    prisma.friendship.findMany = async () => [
+      { userAId: userId, userBId: friendId, acceptedAt: new Date('2026-09-01T00:00:00.000Z') },
+    ];
+    prisma.activity.findMany = async ({ where }) => {
+      capturedWhere = where;
+      return [];
+    };
+
+    const res = await listFeed(userId);
+    assert.deepEqual(res.data, []);
+    assert.ok(capturedWhere, 'prisma.activity.findMany was called');
+    const hasHistoricalFilter = capturedWhere.AND.some(cond => cond.historical === false);
+    assert.equal(hasHistoricalFilter, true, 'where clause includes { historical: false } filter');
+  } finally {
+    prisma.friendship.findMany = origFriendshipFindMany;
+    prisma.activity.findMany = origActivityFindMany;
+  }
+});
+

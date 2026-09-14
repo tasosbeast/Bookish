@@ -27,6 +27,14 @@ export const shelvesQuerySchema = z.object({ query: z.object({
   status: z.enum(['want_to_read', 'currently_reading', 'read']).optional(),
   q: z.string().trim().min(1).max(200).optional(),
 }).strict() });
+export function maxAllowedFinishedOn(now = new Date()) {
+  // Allow up to 1 calendar day ahead of UTC to accommodate users in timezones
+  // east of UTC (up to UTC+14) who have crossed local midnight while UTC is
+  // still on the previous calendar day.
+  const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+  return tomorrow.toISOString().slice(0, 10);
+}
+
 export const finishedOnSchema = z.string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be a date-only string in YYYY-MM-DD format')
   .refine(val => {
@@ -35,7 +43,7 @@ export const finishedOnSchema = z.string()
     const d = new Date(Date.UTC(year, month - 1, day));
     return d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day;
   }, 'Must be a valid calendar date')
-  .refine(val => val <= new Date().toISOString().slice(0, 10), 'Date finished cannot be after current date');
+  .refine(val => val <= maxAllowedFinishedOn(), 'Date finished cannot be in the future');
 
 export const shelfSchema = z.object({ body: z.object({
   bookId: uuid,

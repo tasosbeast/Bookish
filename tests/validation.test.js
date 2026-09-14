@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { signupSchema, shelfSchema, booksSchema, shelvesQuerySchema } from '../src/validators/index.js';
+import { signupSchema, shelfSchema, booksSchema, shelvesQuerySchema, maxAllowedFinishedOn } from '../src/validators/index.js';
 import { parseEnv } from '../src/config/env.js';
 
 test('production configuration requires an explicit HTTPS frontend origin', () => {
@@ -60,6 +60,40 @@ test('shelf validation validates finishedOn format, leap years, future dates, an
     assert.equal(shelfSchema.safeParse({ body: { bookId, status: nonRead, finishedOn: '2024-02-29' } }).success, false);
   }
 });
+
+test('maxAllowedFinishedOn and shelf validation handles midnight/local-vs-UTC edge across timezones', () => {
+  const bookId = '11111111-1111-4111-8111-111111111111';
+
+  // 1. Edge before UTC midnight (e.g. 23:30 UTC):
+  // Users east of UTC (e.g. UTC+1 to UTC+14) have already crossed midnight into 2026-09-15.
+  const utcBeforeMidnight = new Date('2026-09-14T23:30:00.000Z');
+  assert.equal(maxAllowedFinishedOn(utcBeforeMidnight), '2026-09-15');
+
+  // 2. Edge after UTC midnight (e.g. 00:30 UTC):
+  const utcAfterMidnight = new Date('2026-09-15T00:30:00.000Z');
+  assert.equal(maxAllowedFinishedOn(utcAfterMidnight), '2026-09-16');
+
+  // 3. Month boundaries: Sep 30 23:55 UTC -> Oct 01
+  assert.equal(maxAllowedFinishedOn(new Date('2026-09-30T23:55:00.000Z')), '2026-10-01');
+
+  // 4. Leap year boundaries: Feb 28 23:55 UTC in leap year -> Feb 29
+  assert.equal(maxAllowedFinishedOn(new Date('2024-02-28T23:55:00.000Z')), '2024-02-29');
+  assert.equal(maxAllowedFinishedOn(new Date('2024-02-29T23:55:00.000Z')), '2024-03-01');
+
+  // 5. Year boundary: Dec 31 23:55 UTC -> Jan 01
+  assert.equal(maxAllowedFinishedOn(new Date('2026-12-31T23:55:00.000Z')), '2027-01-01');
+
+  // 6. Live validation accepts today and tomorrow (UTC+1 day), rejects 2 days ahead
+  const now = new Date();
+  const utcToday = now.toISOString().slice(0, 10);
+  const tomorrow = maxAllowedFinishedOn(now);
+  const twoDaysAhead = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 2)).toISOString().slice(0, 10);
+
+  assert.equal(shelfSchema.safeParse({ body: { bookId, status: 'read', finishedOn: utcToday } }).success, true);
+  assert.equal(shelfSchema.safeParse({ body: { bookId, status: 'read', finishedOn: tomorrow } }).success, true);
+  assert.equal(shelfSchema.safeParse({ body: { bookId, status: 'read', finishedOn: twoDaysAhead } }).success, false);
+});
+
 test('pagination is bounded and sort fields are allowlisted', () => {
   assert.deepEqual(booksSchema.parse({ query: {} }).query, { page: 1, limit: 20, sort: 'rating', order: 'desc' });
   assert.equal(booksSchema.parse({ query: { author: ' Jane Austen ' } }).query.author, 'Jane Austen');
