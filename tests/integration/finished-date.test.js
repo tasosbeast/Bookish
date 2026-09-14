@@ -9,7 +9,7 @@ import { signTokens, digest } from '../../src/services/tokens.js';
 import { saveShelf, removeShelf } from '../../src/services/ratings.js';
 import { getCurrentChallenge, getUserTrophies } from '../../src/services/challenges.js';
 import { listFeed } from '../../src/services/feed.js';
-import { personalBook } from '../../src/services/user-books.js';
+import { personalBook, listShelves } from '../../src/services/user-books.js';
 import { maxAllowedFinishedOn } from '../../src/validators/index.js';
 
 test('PostgreSQL: Editable Date finished support for books marked Read',
@@ -342,6 +342,55 @@ test('PostgreSQL: Editable Date finished support for books marked Read',
     await prisma.$executeRawUnsafe("SET timezone = 'UTC'");
     assert.equal(tzRow.utc_date, '2026-09-14', 'Explicit UTC conversion produces UTC date');
     assert.equal(tzRow.session_local_date, '2026-09-15', 'Plain DATE uses session timezone');
+
+    // 27. GET /api/user-books and listShelves include finishedOn for read books
+    const userC = await signup('c');
+    const bRead = await createBook('MyBooks_Read');
+    const bReread = await createBook('MyBooks_Reread');
+    const bReading = await createBook('MyBooks_Reading');
+    const bWant = await createBook('MyBooks_Want');
+    const bLegacy = await createBook('MyBooks_Legacy');
+
+    // Read book with date
+    await saveShelf(userC.userId, { bookId: bRead.id, status: 'read', finishedOn: '2026-09-05' });
+
+    // Reread book: first read in August, reread finished in September
+    await saveShelf(userC.userId, { bookId: bReread.id, status: 'read', finishedOn: '2026-08-01' });
+    await saveShelf(userC.userId, { bookId: bReread.id, status: 'currently_reading' });
+    await saveShelf(userC.userId, { bookId: bReread.id, status: 'read', finishedOn: '2026-09-10' });
+
+    // Non-read books
+    await saveShelf(userC.userId, { bookId: bReading.id, status: 'currently_reading' });
+    await saveShelf(userC.userId, { bookId: bWant.id, status: 'want_to_read' });
+
+    // Legacy read book with no Activity row
+    await prisma.userBook.create({
+      data: {
+        userId: userC.userId,
+        bookId: bLegacy.id,
+        status: 'read',
+      },
+    });
+
+    // Test direct service listShelves
+    const shelfList = await listShelves(userC.userId, { page: 1, limit: 10 });
+    const shelfMap = new Map(shelfList.data.map(e => [e.bookId, e]));
+
+    assert.equal(shelfMap.get(bRead.id).finishedOn, '2026-09-05', 'Read book has finishedOn date');
+    assert.equal(shelfMap.get(bReread.id).finishedOn, '2026-09-10', 'Reread book has latest finishedOn date');
+    assert.equal(shelfMap.get(bReading.id).finishedOn, null, 'Currently reading has finishedOn null');
+    assert.equal(shelfMap.get(bWant.id).finishedOn, null, 'Want to read has finishedOn null');
+    assert.equal(shelfMap.get(bLegacy.id).finishedOn, null, 'Legacy read without activity has finishedOn null');
+
+    // Test HTTP GET /api/user-books
+    const apiRes = await auth(userC, 'get', '/api/user-books').expect(200);
+    const apiMap = new Map(apiRes.body.data.map(e => [e.bookId, e]));
+
+    assert.equal(apiMap.get(bRead.id).finishedOn, '2026-09-05');
+    assert.equal(apiMap.get(bReread.id).finishedOn, '2026-09-10');
+    assert.equal(apiMap.get(bReading.id).finishedOn, null);
+    assert.equal(apiMap.get(bWant.id).finishedOn, null);
+    assert.equal(apiMap.get(bLegacy.id).finishedOn, null);
   }
 );
 

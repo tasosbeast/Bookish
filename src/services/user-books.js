@@ -25,10 +25,6 @@ export async function personalBook(userId, bookId) {
           finishedOn = latestFinished.finishedOn instanceof Date
             ? latestFinished.finishedOn.toISOString().slice(0, 10)
             : String(latestFinished.finishedOn).slice(0, 10);
-        } else if (latestFinished?.createdAt) {
-          finishedOn = latestFinished.createdAt instanceof Date
-            ? latestFinished.createdAt.toISOString().slice(0, 10)
-            : String(latestFinished.createdAt).slice(0, 10);
         }
       }
       shelfData = { ...shelf, finishedOn };
@@ -48,14 +44,68 @@ export async function listShelves(userId, { status, q, page, limit }) {
       },
     }),
   };
-  const [entries, total] = await prisma.$transaction([
-    prisma.userBook.findMany({ where, skip: (page - 1) * limit, take: limit,
-      orderBy: [{ updatedAt: 'desc' }, { bookId: 'asc' }],
-      select: { bookId: true, status: true, userRating: true, createdAt: true, updatedAt: true,
-        book: { include: genres } },
-    }),
-    prisma.userBook.count({ where }),
-  ], { isolationLevel: 'RepeatableRead' });
-  return { data: entries.map(entry => ({ ...entry, book: serializeBook(entry.book) })),
-    pagination: pageInfo(page, limit, total) };
+  return prisma.$transaction(async tx => {
+    const [entries, total] = await Promise.all([
+      tx.userBook.findMany({
+        where,
+        skip: (page - 1) * limit,
+        take: limit,
+        orderBy: [{ updatedAt: 'desc' }, { bookId: 'asc' }],
+        select: {
+          bookId: true,
+          status: true,
+          userRating: true,
+          createdAt: true,
+          updatedAt: true,
+          book: { include: genres },
+        },
+      }),
+      tx.userBook.count({ where }),
+    ]);
+
+    const readBookIds = entries.filter(e => e.status === 'read').map(e => e.bookId);
+    const finishedOnByBookId = new Map();
+
+    if (readBookIds.length > 0) {
+      const activities = await tx.activity.findMany({
+        where: {
+          userId,
+          bookId: { in: readBookIds },
+          type: 'finished_reading',
+        },
+        orderBy: [
+          { createdAt: 'desc' },
+          { id: 'desc' },
+        ],
+        select: {
+          bookId: true,
+          finishedOn: true,
+        },
+      });
+
+      for (const act of activities) {
+        if (!finishedOnByBookId.has(act.bookId)) {
+          const dateStr = act.finishedOn
+            ? (act.finishedOn instanceof Date ? act.finishedOn.toISOString().slice(0, 10) : String(act.finishedOn).slice(0, 10))
+            : null;
+          finishedOnByBookId.set(act.bookId, dateStr);
+        }
+      }
+    }
+
+    const data = entries.map(entry => ({
+      bookId: entry.bookId,
+      status: entry.status,
+      userRating: entry.userRating,
+      finishedOn: entry.status === 'read' ? (finishedOnByBookId.get(entry.bookId) ?? null) : null,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
+      book: serializeBook(entry.book),
+    }));
+
+    return {
+      data,
+      pagination: pageInfo(page, limit, total),
+    };
+  }, { isolationLevel: 'RepeatableRead' });
 }

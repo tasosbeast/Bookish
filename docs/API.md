@@ -127,6 +127,7 @@ Returns only bookshelf entries where `status` is not null for the user identifie
     "bookId": "11111111-1111-4111-8111-111111111111",
     "status": "read",
     "userRating": 4,
+    "finishedOn": "2026-09-05",
     "createdAt": "2026-09-06T00:00:00.000Z",
     "updatedAt": "2026-09-06T00:00:00.000Z",
     "book": {
@@ -142,7 +143,7 @@ Returns only bookshelf entries where `status` is not null for the user identifie
 }
 ```
 
-The nested book also includes its other existing scalar fields (description, ISBN, publication year, ratings count and timestamps). `userRating` and `averageRating` can be null; the latter is serialized as a JSON number when rated. Only the current reader's shelf is returned, and no user/session relation is included.
+The nested book also includes its other existing scalar fields (description, ISBN, publication year, ratings count and timestamps). `finishedOn` is `"YYYY-MM-DD"` representing the user's latest finish date when `status` is `read`, or `null` otherwise. `userRating` and `averageRating` can be null; the latter is serialized as a JSON number when rated. Only the current reader's shelf is returned, and no user/session relation is included.
 
 `POST /api/user-books`
 

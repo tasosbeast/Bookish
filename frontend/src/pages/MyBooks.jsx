@@ -4,6 +4,12 @@ import { useResource } from '../hooks/useResource.js';
 import { ShelfForm } from '../components/ReadingForms.jsx';
 import { Cover, Genres, Rating, EmptyState, ErrorNotice, Loading, Pagination, statuses, pageNumber, Icon } from '../components/shared.jsx';
 
+function formatFinishedDate(dateString) {
+  if (!dateString) return '';
+  const date = new Date(dateString.includes('T') ? dateString : `${dateString}T00:00:00.000Z`);
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+}
+
 function ShelfEditor({ bookId, onSaved }) {
   const personal = useResource(`/user-books/${bookId}`, 'required');
   if (personal.loading) return <Loading />;
@@ -186,6 +192,11 @@ export default function MyBooks() {
                         <span className="status-badge">
                           {statuses.find(([value]) => value === entry.status)?.[1]}
                         </span>
+                        {entry.status === 'read' && entry.finishedOn && (
+                          <span className="small muted">
+                            Finished {formatFinishedDate(entry.finishedOn)}
+                          </span>
+                        )}
                         <span className="small muted">
                           Your rating: {entry.userRating ? `${entry.userRating} / 5` : 'Not rated'}
                         </span>
