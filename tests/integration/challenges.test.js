@@ -198,6 +198,7 @@ test('PostgreSQL: Reading Challenges v1 and Trophies API, event counting, month 
         bookId: book1.id,
         type: 'finished_reading',
         createdAt: periodStart,
+        finishedOn: periodStart,
       },
     });
     // Activity exactly at periodEnd belongs to next month (not current)
@@ -207,6 +208,7 @@ test('PostgreSQL: Reading Challenges v1 and Trophies API, event counting, month 
         bookId: book2.id,
         type: 'finished_reading',
         createdAt: periodEnd,
+        finishedOn: periodEnd,
       },
     });
 

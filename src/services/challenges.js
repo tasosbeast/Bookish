@@ -28,12 +28,6 @@ function getActivityFinishedDate(act) {
     }
     return String(act.finishedOn).slice(0, 10);
   }
-  if (act.createdAt) {
-    if (act.createdAt instanceof Date) {
-      return act.createdAt.toISOString().slice(0, 10);
-    }
-    return String(act.createdAt).slice(0, 10);
-  }
   return null;
 }
 
@@ -44,10 +38,7 @@ function getActivityFinishedIso(act) {
       : String(act.finishedOn).slice(0, 10);
     return `${dateStr}T00:00:00.000Z`;
   }
-  if (act.createdAt) {
-    return act.createdAt instanceof Date ? act.createdAt.toISOString() : new Date(act.createdAt).toISOString();
-  }
-  return new Date().toISOString();
+  return null;
 }
 
 function compareActivities(a, b) {
@@ -77,9 +68,10 @@ export function calculateChallengeProgress(activities, goal = CHALLENGE_GOAL) {
   let completedAt = null;
 
   for (const act of sorted) {
+    const finishedAtIso = getActivityFinishedIso(act);
+    if (!finishedAtIso) continue;
     if (!seenBookIds.has(act.bookId)) {
       seenBookIds.add(act.bookId);
-      const finishedAtIso = getActivityFinishedIso(act);
       if (act.book) {
         qualifyingBooks.push({
           id: act.book.id,
@@ -228,6 +220,7 @@ export async function getUserTrophies(userId) {
     where: {
       userId,
       type: 'finished_reading',
+      finishedOn: { not: null },
     },
     select: {
       id: true,

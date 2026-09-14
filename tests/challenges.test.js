@@ -55,6 +55,7 @@ test('Challenges unit: calculateChallengeProgress handles distinct books, duplic
   // 2. One distinct book
   const act1 = {
     bookId: 'b1',
+    finishedOn: new Date('2026-09-02T00:00:00.000Z'),
     createdAt: new Date('2026-09-02T10:00:00Z'),
     book: { id: 'b1', title: 'Book 1', author: 'Author 1', coverImageUrl: null },
   };
@@ -68,6 +69,7 @@ test('Challenges unit: calculateChallengeProgress handles distinct books, duplic
   // 3. Same book finished twice in same month counts only once
   const act1Repeat = {
     bookId: 'b1',
+    finishedOn: new Date('2026-09-05T00:00:00.000Z'),
     createdAt: new Date('2026-09-05T12:00:00Z'),
     book: { id: 'b1', title: 'Book 1', author: 'Author 1', coverImageUrl: null },
   };
@@ -76,23 +78,25 @@ test('Challenges unit: calculateChallengeProgress handles distinct books, duplic
   assert.equal(rRepeat.completed, false);
   assert.equal(rRepeat.completedAt, null);
   assert.equal(rRepeat.books.length, 1);
-  assert.equal(rRepeat.books[0].finishedAt, act1.createdAt.toISOString());
+  assert.equal(rRepeat.books[0].finishedAt, '2026-09-02T00:00:00.000Z');
 
   // 4. Three distinct books completes challenge and records 3rd book timestamp as completedAt
   const act2 = {
     bookId: 'b2',
+    finishedOn: new Date('2026-09-04T00:00:00.000Z'),
     createdAt: new Date('2026-09-04T10:00:00Z'),
     book: { id: 'b2', title: 'Book 2', author: 'Author 2', coverImageUrl: null },
   };
   const act3 = {
     bookId: 'b3',
+    finishedOn: new Date('2026-09-10T00:00:00.000Z'),
     createdAt: new Date('2026-09-10T14:00:00Z'),
     book: { id: 'b3', title: 'Book 3', author: 'Author 3', coverImageUrl: null },
   };
   const r3 = calculateChallengeProgress([act1, act2, act3]);
   assert.equal(r3.progress, 3);
   assert.equal(r3.completed, true);
-  assert.equal(r3.completedAt, act3.createdAt.toISOString());
+  assert.equal(r3.completedAt, '2026-09-10T00:00:00.000Z');
   // Displayed books sorted newest first
   assert.equal(r3.books[0].id, 'b3');
   assert.equal(r3.books[1].id, 'b2');
@@ -101,21 +105,36 @@ test('Challenges unit: calculateChallengeProgress handles distinct books, duplic
   // 5. Four/five books: progress continues past goal, but completedAt remains 3rd book timestamp
   const act4 = {
     bookId: 'b4',
+    finishedOn: new Date('2026-09-15T00:00:00.000Z'),
     createdAt: new Date('2026-09-15T18:00:00Z'),
     book: { id: 'b4', title: 'Book 4', author: 'Author 4', coverImageUrl: null },
   };
   const act5 = {
     bookId: 'b5',
+    finishedOn: new Date('2026-09-20T00:00:00.000Z'),
     createdAt: new Date('2026-09-20T20:00:00Z'),
     book: { id: 'b5', title: 'Book 5', author: 'Author 5', coverImageUrl: null },
   };
   const r5 = calculateChallengeProgress([act1, act2, act3, act4, act5]);
   assert.equal(r5.progress, 5);
   assert.equal(r5.completed, true);
-  assert.equal(r5.completedAt, act3.createdAt.toISOString());
+  assert.equal(r5.completedAt, '2026-09-10T00:00:00.000Z');
   assert.equal(r5.books.length, 5);
   assert.equal(r5.books[0].id, 'b5');
   assert.equal(r5.books[4].id, 'b1');
+
+  // 6. Activity with finishedOn: null does NOT count toward challenge progress
+  const actNoFinishedOn = {
+    bookId: 'b-no-finish',
+    finishedOn: null,
+    createdAt: new Date('2026-09-02T10:00:00Z'),
+    book: { id: 'b-no-finish', title: 'No finish' },
+  };
+  const rNoFinish = calculateChallengeProgress([actNoFinishedOn]);
+  assert.equal(rNoFinish.progress, 0);
+  assert.equal(rNoFinish.completed, false);
+  assert.equal(rNoFinish.completedAt, null);
+  assert.deepEqual(rNoFinish.books, []);
 });
 
 test('Challenges unit: deriveTrophies groups by month, requires >= 3 distinct books, and sorts newest first', () => {
@@ -124,23 +143,23 @@ test('Challenges unit: deriveTrophies groups by month, requires >= 3 distinct bo
 
   // Month with only 2 distinct books -> no trophy
   const month1Activities = [
-    { bookId: 'b1', createdAt: new Date('2026-07-02T10:00:00Z') },
-    { bookId: 'b2', createdAt: new Date('2026-07-15T10:00:00Z') },
-    { bookId: 'b2', createdAt: new Date('2026-07-20T10:00:00Z') }, // repeat of b2
+    { bookId: 'b1', finishedOn: new Date('2026-07-02T00:00:00Z'), createdAt: new Date('2026-07-02T10:00:00Z') },
+    { bookId: 'b2', finishedOn: new Date('2026-07-15T00:00:00Z'), createdAt: new Date('2026-07-15T10:00:00Z') },
+    { bookId: 'b2', finishedOn: new Date('2026-07-20T00:00:00Z'), createdAt: new Date('2026-07-20T10:00:00Z') }, // repeat of b2
   ];
   assert.deepEqual(deriveTrophies(month1Activities), []);
 
   // Multiple months: July (2 books - no trophy), August (3 books - 1 trophy), September (4 books - 1 trophy)
   const augustActivities = [
-    { bookId: 'b1', createdAt: new Date('2026-08-01T10:00:00Z') },
-    { bookId: 'b2', createdAt: new Date('2026-08-10T10:00:00Z') },
-    { bookId: 'b3', createdAt: new Date('2026-08-25T15:30:00Z') },
+    { bookId: 'b1', finishedOn: new Date('2026-08-01T00:00:00Z'), createdAt: new Date('2026-08-01T10:00:00Z') },
+    { bookId: 'b2', finishedOn: new Date('2026-08-10T00:00:00Z'), createdAt: new Date('2026-08-10T10:00:00Z') },
+    { bookId: 'b3', finishedOn: new Date('2026-08-25T00:00:00Z'), createdAt: new Date('2026-08-25T15:30:00Z') },
   ];
   const septemberActivities = [
-    { bookId: 'b1', createdAt: new Date('2026-09-02T10:00:00Z') }, // Same book in later month counts!
-    { bookId: 'b4', createdAt: new Date('2026-09-05T10:00:00Z') },
-    { bookId: 'b5', createdAt: new Date('2026-09-12T12:00:00Z') },
-    { bookId: 'b6', createdAt: new Date('2026-09-22T16:00:00Z') },
+    { bookId: 'b1', finishedOn: new Date('2026-09-02T00:00:00Z'), createdAt: new Date('2026-09-02T10:00:00Z') }, // Same book in later month counts!
+    { bookId: 'b4', finishedOn: new Date('2026-09-05T00:00:00Z'), createdAt: new Date('2026-09-05T10:00:00Z') },
+    { bookId: 'b5', finishedOn: new Date('2026-09-12T00:00:00Z'), createdAt: new Date('2026-09-12T12:00:00Z') },
+    { bookId: 'b6', finishedOn: new Date('2026-09-22T00:00:00Z'), createdAt: new Date('2026-09-22T16:00:00Z') },
   ];
 
   const allActivities = [
@@ -157,22 +176,22 @@ test('Challenges unit: deriveTrophies groups by month, requires >= 3 distinct bo
   assert.equal(trophies[0].title, 'September 2026 Reading Challenge');
   assert.equal(trophies[0].goal, 3);
   assert.equal(trophies[0].booksRead, 4); // includes books beyond 3
-  assert.equal(trophies[0].completedAt, '2026-09-12T12:00:00.000Z'); // 3rd distinct book timestamp
+  assert.equal(trophies[0].completedAt, '2026-09-12T00:00:00.000Z'); // 3rd distinct book timestamp
 
   assert.equal(trophies[1].key, '2026-08');
   assert.equal(trophies[1].title, 'August 2026 Reading Challenge');
   assert.equal(trophies[1].goal, 3);
   assert.equal(trophies[1].booksRead, 3);
-  assert.equal(trophies[1].completedAt, '2026-08-25T15:30:00.000Z');
+  assert.equal(trophies[1].completedAt, '2026-08-25T00:00:00.000Z');
 
   // Multi-year: same calendar month in different years produces distinct titles with keys YYYY-MM
   const multiYearActivities = [
-    { bookId: 'b1', createdAt: new Date('2026-09-02T10:00:00Z') },
-    { bookId: 'b2', createdAt: new Date('2026-09-05T10:00:00Z') },
-    { bookId: 'b3', createdAt: new Date('2026-09-12T12:00:00Z') },
-    { bookId: 'b1', createdAt: new Date('2027-09-03T10:00:00Z') },
-    { bookId: 'b2', createdAt: new Date('2027-09-06T10:00:00Z') },
-    { bookId: 'b3', createdAt: new Date('2027-09-15T12:00:00Z') },
+    { bookId: 'b1', finishedOn: new Date('2026-09-02T00:00:00Z'), createdAt: new Date('2026-09-02T10:00:00Z') },
+    { bookId: 'b2', finishedOn: new Date('2026-09-05T00:00:00Z'), createdAt: new Date('2026-09-05T10:00:00Z') },
+    { bookId: 'b3', finishedOn: new Date('2026-09-12T00:00:00Z'), createdAt: new Date('2026-09-12T12:00:00Z') },
+    { bookId: 'b1', finishedOn: new Date('2027-09-03T00:00:00Z'), createdAt: new Date('2027-09-03T10:00:00Z') },
+    { bookId: 'b2', finishedOn: new Date('2027-09-06T00:00:00Z'), createdAt: new Date('2027-09-06T10:00:00Z') },
+    { bookId: 'b3', finishedOn: new Date('2027-09-15T00:00:00Z'), createdAt: new Date('2027-09-15T12:00:00Z') },
   ];
   const multiYearTrophies = deriveTrophies(multiYearActivities);
   assert.equal(multiYearTrophies.length, 2);
@@ -181,6 +200,14 @@ test('Challenges unit: deriveTrophies groups by month, requires >= 3 distinct bo
   assert.equal(multiYearTrophies[1].key, '2026-09');
   assert.equal(multiYearTrophies[1].title, 'September 2026 Reading Challenge');
   assert.notEqual(multiYearTrophies[0].title, multiYearTrophies[1].title);
+
+  // Activity with finishedOn: null does NOT count toward trophies
+  const trophyNoFinish = deriveTrophies([
+    { bookId: 'b1', finishedOn: null, createdAt: new Date('2026-08-01T10:00:00Z') },
+    { bookId: 'b2', finishedOn: null, createdAt: new Date('2026-08-10T10:00:00Z') },
+    { bookId: 'b3', finishedOn: null, createdAt: new Date('2026-08-25T15:30:00Z') },
+  ]);
+  assert.deepEqual(trophyNoFinish, []);
 });
 
 test('Challenges unit: finishedOn drives challenge progress, month grouping, and UTC midnight completedAt', () => {
