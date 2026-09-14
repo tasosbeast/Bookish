@@ -226,6 +226,42 @@ export function validatePublicationDateRecords(rawRecords, canonicalIsbns) {
   return { validationErrors, validRecords };
 }
 
+export async function applyConditionalPublicationDateUpdate(tx, item) {
+  const bookId = item.bookId || item.id;
+  const dateStr = item.publicationDate instanceof Date
+    ? item.publicationDate.toISOString().slice(0, 10)
+    : String(item.publicationDate);
+  const requestedYear = parseInt(dateStr.slice(0, 4), 10);
+  const dateObj = item.publicationDate instanceof Date
+    ? item.publicationDate
+    : new Date(`${dateStr}T00:00:00.000Z`);
+
+  const result = await tx.book.updateMany({
+    where: {
+      id: bookId,
+      isbn: item.isbn,
+      publicationDate: null,
+      OR: [
+        { publicationYear: null },
+        { publicationYear: requestedYear },
+      ],
+    },
+    data: {
+      publicationDate: dateObj,
+    },
+  });
+
+  if (result.count !== 1) {
+    throw new PublicationDateEnrichmentError(
+      'stale_preflight',
+      `Stale preflight: conditional update affected ${result.count} rows for book ${item.isbn} (expected 1)`,
+      { isbn: item.isbn, bookId, affectedCount: result.count }
+    );
+  }
+
+  return result;
+}
+
 export async function enrichCatalogPublicationDates(db, options = {}) {
   const {
     source = path.resolve('scripts/catalog-publication-dates.csv'),
@@ -433,14 +469,9 @@ export async function enrichCatalogPublicationDates(db, options = {}) {
           }
         }
 
-        // All planned rows passed revalidation; now perform updates
+        // All planned rows passed revalidation; now perform conditional updates
         for (const item of details.needsUpdate) {
-          await tx.book.update({
-            where: { id: item.bookId },
-            data: {
-              publicationDate: new Date(`${item.publicationDate}T00:00:00.000Z`),
-            },
-          });
+          await applyConditionalPublicationDateUpdate(tx, item);
         }
 
         // Re-read affected rows and verify stored values

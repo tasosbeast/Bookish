@@ -5,6 +5,7 @@ import {
   isValidHttpsUrl,
   parsePublicationDatesCsv,
   enrichCatalogPublicationDates,
+  applyConditionalPublicationDateUpdate,
   PublicationDateEnrichmentError,
 } from '../scripts/catalog/publication-date-enrichment.js';
 
@@ -33,21 +34,63 @@ function createMockDb(books = []) {
       },
     },
     $transaction: async fn => {
-      return fn({
+      const rollbackMap = new Map();
+      const updatesBefore = updates.length;
+      const tx = {
         book: {
           update: async ({ where, data }) => {
             const book = store.get(where.id);
             if (!book) throw new Error('Not found');
+            if (!rollbackMap.has(book.id)) {
+              rollbackMap.set(book.id, { ...book });
+            }
             Object.assign(book, data);
             updates.push({ id: where.id, data });
             return book;
+          },
+          updateMany: async ({ where, data }) => {
+            let count = 0;
+            for (const book of store.values()) {
+              if (where.id !== undefined && book.id !== where.id) continue;
+              if (where.isbn !== undefined && book.isbn !== where.isbn) continue;
+              if (where.publicationDate === null && (book.publicationDate !== null && book.publicationDate !== undefined)) continue;
+              if (where.OR) {
+                const match = where.OR.some(clause => {
+                  if (clause.publicationYear === null) {
+                    return book.publicationYear === null || book.publicationYear === undefined;
+                  }
+                  if (clause.publicationYear !== undefined) {
+                    return book.publicationYear === clause.publicationYear;
+                  }
+                  return false;
+                });
+                if (!match) continue;
+              }
+              if (!rollbackMap.has(book.id)) {
+                rollbackMap.set(book.id, { ...book });
+              }
+              Object.assign(book, data);
+              updates.push({ id: book.id, data });
+              count++;
+            }
+            return { count };
           },
           findMany: async ({ where }) => {
             const ids = where?.id?.in;
             return Array.from(store.values()).filter(b => ids.includes(b.id));
           },
         },
-      });
+      };
+
+      try {
+        return await fn(tx);
+      } catch (err) {
+        for (const [id, originalBookState] of rollbackMap.entries()) {
+          store.set(id, originalBookState);
+        }
+        updates.length = updatesBefore;
+        throw err;
+      }
     },
   };
 }
@@ -420,5 +463,157 @@ test('19. stale preflight: publicationDate modified before apply throws stale_pr
   assert.equal(db._store.get('book-1').publicationDate.toISOString().slice(0, 10), '2003-01-01');
   // Book 2 was NOT partially written
   assert.equal(db._store.get('book-2').publicationDate, null);
+});
+
+test('20. applyConditionalPublicationDateUpdate helper performs conditional update and enforces count === 1', async () => {
+  const store = new Map([
+    ['book-1', { id: 'book-1', isbn: '9780141439518', publicationYear: 2003, publicationDate: null }],
+    ['book-2', { id: 'book-2', isbn: '9780141439556', publicationYear: 2003, publicationDate: new Date('2003-01-01T00:00:00.000Z') }],
+    ['book-3', { id: 'book-3', isbn: '9780141441146', publicationYear: 2005, publicationDate: null }],
+  ]);
+
+  const mockTx = {
+    book: {
+      updateMany: async ({ where, data }) => {
+        let count = 0;
+        for (const book of store.values()) {
+          if (where.id !== undefined && book.id !== where.id) continue;
+          if (where.isbn !== undefined && book.isbn !== where.isbn) continue;
+          if (where.publicationDate === null && book.publicationDate !== null) continue;
+          if (where.OR) {
+            const match = where.OR.some(c => {
+              if (c.publicationYear === null) return book.publicationYear === null;
+              if (c.publicationYear !== undefined) return book.publicationYear === c.publicationYear;
+              return false;
+            });
+            if (!match) continue;
+          }
+          Object.assign(book, data);
+          count++;
+        }
+        return { count };
+      },
+    },
+  };
+
+  // Valid update
+  const res = await applyConditionalPublicationDateUpdate(mockTx, {
+    bookId: 'book-1',
+    isbn: '9780141439518',
+    publicationDate: '2003-05-27',
+  });
+  assert.equal(res.count, 1);
+  assert.equal(store.get('book-1').publicationDate.toISOString().slice(0, 10), '2003-05-27');
+
+  // Stale because publicationDate is non-null
+  await assert.rejects(
+    () => applyConditionalPublicationDateUpdate(mockTx, {
+      bookId: 'book-2',
+      isbn: '9780141439556',
+      publicationDate: '2003-08-15',
+    }),
+    err => {
+      assert.equal(err.name, 'PublicationDateEnrichmentError');
+      assert.equal(err.code, 'stale_preflight');
+      assert.equal(err.details.affectedCount, 0);
+      return true;
+    }
+  );
+
+  // Stale because publicationYear mismatches requested date year (2003 vs 2005)
+  await assert.rejects(
+    () => applyConditionalPublicationDateUpdate(mockTx, {
+      bookId: 'book-3',
+      isbn: '9780141441146',
+      publicationDate: '2003-10-10',
+    }),
+    err => {
+      assert.equal(err.name, 'PublicationDateEnrichmentError');
+      assert.equal(err.code, 'stale_preflight');
+      assert.equal(err.details.affectedCount, 0);
+      return true;
+    }
+  );
+});
+
+test('21. TOCTOU race: publicationDate changes AFTER revalidation causes conditional update to affect 0 rows, rollback earlier writes', async () => {
+  const db = createMockDb([
+    {
+      id: 'book-1',
+      isbn: '9780141439518',
+      title: 'Pride and Prejudice',
+      publicationYear: 2003,
+      publicationDate: null,
+    },
+    {
+      id: 'book-2',
+      isbn: '9780141439556',
+      title: 'Wuthering Heights',
+      publicationYear: 2003,
+      publicationDate: null,
+    },
+  ]);
+
+  const csv = `isbn,publicationDate,sourceUrl
+9780141439518,2003-05-27,https://example.com/source1
+9780141439556,2003-08-15,https://example.com/source2`;
+
+  let revalidationHappened = false;
+  let book2ModifiedDuringRace = false;
+
+  const originalTx = db.$transaction;
+  db.$transaction = async fn => {
+    return originalTx(async tx => {
+      const origFindMany = tx.book.findMany;
+      tx.book.findMany = async args => {
+        const result = await origFindMany(args);
+        // Mark that in-transaction revalidation completed and saw both books valid
+        if (args.where?.id?.in?.length === 2) {
+          revalidationHappened = true;
+        }
+        return result;
+      };
+
+      const origUpdateMany = tx.book.updateMany;
+      let updateManyCallCount = 0;
+      tx.book.updateMany = async args => {
+        updateManyCallCount++;
+        if (updateManyCallCount === 2) {
+          // Revalidation already completed and saw both rows as null!
+          assert.equal(revalidationHappened, true, 'Revalidation saw both as valid prior to write phase');
+          // Simulate race condition AFTER revalidation: another transaction commits an update on book-2
+          db._store.get('book-2').publicationDate = new Date('2003-09-01T00:00:00.000Z');
+          book2ModifiedDuringRace = true;
+        }
+        return origUpdateMany(args);
+      };
+
+      return fn(tx);
+    });
+  };
+
+  await assert.rejects(
+    () => enrichCatalogPublicationDates(db, { csvContent: csv, canonicalIsbns, apply: true }),
+    err => {
+      assert.equal(err.name, 'PublicationDateEnrichmentError');
+      assert.equal(err.code, 'stale_preflight');
+      assert.equal(err.details.affectedCount, 0);
+      assert.match(err.message, /conditional update affected 0 rows/);
+      return true;
+    }
+  );
+
+  assert.equal(revalidationHappened, true);
+  assert.equal(book2ModifiedDuringRace, true);
+  // Earlier update to book-1 must be rolled back
+  assert.equal(db._store.get('book-1').publicationDate, null, 'Earlier update to book-1 rolled back');
+  // Book 2 must retain the concurrent intervening value (not overwritten)
+  assert.equal(
+    db._store.get('book-2').publicationDate.toISOString().slice(0, 10),
+    '2003-09-01',
+    'Intervening publicationDate on book-2 was not overwritten'
+  );
+  // Updates recorded in transaction must be rolled back
+  assert.equal(db._updates.length, 0);
 });
 

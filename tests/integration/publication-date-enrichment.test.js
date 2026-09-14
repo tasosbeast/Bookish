@@ -213,5 +213,80 @@ test('PostgreSQL: Publication Date Enrichment Tool v1 dry-run, apply, blockers a
     // Verify book2 was NOT partially written (remains null)
     const book2StaleCheck = await prisma.book.findUnique({ where: { id: book2.id } });
     assert.equal(book2StaleCheck.publicationDate, null, 'Planned book2 was not partially written');
+
+    // 7. TOCTOU race protection: DB publicationDate changed AFTER in-transaction revalidation
+    const fixtureCsvToctou = path.join(tempDir, 'source-toctou.csv');
+    fs.writeFileSync(
+      fixtureCsvToctou,
+      `isbn,publicationDate,sourceUrl\n${isbn1},2003-05-27,https://example.com/source1\n${isbn2},2003-08-15,https://example.com/source2\n`
+    );
+
+    // Reset both books to publicationDate = null
+    await prisma.book.update({ where: { id: book1.id }, data: { publicationDate: null } });
+    await prisma.book.update({ where: { id: book2.id }, data: { publicationDate: null } });
+
+    let revalidationCompletedInPg = false;
+    let book2ModifiedDuringRaceInPg = false;
+
+    const origTxToctou = prisma.$transaction.bind(prisma);
+    prisma.$transaction = async (fn, opts) => {
+      return origTxToctou(async tx => {
+        const origFindMany = tx.book.findMany.bind(tx.book);
+        tx.book.findMany = async args => {
+          const result = await origFindMany(args);
+          if (args.where?.id?.in?.length === 2) {
+            revalidationCompletedInPg = true;
+          }
+          return result;
+        };
+
+        const origUpdateMany = tx.book.updateMany.bind(tx.book);
+        let updateManyCallCount = 0;
+        tx.book.updateMany = async args => {
+          updateManyCallCount++;
+          if (updateManyCallCount === 2) {
+            assert.equal(revalidationCompletedInPg, true, 'Revalidation completed prior to write phase');
+            // Intervening concurrent write to book2 committed directly to DB outside tx
+            await prisma.book.update({
+              where: { id: book2.id },
+              data: { publicationDate: new Date('2003-09-01T00:00:00.000Z') },
+            });
+            book2ModifiedDuringRaceInPg = true;
+          }
+          return origUpdateMany(args);
+        };
+
+        return fn(tx);
+      }, opts);
+    };
+
+    try {
+      await assert.rejects(
+        () => enrichCatalogPublicationDates(prisma, { source: fixtureCsvToctou, apply: true }),
+        err => {
+          assert.equal(err.code, 'stale_preflight');
+          assert.equal(err.details.affectedCount, 0);
+          assert.match(err.message, /conditional update affected 0 rows/);
+          return true;
+        }
+      );
+    } finally {
+      prisma.$transaction = origTxToctou;
+    }
+
+    assert.equal(revalidationCompletedInPg, true);
+    assert.equal(book2ModifiedDuringRaceInPg, true);
+
+    // Earlier update in this transaction (book1) is rolled back
+    const book1ToctouCheck = await prisma.book.findUnique({ where: { id: book1.id } });
+    assert.equal(book1ToctouCheck.publicationDate, null, 'Earlier update to book1 rolled back');
+
+    // Concurrent/intervening value on book2 is not overwritten
+    const book2ToctouCheck = await prisma.book.findUnique({ where: { id: book2.id } });
+    assert.equal(
+      book2ToctouCheck.publicationDate.toISOString().slice(0, 10),
+      '2003-09-01',
+      'Intervening publicationDate on book2 was not overwritten'
+    );
   }
 );
