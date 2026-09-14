@@ -373,3 +373,52 @@ test('18. second run is idempotent', async () => {
   assert.equal(apply2.summary.needsUpdate, 0);
   assert.equal(apply2.summary.updated, 0);
 });
+
+test('19. stale preflight: publicationDate modified before apply throws stale_preflight and writes nothing', async () => {
+  const db = createMockDb([
+    {
+      id: 'book-1',
+      isbn: '9780141439518',
+      title: 'Pride and Prejudice',
+      publicationYear: 2003,
+      publicationDate: null,
+    },
+    {
+      id: 'book-2',
+      isbn: '9780141439556',
+      title: 'Wuthering Heights',
+      publicationYear: 2003,
+      publicationDate: null,
+    },
+  ]);
+
+  const csv = `isbn,publicationDate,sourceUrl
+9780141439518,2003-05-27,https://example.com/source1
+9780141439556,2003-08-15,https://example.com/source2`;
+
+  // Intercept inside transaction to simulate external modification before apply writes
+  const originalTx = db.$transaction;
+  db.$transaction = async fn => {
+    // Modify book-1 in store before fn runs
+    db._store.get('book-1').publicationDate = new Date('2003-01-01T00:00:00.000Z');
+    return originalTx(fn);
+  };
+
+  await assert.rejects(
+    () => enrichCatalogPublicationDates(db, { csvContent: csv, canonicalIsbns, apply: true }),
+    err => {
+      assert.equal(err.name, 'PublicationDateEnrichmentError');
+      assert.equal(err.code, 'stale_preflight');
+      assert.match(err.message, /publicationDate was modified/);
+      return true;
+    }
+  );
+
+  // Assert nothing was written by apply
+  assert.equal(db._updates.length, 0);
+  // Book 1 still has the intervening date, not the requested date
+  assert.equal(db._store.get('book-1').publicationDate.toISOString().slice(0, 10), '2003-01-01');
+  // Book 2 was NOT partially written
+  assert.equal(db._store.get('book-2').publicationDate, null);
+});
+

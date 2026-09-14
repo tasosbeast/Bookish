@@ -167,5 +167,51 @@ test('PostgreSQL: Publication Date Enrichment Tool v1 dry-run, apply, blockers a
       () => enrichCatalogPublicationDates(prisma, { source: fixtureCsvConflict, apply: true }),
       PublicationDateEnrichmentError
     );
+
+    // 6. Stale preflight protection: DB publicationDate changed before apply write phase
+    const fixtureCsvStale = path.join(tempDir, 'source-stale.csv');
+    fs.writeFileSync(
+      fixtureCsvStale,
+      `isbn,publicationDate,sourceUrl\n${isbn1},2003-05-27,https://example.com/source1\n${isbn2},2003-08-15,https://example.com/source2\n`
+    );
+
+    // Reset both books to publicationDate = null
+    await prisma.book.update({ where: { id: book1.id }, data: { publicationDate: null } });
+    await prisma.book.update({ where: { id: book2.id }, data: { publicationDate: null } });
+
+    // Intercept $transaction to simulate external write modifying book1 before apply writes
+    const origTransaction = prisma.$transaction.bind(prisma);
+    prisma.$transaction = async (fn, opts) => {
+      // Modify book1 in database concurrently before tx runs
+      await prisma.book.update({
+        where: { id: book1.id },
+        data: { publicationDate: new Date('2003-01-01T00:00:00.000Z') },
+      });
+      return origTransaction(fn, opts);
+    };
+
+    try {
+      await assert.rejects(
+        () => enrichCatalogPublicationDates(prisma, { source: fixtureCsvStale, apply: true }),
+        err => {
+          assert.equal(err.code, 'stale_preflight');
+          return true;
+        }
+      );
+    } finally {
+      prisma.$transaction = origTransaction;
+    }
+
+    // Verify book1 was NOT overwritten by the planned date
+    const book1StaleCheck = await prisma.book.findUnique({ where: { id: book1.id } });
+    assert.equal(
+      book1StaleCheck.publicationDate.toISOString().slice(0, 10),
+      '2003-01-01',
+      'Changed publicationDate was not overwritten'
+    );
+
+    // Verify book2 was NOT partially written (remains null)
+    const book2StaleCheck = await prisma.book.findUnique({ where: { id: book2.id } });
+    assert.equal(book2StaleCheck.publicationDate, null, 'Planned book2 was not partially written');
   }
 );

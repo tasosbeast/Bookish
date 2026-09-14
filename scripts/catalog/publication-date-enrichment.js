@@ -380,6 +380,60 @@ export async function enrichCatalogPublicationDates(db, options = {}) {
 
     if (details.needsUpdate.length > 0) {
       await db.$transaction(async tx => {
+        // Revalidate every planned needsUpdate row inside transaction before ANY writes
+        const plannedIds = details.needsUpdate.map(u => u.bookId);
+        const currentBooks = await tx.book.findMany({
+          where: { id: { in: plannedIds } },
+          select: {
+            id: true,
+            isbn: true,
+            title: true,
+            publicationYear: true,
+            publicationDate: true,
+          },
+        });
+        const currentBooksById = new Map(currentBooks.map(b => [b.id, b]));
+
+        for (const item of details.needsUpdate) {
+          const current = currentBooksById.get(item.bookId);
+          if (!current) {
+            throw new PublicationDateEnrichmentError(
+              'stale_preflight',
+              `Stale preflight: book ${item.isbn} no longer exists in database`,
+              { isbn: item.isbn, bookId: item.bookId }
+            );
+          }
+
+          if (current.isbn !== item.isbn) {
+            throw new PublicationDateEnrichmentError(
+              'stale_preflight',
+              `Stale preflight: book ${item.bookId} ISBN changed from ${item.isbn} to ${current.isbn}`,
+              { isbn: item.isbn, bookId: item.bookId }
+            );
+          }
+
+          if (current.publicationDate !== null && current.publicationDate !== undefined) {
+            const currentStr = current.publicationDate instanceof Date
+              ? current.publicationDate.toISOString().slice(0, 10)
+              : String(current.publicationDate).slice(0, 10);
+            throw new PublicationDateEnrichmentError(
+              'stale_preflight',
+              `Stale preflight: book ${item.isbn} publicationDate was modified to ${currentStr} after preflight`,
+              { isbn: item.isbn, bookId: item.bookId, currentPublicationDate: currentStr, plannedPublicationDate: item.publicationDate }
+            );
+          }
+
+          const requestedYear = parseInt(item.publicationDate.slice(0, 4), 10);
+          if (current.publicationYear !== null && current.publicationYear !== undefined && current.publicationYear !== requestedYear) {
+            throw new PublicationDateEnrichmentError(
+              'stale_preflight',
+              `Stale preflight: book ${item.isbn} publicationYear changed to ${current.publicationYear}, mismatching requested year ${requestedYear}`,
+              { isbn: item.isbn, bookId: item.bookId, currentPublicationYear: current.publicationYear, requestedYear }
+            );
+          }
+        }
+
+        // All planned rows passed revalidation; now perform updates
         for (const item of details.needsUpdate) {
           await tx.book.update({
             where: { id: item.bookId },
