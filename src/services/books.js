@@ -3,10 +3,33 @@ import { AppError } from '../lib/errors.js';
 
 export const pageInfo = (page, limit, total) => ({ page, limit, total, totalPages: Math.ceil(total / limit) });
 export const genres = { bookGenres: { select: { genre: { select: { id: true, name: true, slug: true } } } } };
+
+export function serializePublicationDate(date) {
+  if (!date) return null;
+  if (date instanceof Date) {
+    return date.toISOString().slice(0, 10);
+  }
+  return String(date).slice(0, 10);
+}
+
+export function checkPublicationYearConsistency(publicationDate, publicationYear) {
+  if (!publicationDate || publicationYear === null || publicationYear === undefined) {
+    return true;
+  }
+  const dateStr = serializePublicationDate(publicationDate);
+  if (!dateStr) return true;
+  const year = parseInt(dateStr.slice(0, 4), 10);
+  return year === publicationYear;
+}
+
 export function serializeBook(book) {
   const { bookGenres, ...fields } = book;
-  return { ...fields, averageRating: book.averageRating === null ? null : Number(book.averageRating),
-    genres: bookGenres.map(row => row.genre) };
+  return {
+    ...fields,
+    publicationDate: serializePublicationDate(book.publicationDate),
+    averageRating: book.averageRating === null ? null : Number(book.averageRating),
+    genres: bookGenres ? bookGenres.map(row => row.genre) : (fields.genres ?? []),
+  };
 }
 export function bookFilter({ q, genre, author }) {
   // Prisma parameterizes contains + insensitive as PostgreSQL ILIKE.

@@ -74,6 +74,7 @@ model Book {
   coverImageUrl   String?     @map("cover_image_url") @db.Text
   isbn            String?     @unique @db.VarChar(13)
   publicationYear Int?        @map("publication_year") @db.SmallInt
+  publicationDate DateTime?   @map("publication_date") @db.Date
   // Cache of AVG(UserBook.userRating); null means no ratings.
   averageRating   Decimal?    @map("average_rating") @db.Decimal(3, 2)
   ratingsCount    Int         @default(0) @map("ratings_count")
@@ -85,6 +86,7 @@ model Book {
   activities      Activity[]
 
   @@index([publicationYear, id])
+  @@index([publicationDate, id])
   @@index([averageRating(sort: Desc), id])
   @@map("books")
 }

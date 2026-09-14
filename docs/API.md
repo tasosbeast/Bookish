@@ -92,7 +92,7 @@ Public endpoint returning all genres currently assigned to at least one book, so
 - `q`: literal case-insensitive substring of title or author, 1–200 characters. `%`, `_` and backslash are escaped; Prisma uses parameterized PostgreSQL ILIKE, supported by the migration's GIN trigram indexes. Very short searches may still scan.
 - Both sorts place null values last and use ID as a deterministic tie-breaker. Pagination is bounded **offset pagination** for this API; use cursor pagination if large-catalog navigation becomes necessary. Concurrent changes between separate requests can move results between pages.
 
-Response: `{ "data": [ ...booksWithGenres ], "pagination": { "page": 1, "limit": 20, "total": 50, "totalPages": 3 } }`. `averageRating` is a JSON number or null. Counts and results within each request share a repeatable-read snapshot.
+Response: `{ "data": [ ...booksWithGenres ], "pagination": { "page": 1, "limit": 20, "total": 50, "totalPages": 3 } }`. `averageRating` is a JSON number or null. Book objects describe `publicationYear` (`integer | null`) and `publicationDate` (`"YYYY-MM-DD" | null`, representing the exact edition publication date when known). Counts and results within each request share a repeatable-read snapshot.
 
 `GET /api/books/:id?page=1&limit=20` returns `{ "data": { ...book, "genres": [...], "reviews": { "data": [...], "pagination": {...} } } }`. Pagination applies to reviews. Reviews are newest first with ID as tie-breaker. Reviewer data includes only ID, username and profile picture. Unknown books return 404.
 
@@ -135,6 +135,8 @@ Returns only bookshelf entries where `status` is not null for the user identifie
       "title": "Example Book",
       "author": "Example Author",
       "coverImageUrl": null,
+      "publicationYear": 2026,
+      "publicationDate": "2026-09-22",
       "averageRating": 4.25,
       "genres": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "Fantasy", "slug": "fantasy" }]
     }
@@ -143,7 +145,7 @@ Returns only bookshelf entries where `status` is not null for the user identifie
 }
 ```
 
-The nested book also includes its other existing scalar fields (description, ISBN, publication year, ratings count and timestamps). `finishedOn` is `"YYYY-MM-DD"` representing the user's latest finish date when `status` is `read`, or `null` otherwise. `userRating` and `averageRating` can be null; the latter is serialized as a JSON number when rated. Only the current reader's shelf is returned, and no user/session relation is included.
+The nested book also includes its other existing scalar fields (description, ISBN, publication year, publication date, ratings count and timestamps). `publicationYear` is `integer | null`, and `publicationDate` is `"YYYY-MM-DD" | null` indicating the exact edition publication date when known. `finishedOn` is `"YYYY-MM-DD"` representing the user's latest finish date when `status` is `read`, or `null` otherwise. `userRating` and `averageRating` can be null; the latter is serialized as a JSON number when rated. Only the current reader's shelf is returned, and no user/session relation is included.
 
 `POST /api/user-books`
 
