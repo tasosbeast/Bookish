@@ -144,11 +144,12 @@ test('PostgreSQL: Reading Challenges v1 and Trophies API, event counting, month 
     assert.ok(threeBooksRes.body.data.completedAt, 'completedAt is set when 3 distinct books are finished');
     assert.equal(threeBooksRes.body.data.books.length, 3);
 
-    // Check chronological completedAt: the 3rd distinct book finish
+    // Check chronological completedAt: the 3rd distinct book finish at UTC midnight
     const act3 = await prisma.activity.findFirst({
       where: { userId: userA.userId, bookId: book3.id, type: 'finished_reading' },
     });
-    assert.equal(threeBooksRes.body.data.completedAt, act3.createdAt.toISOString());
+    const expectedCompletedAt = `${act3.finishedOn.toISOString().slice(0, 10)}T00:00:00.000Z`;
+    assert.equal(threeBooksRes.body.data.completedAt, expectedCompletedAt);
 
     // ====================================================
     // Case 4: Four/five books -> progress continues above goal, completedAt remains unchanged
@@ -157,7 +158,7 @@ test('PostgreSQL: Reading Challenges v1 and Trophies API, event counting, month 
     const fourBooksRes = await auth(userA, 'get', '/api/challenges/current').expect(200);
     assert.equal(fourBooksRes.body.data.progress, 4);
     assert.equal(fourBooksRes.body.data.completed, true);
-    assert.equal(fourBooksRes.body.data.completedAt, act3.createdAt.toISOString(), 'completedAt remains 3rd book timestamp');
+    assert.equal(fourBooksRes.body.data.completedAt, expectedCompletedAt, 'completedAt remains 3rd book timestamp');
     assert.equal(fourBooksRes.body.data.books.length, 4);
     // Books sorted newest first
     assert.equal(fourBooksRes.body.data.books[0].id, book4.id);
@@ -236,10 +237,10 @@ test('PostgreSQL: Reading Challenges v1 and Trophies API, event counting, month 
 
     await prisma.activity.createMany({
       data: [
-        { userId: userA.userId, bookId: book1.id, type: 'finished_reading', createdAt: july1 },
-        { userId: userA.userId, bookId: book2.id, type: 'finished_reading', createdAt: july2 },
-        { userId: userA.userId, bookId: book3.id, type: 'finished_reading', createdAt: july3 },
-        { userId: userA.userId, bookId: book4.id, type: 'finished_reading', createdAt: july4 },
+        { userId: userA.userId, bookId: book1.id, type: 'finished_reading', createdAt: july1, finishedOn: july1 },
+        { userId: userA.userId, bookId: book2.id, type: 'finished_reading', createdAt: july2, finishedOn: july2 },
+        { userId: userA.userId, bookId: book3.id, type: 'finished_reading', createdAt: july3, finishedOn: july3 },
+        { userId: userA.userId, bookId: book4.id, type: 'finished_reading', createdAt: july4, finishedOn: july4 },
       ],
     });
 
@@ -248,8 +249,8 @@ test('PostgreSQL: Reading Challenges v1 and Trophies API, event counting, month 
     const aug2 = new Date('2026-08-10T10:00:00.000Z');
     await prisma.activity.createMany({
       data: [
-        { userId: userA.userId, bookId: book1.id, type: 'finished_reading', createdAt: aug1 },
-        { userId: userA.userId, bookId: book5.id, type: 'finished_reading', createdAt: aug2 },
+        { userId: userA.userId, bookId: book1.id, type: 'finished_reading', createdAt: aug1, finishedOn: aug1 },
+        { userId: userA.userId, bookId: book5.id, type: 'finished_reading', createdAt: aug2, finishedOn: aug2 },
       ],
     });
 
@@ -268,7 +269,7 @@ test('PostgreSQL: Reading Challenges v1 and Trophies API, event counting, month 
     assert.equal(julyTrophy.title, 'July 2026 Reading Challenge');
     assert.equal(julyTrophy.goal, 3);
     assert.equal(julyTrophy.booksRead, 4, 'booksRead includes all 4 distinct books finished in July');
-    assert.equal(julyTrophy.completedAt, july3.toISOString(), 'completedAt is timestamp of 3rd distinct book finish');
+    assert.equal(julyTrophy.completedAt, '2026-07-15T00:00:00.000Z', 'completedAt is timestamp of 3rd distinct book finish at UTC midnight');
 
     // August has NO trophy
     const augTrophy = trophies.find(t => t.key === '2026-08');

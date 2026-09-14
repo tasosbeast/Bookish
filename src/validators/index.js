@@ -27,11 +27,28 @@ export const shelvesQuerySchema = z.object({ query: z.object({
   status: z.enum(['want_to_read', 'currently_reading', 'read']).optional(),
   q: z.string().trim().min(1).max(200).optional(),
 }).strict() });
+export const finishedOnSchema = z.string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be a date-only string in YYYY-MM-DD format')
+  .refine(val => {
+    const [year, month, day] = val.split('-').map(Number);
+    if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+    const d = new Date(Date.UTC(year, month - 1, day));
+    return d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day;
+  }, 'Must be a valid calendar date')
+  .refine(val => val <= new Date().toISOString().slice(0, 10), 'Date finished cannot be after current date');
+
 export const shelfSchema = z.object({ body: z.object({
   bookId: uuid,
   status: z.enum(['want_to_read', 'currently_reading', 'read']).nullable().optional(),
   userRating: rating.nullable().optional(),
-}).strict().refine(v => v.status !== undefined || v.userRating !== undefined, 'Provide status or userRating') });
+  finishedOn: finishedOnSchema.optional(),
+}).strict()
+  .refine(v => v.status !== undefined || v.userRating !== undefined || v.finishedOn !== undefined, 'Provide status, userRating, or finishedOn')
+  .refine(v => !(v.status !== undefined && v.status !== 'read' && v.finishedOn !== undefined), {
+    message: 'Date finished is only valid for books marked read',
+    path: ['finishedOn'],
+  })
+});
 export const reviewSchema = z.object({ body: z.object({
   bookId: uuid, rating, reviewText: z.string().trim().max(10000).nullable().optional(),
 }).strict() });

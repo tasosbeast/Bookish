@@ -147,10 +147,10 @@ The nested book also includes its other existing scalar fields (description, ISB
 `POST /api/user-books`
 
 ```json
-{ "bookId": "11111111-1111-4111-8111-111111111111", "status": "read", "userRating": 5 }
+{ "bookId": "11111111-1111-4111-8111-111111111111", "status": "read", "userRating": 5, "finishedOn": "2026-09-05" }
 ```
 
-Supply `status` and/or `userRating`. Status is `want_to_read`, `currently_reading` or `read`; if omitted when creating a new record, `status` defaults to `null`. Rating is an integer 1–5 or null. Omitted fields retain previous values. A status-only update never clears a rating. Clearing a rating while a review exists returns 409. An updated rating is copied to any existing review in the same transaction.
+Supply `status`, `userRating`, and/or `finishedOn`. Status is `want_to_read`, `currently_reading` or `read`; if omitted when creating a new record, `status` defaults to `null`. Rating is an integer 1–5 or null. `finishedOn` is an optional date-only string (`YYYY-MM-DD`) representing the calendar date the book was finished; it is only valid when status is `read` (or the book is currently `read`), cannot be in the future (UTC), and defaults to the current UTC calendar date when transitioning to `read` if omitted. Editing `finishedOn` for an already-read book updates the latest finish date without creating a new activity or altering record timestamps. Omitted fields retain previous values. A status-only update never clears a rating. Clearing a rating while a review exists returns 409. An updated rating is copied to any existing review in the same transaction.
 
 `DELETE /api/user-books/:bookId`
 
@@ -218,6 +218,7 @@ Authorization: Bearer <access-token>
       "bookId": "11111111-1111-4111-8111-111111111111",
       "status": "currently_reading",
       "userRating": 4,
+      "finishedOn": null,
       "createdAt": "2026-09-06T10:00:00.000Z",
       "updatedAt": "2026-09-06T10:00:00.000Z"
     },

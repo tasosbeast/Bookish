@@ -3,10 +3,20 @@ import { api } from '../lib/api.js';
 import { ErrorNotice, Icon, statuses } from './shared.jsx';
 import { useDraftValue } from '../hooks/useDraftValue.js';
 
+function getLocalDateString() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export function ShelfForm({ personal, onSaved }) {
   const id = useId();
   const hasShelfStatus = Boolean(personal.shelf?.status);
   const [status, setStatus] = useDraftValue(personal.shelf?.status ?? 'want_to_read');
+  const today = getLocalDateString();
+  const [finishedOn, setFinishedOn] = useDraftValue(personal.shelf?.finishedOn ?? today);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   async function save(event) {
@@ -14,7 +24,11 @@ export function ShelfForm({ personal, onSaved }) {
     const previousStatus = personal.shelf?.status;
     const isTransitionToRead = previousStatus !== 'read' && status === 'read';
     try {
-      await api('/user-books', { method: 'POST', auth: 'required', body: { bookId: personal.bookId, status } });
+      const body = { bookId: personal.bookId, status };
+      if (status === 'read') {
+        body.finishedOn = finishedOn || today;
+      }
+      await api('/user-books', { method: 'POST', auth: 'required', body });
       onSaved('Your bookshelf has been updated.', { scrollToReview: isTransitionToRead });
     } catch (error) { setError(error); } finally { setBusy(false); }
   }
@@ -26,7 +40,45 @@ export function ShelfForm({ personal, onSaved }) {
       onSaved('This book has been removed from My Books.', { shelf: true });
     } catch (error) { setError(error); } finally { setBusy(false); }
   }
-  return <form onSubmit={save} className="reading-form"><fieldset disabled={busy}><legend className="form-title">Your reading journey</legend><div className="form-grid"><div><label htmlFor={`${id}-status`}>Reading status</label><select id={`${id}-status`} value={status} onChange={event => setStatus(event.target.value)}>{statuses.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div></div><ErrorNotice error={error} /><div className="reading-actions"><button className="button" type="submit">{busy ? 'Saving…' : hasShelfStatus ? 'Save changes' : 'Add to my books'}<Icon name="check" size={17} /></button>{hasShelfStatus && <button className="text-button danger-button" type="button" onClick={remove}>Remove from My Books</button>}</div></fieldset></form>;
+  return (
+    <form onSubmit={save} className="reading-form">
+      <fieldset disabled={busy}>
+        <legend className="form-title">Your reading journey</legend>
+        <div className="form-grid">
+          <div>
+            <label htmlFor={`${id}-status`}>Reading status</label>
+            <select id={`${id}-status`} value={status} onChange={event => setStatus(event.target.value)}>
+              {statuses.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
+          {status === 'read' && (
+            <div>
+              <label htmlFor={`${id}-finished-on`}>Date finished</label>
+              <input
+                type="date"
+                id={`${id}-finished-on`}
+                value={finishedOn || today}
+                max={today}
+                onChange={event => setFinishedOn(event.target.value)}
+              />
+            </div>
+          )}
+        </div>
+        <ErrorNotice error={error} />
+        <div className="reading-actions">
+          <button className="button" type="submit">
+            {busy ? 'Saving…' : hasShelfStatus ? 'Save changes' : 'Add to my books'}
+            <Icon name="check" size={17} />
+          </button>
+          {hasShelfStatus && (
+            <button className="text-button danger-button" type="button" onClick={remove}>
+              Remove from My Books
+            </button>
+          )}
+        </div>
+      </fieldset>
+    </form>
+  );
 }
 
 export function ReviewForm({ personal, onSaved }) {

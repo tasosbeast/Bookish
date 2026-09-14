@@ -32,6 +32,34 @@ test('shelf validation distinguishes omitted rating and explicit null', () => {
     assert.equal(shelfSchema.safeParse({ body }).success, false);
   }
 });
+
+test('shelf validation validates finishedOn format, leap years, future dates, and status requirements', () => {
+  const bookId = '11111111-1111-4111-8111-111111111111';
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Valid finishedOn with status read or alone
+  assert.equal(shelfSchema.parse({ body: { bookId, status: 'read', finishedOn: '2024-02-29' } }).body.finishedOn, '2024-02-29');
+  assert.equal(shelfSchema.parse({ body: { bookId, finishedOn: today } }).body.finishedOn, today);
+
+  // Future finishedOn rejected
+  const futureYear = new Date().getUTCFullYear() + 1;
+  assert.equal(shelfSchema.safeParse({ body: { bookId, status: 'read', finishedOn: `${futureYear}-01-01` } }).success, false);
+
+  // Invalid calendar dates rejected (e.g. Feb 30, non-leap year Feb 29, month 13, month 00)
+  for (const invalidDate of ['2026-02-29', '2026-02-30', '2026-04-31', '2026-13-01', '2026-00-10', '2026-01-32']) {
+    assert.equal(shelfSchema.safeParse({ body: { bookId, status: 'read', finishedOn: invalidDate } }).success, false, `Expected ${invalidDate} to fail`);
+  }
+
+  // Timestamps and non-YYYY-MM-DD formats rejected
+  for (const malformed of ['2026-09-05T00:00:00Z', '2026/09/05', '09-05-2026', '2026-9-5']) {
+    assert.equal(shelfSchema.safeParse({ body: { bookId, status: 'read', finishedOn: malformed } }).success, false, `Expected ${malformed} to fail`);
+  }
+
+  // Non-read status + finishedOn rejected
+  for (const nonRead of ['want_to_read', 'currently_reading']) {
+    assert.equal(shelfSchema.safeParse({ body: { bookId, status: nonRead, finishedOn: '2024-02-29' } }).success, false);
+  }
+});
 test('pagination is bounded and sort fields are allowlisted', () => {
   assert.deepEqual(booksSchema.parse({ query: {} }).query, { page: 1, limit: 20, sort: 'rating', order: 'desc' });
   assert.equal(booksSchema.parse({ query: { author: ' Jane Austen ' } }).query.author, 'Jane Austen');

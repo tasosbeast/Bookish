@@ -12,7 +12,28 @@ export async function personalBook(userId, bookId) {
       select: { bookId: true, status: true, userRating: true, createdAt: true, updatedAt: true } });
     const review = await tx.review.findUnique({ where,
       select: { id: true, bookId: true, rating: true, reviewText: true, likesCount: true, createdAt: true, updatedAt: true } });
-    return { data: { bookId, shelf, review } };
+    let shelfData = shelf;
+    if (shelf) {
+      let finishedOn = null;
+      if (shelf.status === 'read') {
+        const latestFinished = await tx.activity.findFirst({
+          where: { userId, bookId, type: 'finished_reading' },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          select: { finishedOn: true, createdAt: true },
+        });
+        if (latestFinished?.finishedOn) {
+          finishedOn = latestFinished.finishedOn instanceof Date
+            ? latestFinished.finishedOn.toISOString().slice(0, 10)
+            : String(latestFinished.finishedOn).slice(0, 10);
+        } else if (latestFinished?.createdAt) {
+          finishedOn = latestFinished.createdAt instanceof Date
+            ? latestFinished.createdAt.toISOString().slice(0, 10)
+            : String(latestFinished.createdAt).slice(0, 10);
+        }
+      }
+      shelfData = { ...shelf, finishedOn };
+    }
+    return { data: { bookId, shelf: shelfData, review } };
   }, { isolationLevel: 'RepeatableRead' });
 }
 

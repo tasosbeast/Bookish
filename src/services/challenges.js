@@ -21,37 +21,81 @@ export function getUtcMonthBounds(date = new Date()) {
   return { year, month, key, title, periodStart, periodEnd };
 }
 
+function getActivityFinishedDate(act) {
+  if (act.finishedOn) {
+    if (act.finishedOn instanceof Date) {
+      return act.finishedOn.toISOString().slice(0, 10);
+    }
+    return String(act.finishedOn).slice(0, 10);
+  }
+  if (act.createdAt) {
+    if (act.createdAt instanceof Date) {
+      return act.createdAt.toISOString().slice(0, 10);
+    }
+    return String(act.createdAt).slice(0, 10);
+  }
+  return null;
+}
+
+function getActivityFinishedIso(act) {
+  if (act.finishedOn) {
+    const dateStr = act.finishedOn instanceof Date
+      ? act.finishedOn.toISOString().slice(0, 10)
+      : String(act.finishedOn).slice(0, 10);
+    return `${dateStr}T00:00:00.000Z`;
+  }
+  if (act.createdAt) {
+    return act.createdAt instanceof Date ? act.createdAt.toISOString() : new Date(act.createdAt).toISOString();
+  }
+  return new Date().toISOString();
+}
+
+function compareActivities(a, b) {
+  const dateA = getActivityFinishedDate(a) || '';
+  const dateB = getActivityFinishedDate(b) || '';
+  if (dateA !== dateB) {
+    return dateA.localeCompare(dateB);
+  }
+  const createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+  const createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+  if (createdA !== createdB) {
+    return createdA - createdB;
+  }
+  return String(a.id || '').localeCompare(String(b.id || ''));
+}
+
 /**
  * Computes challenge progress and qualifying books from chronological finished_reading activities.
  *
- * @param {Array<{ bookId: string, createdAt: Date|string, book?: object }>} activities
+ * @param {Array<{ id?: string, bookId: string, createdAt?: Date|string, finishedOn?: Date|string, book?: object }>} activities
  * @param {number} goal
  */
 export function calculateChallengeProgress(activities, goal = CHALLENGE_GOAL) {
+  const sorted = activities.slice().sort(compareActivities);
   const seenBookIds = new Set();
   const qualifyingBooks = [];
   let completedAt = null;
 
-  for (const act of activities) {
+  for (const act of sorted) {
     if (!seenBookIds.has(act.bookId)) {
       seenBookIds.add(act.bookId);
-      const createdAtIso = act.createdAt instanceof Date ? act.createdAt.toISOString() : new Date(act.createdAt).toISOString();
+      const finishedAtIso = getActivityFinishedIso(act);
       if (act.book) {
         qualifyingBooks.push({
           id: act.book.id,
           title: act.book.title,
           author: act.book.author,
           coverImageUrl: act.book.coverImageUrl,
-          finishedAt: createdAtIso,
+          finishedAt: finishedAtIso,
         });
       } else {
         qualifyingBooks.push({
           id: act.bookId,
-          finishedAt: createdAtIso,
+          finishedAt: finishedAtIso,
         });
       }
       if (qualifyingBooks.length === goal) {
-        completedAt = createdAtIso;
+        completedAt = finishedAtIso;
       }
     }
   }
@@ -71,17 +115,19 @@ export function calculateChallengeProgress(activities, goal = CHALLENGE_GOAL) {
 /**
  * Derives earned monthly challenge trophies from chronological finished_reading activities.
  *
- * @param {Array<{ bookId: string, createdAt: Date|string }>} activities
+ * @param {Array<{ id?: string, bookId: string, createdAt?: Date|string, finishedOn?: Date|string }>} activities
  * @param {number} goal
  */
 export function deriveTrophies(activities, goal = CHALLENGE_GOAL) {
-  const monthMap = new Map(); // key -> { month, seenBooks: Set(), completedAt: null }
+  const sorted = activities.slice().sort(compareActivities);
+  const monthMap = new Map(); // key -> { year, month, seenBooks: Set(), completedAt: null }
 
-  for (const act of activities) {
-    const d = act.createdAt instanceof Date ? act.createdAt : new Date(act.createdAt);
-    const year = d.getUTCFullYear();
-    const month = d.getUTCMonth();
-    const key = `${year}-${String(month + 1).padStart(2, '0')}`;
+  for (const act of sorted) {
+    const dateStr = getActivityFinishedDate(act);
+    if (!dateStr) continue;
+    const [year, monthNum] = dateStr.split('-').map(Number);
+    const month = monthNum - 1; // 0-indexed
+    const key = `${year}-${String(monthNum).padStart(2, '0')}`;
 
     if (!monthMap.has(key)) {
       monthMap.set(key, {
@@ -96,7 +142,7 @@ export function deriveTrophies(activities, goal = CHALLENGE_GOAL) {
     if (!monthData.seenBooks.has(act.bookId)) {
       monthData.seenBooks.add(act.bookId);
       if (monthData.seenBooks.size === goal) {
-        monthData.completedAt = d.toISOString();
+        monthData.completedAt = getActivityFinishedIso(act);
       }
     }
   }
@@ -130,14 +176,16 @@ export async function getCurrentChallenge(userId, now = new Date()) {
     where: {
       userId,
       type: 'finished_reading',
-      createdAt: {
+      finishedOn: {
         gte: periodStart,
         lt: periodEnd,
       },
     },
     select: {
+      id: true,
       bookId: true,
       createdAt: true,
+      finishedOn: true,
       book: {
         select: {
           id: true,
@@ -148,6 +196,7 @@ export async function getCurrentChallenge(userId, now = new Date()) {
       },
     },
     orderBy: [
+      { finishedOn: 'asc' },
       { createdAt: 'asc' },
       { id: 'asc' },
     ],
@@ -181,10 +230,13 @@ export async function getUserTrophies(userId) {
       type: 'finished_reading',
     },
     select: {
+      id: true,
       bookId: true,
       createdAt: true,
+      finishedOn: true,
     },
     orderBy: [
+      { finishedOn: 'asc' },
       { createdAt: 'asc' },
       { id: 'asc' },
     ],

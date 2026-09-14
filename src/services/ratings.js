@@ -14,7 +14,7 @@ async function refreshRating(tx, bookId) {
     averageRating: aggregate._avg.userRating, ratingsCount: aggregate._count.userRating,
   } });
 }
-export async function saveShelf(userId, { bookId, status, userRating }) {
+export async function saveShelf(userId, { bookId, status, userRating, finishedOn }) {
   return serializable(prisma, async tx => {
     await requireBook(tx, bookId);
     const key = { userId_bookId: { userId, bookId } };
@@ -27,6 +27,11 @@ export async function saveShelf(userId, { bookId, status, userRating }) {
     });
     const previousStatus = existingUserBook?.status ?? null;
     const previousRating = existingUserBook?.userRating ?? null;
+
+    const effectiveStatus = status !== undefined ? status : previousStatus;
+    if (finishedOn !== undefined && effectiveStatus !== 'read') {
+      throw new AppError(400, 'INVALID_SHELF_STATUS', 'Date finished is only valid for books marked read');
+    }
 
     const updateData = {
       ...(status !== undefined && { status }),
@@ -43,6 +48,9 @@ export async function saveShelf(userId, { bookId, status, userRating }) {
       if (userRating !== null) await tx.review.updateMany({ where: { userId, bookId }, data: { rating: userRating } });
       await refreshRating(tx, bookId);
     }
+
+    const isTransitionToRead = status !== undefined && status !== previousStatus && status === 'read';
+
     if (status !== undefined && status !== previousStatus && status === 'currently_reading') {
       await tx.activity.create({
         data: {
@@ -51,12 +59,15 @@ export async function saveShelf(userId, { bookId, status, userRating }) {
           type: 'started_reading',
         },
       });
-    } else if (status !== undefined && status !== previousStatus && status === 'read') {
+    } else if (isTransitionToRead) {
+      const targetDateStr = finishedOn ?? new Date().toISOString().slice(0, 10);
+      const targetFinishedOn = new Date(`${targetDateStr}T00:00:00.000Z`);
       await tx.activity.create({
         data: {
           userId,
           bookId,
           type: 'finished_reading',
+          finishedOn: targetFinishedOn,
         },
       });
     } else if (userRating !== undefined && userRating !== null && userRating !== previousRating) {
@@ -69,6 +80,37 @@ export async function saveShelf(userId, { bookId, status, userRating }) {
         },
       });
     }
+
+    if (effectiveStatus === 'read' && !isTransitionToRead && finishedOn !== undefined) {
+      const latestFinished = await tx.activity.findFirst({
+        where: {
+          userId,
+          bookId,
+          type: 'finished_reading',
+        },
+        orderBy: [
+          { createdAt: 'desc' },
+          { id: 'desc' },
+        ],
+      });
+      const targetFinishedOn = new Date(`${finishedOn}T00:00:00.000Z`);
+      if (latestFinished) {
+        await tx.activity.update({
+          where: { id: latestFinished.id },
+          data: { finishedOn: targetFinishedOn },
+        });
+      } else {
+        await tx.activity.create({
+          data: {
+            userId,
+            bookId,
+            type: 'finished_reading',
+            finishedOn: targetFinishedOn,
+          },
+        });
+      }
+    }
+
     return shelf;
   });
 }

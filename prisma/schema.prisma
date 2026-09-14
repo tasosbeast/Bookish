@@ -236,6 +236,7 @@ model Activity {
   type               ActivityType
   rating             Int?         @db.SmallInt
   reviewTextSnapshot String?      @map("review_text_snapshot") @db.Text
+  finishedOn         DateTime?    @map("finished_on") @db.Date
   createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
 
   user               User         @relation(fields: [userId], references: [id], onDelete: Cascade)

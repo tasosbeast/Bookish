@@ -182,3 +182,54 @@ test('Challenges unit: deriveTrophies groups by month, requires >= 3 distinct bo
   assert.equal(multiYearTrophies[1].title, 'September 2026 Reading Challenge');
   assert.notEqual(multiYearTrophies[0].title, multiYearTrophies[1].title);
 });
+
+test('Challenges unit: finishedOn drives challenge progress, month grouping, and UTC midnight completedAt', () => {
+  // Case 15: activity created in September but finishedOn in August belongs to August
+  const actAugFinished = {
+    id: 'act-1',
+    bookId: 'b1',
+    finishedOn: '2026-08-29',
+    createdAt: new Date('2026-09-14T18:00:00Z'),
+  };
+  const trophiesAug = deriveTrophies([actAugFinished], 1);
+  assert.equal(trophiesAug.length, 1);
+  assert.equal(trophiesAug[0].key, '2026-08');
+
+  // Case 17: same book twice in same finishedOn month counts once
+  const actSepRepeat1 = { id: 'act-2', bookId: 'b1', finishedOn: '2026-09-05', createdAt: new Date('2026-09-05T10:00:00Z') };
+  const actSepRepeat2 = { id: 'act-3', bookId: 'b1', finishedOn: '2026-09-15', createdAt: new Date('2026-09-15T10:00:00Z') };
+  const progRepeat = calculateChallengeProgress([actSepRepeat1, actSepRepeat2]);
+  assert.equal(progRepeat.progress, 1);
+  assert.equal(progRepeat.books.length, 1);
+
+  // Case 18: same book in different finishedOn months counts in both
+  const actSep1 = { id: 'act-4', bookId: 'b1', finishedOn: '2026-09-02', createdAt: new Date('2026-09-02T10:00:00Z') };
+  const actSep2 = { id: 'act-5', bookId: 'b2', finishedOn: '2026-09-10', createdAt: new Date('2026-09-10T10:00:00Z') };
+  const actSep3 = { id: 'act-6', bookId: 'b3', finishedOn: '2026-09-18', createdAt: new Date('2026-09-18T10:00:00Z') };
+  const actOct1 = { id: 'act-7', bookId: 'b1', finishedOn: '2026-10-05', createdAt: new Date('2026-10-05T10:00:00Z') };
+  const actOct2 = { id: 'act-8', bookId: 'b4', finishedOn: '2026-10-10', createdAt: new Date('2026-10-10T10:00:00Z') };
+  const actOct3 = { id: 'act-9', bookId: 'b5', finishedOn: '2026-10-15', createdAt: new Date('2026-10-15T10:00:00Z') };
+
+  const trophiesMulti = deriveTrophies([actSep1, actSep2, actSep3, actOct1, actOct2, actOct3]);
+  assert.equal(trophiesMulti.length, 2);
+  assert.equal(trophiesMulti[0].key, '2026-10');
+  assert.equal(trophiesMulti[1].key, '2026-09');
+
+  // Case 20: completedAt is third distinct finish date at UTC midnight
+  const progCompleted = calculateChallengeProgress([actSep1, actSep2, actSep3]);
+  assert.equal(progCompleted.completed, true);
+  assert.equal(progCompleted.completedAt, '2026-09-18T00:00:00.000Z');
+
+  // Deterministic tie breaking when multiple books have identical finishedOn
+  const tieAct1 = { id: 'act-c', bookId: 'b1', finishedOn: '2026-09-18', createdAt: new Date('2026-09-18T12:00:00Z') };
+  const tieAct2 = { id: 'act-a', bookId: 'b2', finishedOn: '2026-09-18', createdAt: new Date('2026-09-18T08:00:00Z') };
+  const tieAct3 = { id: 'act-b', bookId: 'b3', finishedOn: '2026-09-18', createdAt: new Date('2026-09-18T08:00:00Z') };
+  // Expected order: tieAct2 (createdAt 08:00, id act-a), tieAct3 (createdAt 08:00, id act-b), tieAct1 (createdAt 12:00)
+  // 3rd qualifying distinct book is tieAct1, completedAt is '2026-09-18T00:00:00.000Z'
+  const progTies = calculateChallengeProgress([tieAct1, tieAct2, tieAct3]);
+  assert.equal(progTies.completed, true);
+  assert.equal(progTies.completedAt, '2026-09-18T00:00:00.000Z');
+  assert.equal(progTies.books[0].id, 'b1'); // newest first
+  assert.equal(progTies.books[1].id, 'b3');
+  assert.equal(progTies.books[2].id, 'b2');
+});
