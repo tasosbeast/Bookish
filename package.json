@@ -14,6 +14,7 @@
     "catalog:csv-import": "node scripts/import-catalog-csv.js",
     "catalog:repair-launch": "node scripts/repair-launch-catalog.js",
     "catalog:genre-import": "node scripts/import-catalog-genres.js",
+    "catalog:publication-dates": "node scripts/import-catalog-publication-dates.js",
     "catalog:resolve": "node scripts/resolve-catalog.js",
     "catalog:status": "node scripts/catalog-status.js",
     "catalog:snapshot-build": "node scripts/snapshot-build.js",
