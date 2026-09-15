@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth.js';
 import { useResource } from '../hooks/useResource.js';
 import { Cover, Rating, Genres, Icon, EmptyState, ErrorNotice, Loading, Pagination, pageNumber } from '../components/shared.jsx';
+import { ReleaseCard } from '../components/ReleaseCard.jsx';
 import { api } from '../lib/api.js';
 import { messageFor } from '../lib/http.js';
 
@@ -81,8 +82,13 @@ export default function Discover() {
   if (author) query.set('author', author);
   const resource = useResource(`/books?${query}`, 'optional', 'discover');
 
-  const showTopPicks = Boolean(auth.user && page === 1 && !q && !genre && !author);
+  const showCurated = Boolean(page === 1 && !q && !genre && !author);
+  const showTopPicks = Boolean(auth.user && showCurated);
   const topPicksResource = useResource(showTopPicks ? '/recommendations/top-picks?limit=6' : null, 'required');
+  const releasesResource = useResource(showCurated ? '/releases?limit=8' : null, 'none', 'releases-home');
+
+  const newReleases = (releasesResource.data?.newReleases ?? []).slice(0, 8);
+  const upcoming = (releasesResource.data?.upcoming ?? []).slice(0, 8);
 
   function change(values, keepPage = false) {
     const next = new URLSearchParams(params);
@@ -160,6 +166,70 @@ export default function Discover() {
           </EmptyState>
         ) : null}
       </section>
+    )}
+    {showCurated && (
+      <>
+        {releasesResource.error && <ErrorNotice error={releasesResource.error} retry={releasesResource.reload} />}
+        {releasesResource.loading && !releasesResource.data ? (
+          <Loading cards />
+        ) : releasesResource.data ? (
+          <>
+            <section aria-labelledby="new-releases-heading" className="catalog-section">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">Just arrived</p>
+                  <h2 id="new-releases-heading">New Releases</h2>
+                </div>
+                <Link to="/releases" className="text-button">View all</Link>
+              </div>
+              {newReleases.length > 0 ? (
+                <div className="book-grid">
+                  {newReleases.map(book => (
+                    <ReleaseCard
+                      key={book.id}
+                      book={book}
+                      type="new"
+                      onSelectAuthor={author => change({ author })}
+                      onSelectGenre={slug => change({ genre: slug })}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <EmptyState title="No recent releases yet.">
+                  Check back soon for freshly published books added to the catalog.
+                </EmptyState>
+              )}
+            </section>
+
+            <section aria-labelledby="upcoming-releases-heading" className="catalog-section">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">On the horizon</p>
+                  <h2 id="upcoming-releases-heading">Upcoming</h2>
+                </div>
+                <Link to="/releases" className="text-button">View all</Link>
+              </div>
+              {upcoming.length > 0 ? (
+                <div className="book-grid">
+                  {upcoming.map(book => (
+                    <ReleaseCard
+                      key={book.id}
+                      book={book}
+                      type="upcoming"
+                      onSelectAuthor={author => change({ author })}
+                      onSelectGenre={slug => change({ genre: slug })}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <EmptyState title="No upcoming releases yet.">
+                  Check back soon for upcoming titles arriving in the coming months.
+                </EmptyState>
+              )}
+            </section>
+          </>
+        ) : null}
+      </>
     )}
     <section ref={catalogRef} aria-labelledby="discover-heading" className="catalog-section"><div className="section-heading"><div><p className="eyebrow">The bookshelf</p><h2 id="discover-heading">{author ? `Books by “${author}”` : q ? `Results for “${q}”` : 'Discover something good'}</h2></div>{resource.data && <span className="muted small" role="status" aria-live="polite">{resource.loading ? 'Updating results…' : resource.error ? 'Showing previous results.' : `${resource.data.pagination.total} ${resource.data.pagination.total === 1 ? 'book' : 'books'}`}</span>}</div>
       {q || genre || author ? <div className="filter-line">{q && <div className="filter-item"><span>Search</span><button type="button" className="active-filter" aria-label={`Clear search filter: ${q}`} onClick={() => { setSearch(''); change({ q: null }); }}><span className="active-filter-label">{q}</span><Icon name="close" size={14} /></button></div>}{genre && <div className="filter-item"><span>Genre</span><button type="button" className="active-filter" aria-label={`Clear genre filter: ${genreName}`} onClick={() => change({ genre: null })}><span className="active-filter-label">{genreName}</span><Icon name="close" size={14} /></button></div>}{author && <div className="filter-item"><span>Author</span><button type="button" className="active-filter" aria-label={`Clear author filter: ${author}`} onClick={() => change({ author: null })}><span className="active-filter-label">{author}</span><Icon name="close" size={14} /></button></div>}</div> : <p className="genre-hint">See something you like? Choose a genre label on a book to explore more.</p>}

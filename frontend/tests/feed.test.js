@@ -204,9 +204,9 @@ test('Feed frontend: protection, navigation, activity types, empty states, pagin
   assert.ok(feedNavLink, 'Main navigation includes Feed link when authenticated');
   assert.equal(feedNavLink.textContent.trim(), 'Feed');
 
-  // Check nav link order: Discover | Releases | Feed | My Books | Challenges | Friends
+  // Check nav link order: Discover | Feed | My Books | Challenges | Friends
   const navLinks = [...document.querySelectorAll('.main-nav a')].map(a => a.textContent.trim());
-  assert.deepEqual(navLinks, ['Discover', 'Releases', 'Feed', 'My Books', 'Challenges', 'Friends'], 'Navigation order matches spec');
+  assert.deepEqual(navLinks, ['Discover', 'Feed', 'My Books', 'Challenges', 'Friends'], 'Navigation order matches spec');
 
   // 3. Render /feed page with initial activity items
   await act(async () => root.render(

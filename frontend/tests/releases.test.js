@@ -137,10 +137,9 @@ test('Releases frontend: routing, navigation, rendering, exact date labels, book
   assert.ok(document.body.textContent.includes('Releases'));
   assert.ok(document.querySelector('.releases-page'));
 
-  // 8. Navigation link exists in Layout
+  // 8. Navigation link removed from main nav in Layout
   const releasesNav = [...document.querySelectorAll('.main-nav a')].find(a => a.textContent === 'Releases');
-  assert.ok(releasesNav, 'Navigation link for Releases exists');
-  assert.equal(releasesNav.getAttribute('href'), '/releases');
+  assert.equal(releasesNav, undefined, 'Navigation link for Releases does not exist in main nav');
 
   // 2 & 3. New Releases and Upcoming sections render returned books
   assert.ok(document.body.textContent.includes('The Autumn Story'), 'New release book rendered');
