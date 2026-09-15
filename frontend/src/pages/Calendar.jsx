@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useResource } from '../hooks/useResource.js';
 import { Icon, ErrorNotice, Loading } from '../components/shared.jsx';
@@ -80,6 +80,10 @@ export default function Calendar() {
   const parsedMonth = useMemo(() => parseMonthParam(rawMonth), [rawMonth]);
 
   const [selectedDate, setSelectedDate] = useState(null);
+
+  useEffect(() => {
+    setSelectedDate(null);
+  }, [parsedMonth.str]);
 
   const { cells, from, to } = useMemo(
     () => computeMonthGrid(parsedMonth.year, parsedMonth.month),

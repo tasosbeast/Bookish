@@ -303,7 +303,7 @@ test('Calendar frontend: protection, nav, 42-cell grid, month navigation, URL st
     moreBtn.click();
   });
 
-  const dayDetails = document.querySelector('.calendar-day-details');
+  let dayDetails = document.querySelector('.calendar-day-details');
   assert.ok(dayDetails, 'Selected day details panel rendered');
   assert.ok(dayDetails.textContent.includes('September 5, 2026'), 'Details date header rendered');
   assert.ok(dayDetails.textContent.includes('Book releases (1)'), 'Releases heading in details');
@@ -311,7 +311,7 @@ test('Calendar frontend: protection, nav, 42-cell grid, month navigation, URL st
   assert.ok(dayDetails.textContent.includes('Another Tale'), '3rd event visible in details');
 
   // ============================================================
-  // Test 21, 22, 23: Previous, Next, Today controls
+  // Test 21, 22, 23: Previous, Next, Today controls & selected-day reset
   // ============================================================
   const prevBtn = document.querySelector('button[aria-label="Previous month"]');
   const nextBtn = document.querySelector('button[aria-label="Next month"]');
@@ -320,18 +320,43 @@ test('Calendar frontend: protection, nav, 42-cell grid, month navigation, URL st
   assert.ok(nextBtn, 'Next button rendered');
   assert.ok(todayBtn, 'Today button rendered');
 
-  // Click Previous month
+  // Navigating to another month (Previous month) closes the details panel
   requests.length = 0;
   await act(async () => {
     prevBtn.click();
   });
   assert.ok(document.body.textContent.includes('August 2026'), 'Previous button navigates to August 2026');
+  assert.equal(document.querySelector('.calendar-day-details'), null, 'Selected day details closed on month navigation');
 
-  // Click Next month
+  // Click Next month back to September 2026
   await act(async () => {
     nextBtn.click();
   });
   assert.ok(document.body.textContent.includes('September 2026'), 'Next button navigates back to September 2026');
+  assert.equal(document.querySelector('.calendar-day-details'), null, 'Details panel remains closed until day is selected');
+
+  // Re-select a day (clicking on Sep 5 cell)
+  const sep5Cell = [...document.querySelectorAll('.calendar-cell')].find(c => c.textContent.includes('Autumn Leaves'));
+  assert.ok(sep5Cell, 'Found September 5 cell');
+  await act(async () => {
+    sep5Cell.click();
+  });
+  assert.ok(document.querySelector('.calendar-day-details'), 'Details opened again after clicking day cell');
+
+  // Direct URL / query month change to another month also resets selected day
+  await act(async () => {
+    root.render(
+      h(MemoryRouter, { key: 'step4-oct', initialEntries: ['/calendar?month=2026-10'] },
+        h(Routes, null,
+          h(Route, { element: h(Layout) },
+            h(Route, { path: 'calendar', element: h(Calendar) })
+          )
+        )
+      )
+    );
+  });
+  assert.ok(document.body.textContent.includes('October 2026'), 'Direct URL change navigated to October 2026');
+  assert.equal(document.querySelector('.calendar-day-details'), null, 'Direct URL/query month change cleared selected day');
 
   // ============================================================
   // Test 24: Empty month still renders 42-cell calendar
