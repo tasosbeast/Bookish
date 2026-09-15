@@ -17,6 +17,7 @@
     "catalog:publication-dates": "node scripts/import-catalog-publication-dates.js",
     "catalog:release-import": "node scripts/import-release-catalog.js",
     "catalog:resolve": "node scripts/resolve-catalog.js",
+    "catalog:pilot-plan": "node scripts/catalog-pilot-plan.js",
     "catalog:status": "node scripts/catalog-status.js",
     "catalog:snapshot-build": "node scripts/snapshot-build.js",
     "catalog:snapshot-status": "node scripts/snapshot-status.js",

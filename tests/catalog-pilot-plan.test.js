@@ -1,0 +1,481 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import * as fs from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { buildSnapshotIndex, createLocalCanonicalAdapter } from '../scripts/catalog/snapshot-index.js';
+import {
+  PILOT_PLAN_VERSION,
+  isExactGregorianDay,
+  classifyPublicationDatePrecision,
+  pilotDisqualificationReason,
+  adaptCanonicalCandidateForScoring,
+  evaluateSourceEntry,
+  generatePilotSummary,
+  planCatalogPilot,
+} from '../scripts/catalog/pilot-planner.js';
+
+const execFileAsync = promisify(execFile);
+
+function makeCandidate(overrides = {}) {
+  return {
+    recordId: 'edition-1',
+    snapshotId: 'test-snapshot-2026',
+    sourceName: 'open-library-bulk',
+    isbn13: '9780141439518',
+    title: 'Pride and Prejudice',
+    subtitle: null,
+    authors: ['Jane Austen'],
+    language: 'en',
+    publisher: 'Penguin Classics',
+    publicationDate: '2003-05-14',
+    publicationYear: 2003,
+    format: 'Paperback',
+    cover: { url: 'https://example.test/cover.jpg', reference: 'cover-1' },
+    description: 'A classic novel.',
+    subjects: ['Fiction', 'Romance'],
+    sourceIdentifiers: {
+      openLibraryEdition: '/books/OL123M',
+      openLibraryWorks: '/works/OL456W',
+    },
+    ...overrides,
+  };
+}
+
+async function createTestIndex(candidates) {
+  const directory = await mkdtemp(join(tmpdir(), 'bookish-pilot-test-'));
+  const indexPath = join(directory, 'index');
+  const asyncIterable = (async function* () {
+    for (const c of candidates) yield c;
+  })();
+  await buildSnapshotIndex({
+    records: asyncIterable,
+    outputPath: indexPath,
+    sourceName: 'open-library-bulk',
+    snapshotId: 'test-snapshot-2026',
+    generatedAt: '2026-09-15T00:00:00.000Z',
+  });
+  const adapter = await createLocalCanonicalAdapter({ indexPath });
+  return { directory, indexPath, adapter };
+}
+
+test('1. Ordinary physical English edition can be selected', async t => {
+  const candidate = makeCandidate();
+  const { directory, adapter } = await createTestIndex([candidate]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const source = {
+    key: 'pride-and-prejudice',
+    title: 'Pride and Prejudice',
+    author: 'Jane Austen',
+  };
+
+  const plan = await planCatalogPilot({ sources: [source], adapter });
+  assert.equal(plan.planVersion, PILOT_PLAN_VERSION);
+  assert.equal(plan.entries.length, 1);
+  const entry = plan.entries[0];
+  assert.equal(entry.status, 'selected');
+  assert.equal(entry.selection.isbn13, '9780141439518');
+  assert.equal(entry.selection.title, 'Pride and Prejudice');
+  assert.deepEqual(entry.selection.authors, ['Jane Austen']);
+  assert.equal(entry.selection.format, 'Paperback');
+  assert.equal(entry.selection.publicationYear, 2003);
+  assert.equal(entry.selection.publicationDate, '2003-05-14');
+  assert.deepEqual(entry.selection.openLibraryWorks, ['/works/OL456W']);
+  assert.equal(entry.selection.openLibraryEdition, '/books/OL123M');
+  assert.equal(entry.quality.publicationDatePrecision, 'exact_day');
+  assert.equal(entry.quality.hasCover, true);
+  assert.equal(entry.quality.hasPublisher, true);
+  assert.equal(entry.quality.hasMappedGenre, true);
+  assert.deepEqual(entry.quality.mappedGenres, ['romance', 'fiction']);
+});
+
+test('2. Audiobook is rejected by pilot hard rejections', async t => {
+  assert.equal(pilotDisqualificationReason({ format: 'Audiobook', title: 'Book' }), 'audiobook');
+  assert.equal(pilotDisqualificationReason({ format: 'Audio CD', title: 'Book' }), 'audiobook');
+  assert.equal(pilotDisqualificationReason({ format: 'Sound Recording', title: 'Book' }), 'audiobook');
+  assert.equal(pilotDisqualificationReason({ format: null, title: 'Book (Audiobook)' }), 'audiobook');
+
+  const audioCandidate = makeCandidate({
+    recordId: 'edition-audio',
+    format: 'Audiobook',
+  });
+  const { directory, adapter } = await createTestIndex([audioCandidate]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const plan = await planCatalogPilot({
+    sources: [{ key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' }],
+    adapter,
+  });
+  assert.equal(plan.entries[0].status, 'no_match');
+  assert.equal(plan.summary.rejectedByReason.rejected_audiobook, 1);
+});
+
+test('3. Ebook/digital edition is rejected by pilot hard rejections', async t => {
+  assert.equal(pilotDisqualificationReason({ format: 'ebook', title: 'Book' }), 'ebook');
+  assert.equal(pilotDisqualificationReason({ format: 'Kindle Edition', title: 'Book' }), 'ebook');
+  assert.equal(pilotDisqualificationReason({ format: 'Electronic Resource', title: 'Book' }), 'ebook');
+  assert.equal(pilotDisqualificationReason({ format: null, title: 'Book [electronic resource]' }), 'ebook');
+
+  const ebookCandidate = makeCandidate({
+    recordId: 'edition-ebook',
+    format: 'Ebook',
+  });
+  const { directory, adapter } = await createTestIndex([ebookCandidate]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const plan = await planCatalogPilot({
+    sources: [{ key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' }],
+    adapter,
+  });
+  assert.equal(plan.entries[0].status, 'no_match');
+  assert.equal(plan.summary.rejectedByReason.rejected_ebook, 1);
+});
+
+test('4. Large-print edition is rejected for the pilot', async t => {
+  assert.equal(pilotDisqualificationReason({ format: 'Large Print', title: 'Book' }), 'large_print');
+  assert.equal(pilotDisqualificationReason({ format: 'Giant Print', title: 'Book' }), 'large_print');
+  assert.equal(pilotDisqualificationReason({ format: null, title: 'Book (Large Print Edition)' }), 'large_print');
+
+  const lpCandidate = makeCandidate({
+    recordId: 'edition-lp',
+    format: 'Large Print',
+  });
+  const { directory, adapter } = await createTestIndex([lpCandidate]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const plan = await planCatalogPilot({
+    sources: [{ key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' }],
+    adapter,
+  });
+  assert.equal(plan.entries[0].status, 'no_match');
+  assert.equal(plan.summary.rejectedByReason.rejected_large_print, 1);
+});
+
+test('5. Non-book / boxed-set / merchandise formats are rejected', async t => {
+  assert.equal(pilotDisqualificationReason({ format: 'Boxed Set', title: 'Book' }), 'boxed_set');
+  assert.equal(pilotDisqualificationReason({ format: 'Calendar', title: 'Book Calendar' }), 'calendar');
+  assert.equal(pilotDisqualificationReason({ format: 'Blank Book', title: 'Journal' }), 'journal');
+  assert.equal(pilotDisqualificationReason({ format: 'Tarot Deck', title: 'Cards' }), 'cards');
+  assert.equal(pilotDisqualificationReason({ format: 'Board Game', title: 'Game' }), 'non_book');
+  assert.equal(pilotDisqualificationReason({ format: 'Jigsaw Puzzle', title: 'Puzzle' }), 'non_book');
+
+  const boxedCandidate = makeCandidate({
+    recordId: 'edition-box',
+    format: 'Boxed Set',
+  });
+  const { directory, adapter } = await createTestIndex([boxedCandidate]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const plan = await planCatalogPilot({
+    sources: [{ key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' }],
+    adapter,
+  });
+  assert.equal(plan.entries[0].status, 'no_match');
+  assert.equal(plan.summary.rejectedByReason.rejected_boxed_set, 1);
+});
+
+test('6. Known non-English edition is rejected', async t => {
+  const spanishCandidate = makeCandidate({
+    recordId: 'edition-es',
+    language: 'spa',
+    title: 'Orgullo y Prejuicio',
+  });
+  const { directory, adapter } = await createTestIndex([spanishCandidate]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const plan = await planCatalogPilot({
+    sources: [{ key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' }],
+    adapter,
+  });
+  assert.equal(plan.entries[0].status, 'no_match');
+});
+
+test('7. Missing language does not automatically reject an otherwise good edition', async t => {
+  const noLangCandidate = makeCandidate({
+    recordId: 'edition-nolang',
+    language: null,
+  });
+  const { directory, adapter } = await createTestIndex([noLangCandidate]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const plan = await planCatalogPilot({
+    sources: [{ key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' }],
+    adapter,
+  });
+  assert.equal(plan.entries[0].status, 'selected');
+  assert.equal(plan.entries[0].selection.isbn13, noLangCandidate.isbn13);
+  assert.ok(plan.entries[0].selection.reasons.includes('language_unknown'));
+});
+
+test('8. Preferred ISBN receives existing preference semantics', async t => {
+  const candA = makeCandidate({
+    recordId: 'edition-a',
+    isbn13: '9780141439518',
+    format: 'Paperback',
+    publisher: 'Penguin',
+  });
+  const candB = makeCandidate({
+    recordId: 'edition-b',
+    isbn13: '9780451524935',
+    format: 'Paperback',
+    publisher: 'Signet',
+  });
+
+  const { directory, adapter } = await createTestIndex([candA, candB]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  // Requesting with preferredIsbn13 = candB
+  const plan = await planCatalogPilot({
+    sources: [{
+      key: 'pride-and-prejudice',
+      title: 'Pride and Prejudice',
+      author: 'Jane Austen',
+      preferredIsbn13: '9780451524935',
+      allowAlternateIsbn: true,
+    }],
+    adapter,
+  });
+
+  assert.equal(plan.entries[0].status, 'selected');
+  assert.equal(plan.entries[0].selection.isbn13, '9780451524935');
+  assert.ok(plan.entries[0].selection.reasons.includes('preferred_isbn'));
+});
+
+test('9. Pinned ISBN semantics remain respected', async t => {
+  const candA = makeCandidate({
+    recordId: 'edition-a',
+    isbn13: '9780141439518',
+  });
+
+  const { directory, adapter } = await createTestIndex([candA]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  // Pinned to ISBN B which does not exist in local index
+  const plan = await planCatalogPilot({
+    sources: [{
+      key: 'pride-and-prejudice',
+      title: 'Pride and Prejudice',
+      author: 'Jane Austen',
+      pinnedIsbn13: '9780451524935',
+    }],
+    adapter,
+  });
+
+  // Since only candA was found and it mismatches pinnedIsbn13
+  assert.equal(plan.entries[0].status, 'needs_review');
+  assert.equal(plan.entries[0].reason, 'pinned_isbn_mismatch');
+});
+
+test('10. No local candidates -> no_match', async t => {
+  const { directory, adapter } = await createTestIndex([]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const plan = await planCatalogPilot({
+    sources: [{ key: 'unknown-book', title: 'Completely Nonexistent Book', author: 'Nobody' }],
+    adapter,
+  });
+  assert.equal(plan.entries[0].status, 'no_match');
+  assert.equal(plan.entries[0].reason, 'no_candidates_found');
+  assert.equal(plan.entries[0].candidateCount, 0);
+  assert.equal(plan.entries[0].selection, null);
+});
+
+test('11. Ambiguous / unsafe selection -> needs_review rather than guessing', async t => {
+  // Two identically strong candidates with different ISBNs and no preferred ISBN
+  const candA = makeCandidate({
+    recordId: 'edition-a',
+    isbn13: '9780141439518',
+    publisher: 'Penguin',
+  });
+  const candB = makeCandidate({
+    recordId: 'edition-b',
+    isbn13: '9780451524935',
+    publisher: 'Penguin',
+  });
+
+  const { directory, adapter } = await createTestIndex([candA, candB]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const plan = await planCatalogPilot({
+    sources: [{ key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' }],
+    adapter,
+  });
+
+  assert.equal(plan.entries[0].status, 'needs_review');
+  assert.equal(plan.entries[0].reason, 'ambiguous_winner');
+});
+
+test('12. Candidate input order does not affect winner', async t => {
+  const candBetter = makeCandidate({
+    recordId: 'edition-better',
+    isbn13: '9780141439518',
+    format: 'Paperback',
+    publisher: 'Penguin',
+    cover: { url: 'https://example.test/cover.jpg', reference: 'ref-1' },
+    description: 'Detailed description.',
+  });
+  const candLesser = makeCandidate({
+    recordId: 'edition-lesser',
+    isbn13: '9780451524935',
+    format: null,
+    publisher: null,
+    cover: null,
+    description: null,
+  });
+
+  const { directory: dir1, adapter: adapter1 } = await createTestIndex([candBetter, candLesser]);
+  const { directory: dir2, adapter: adapter2 } = await createTestIndex([candLesser, candBetter]);
+  t.after(() => Promise.all([
+    fs.rm(dir1, { recursive: true, force: true }),
+    fs.rm(dir2, { recursive: true, force: true }),
+  ]));
+
+  const source = { key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' };
+  const plan1 = await planCatalogPilot({ sources: [source], adapter: adapter1 });
+  const plan2 = await planCatalogPilot({ sources: [source], adapter: adapter2 });
+
+  assert.equal(plan1.entries[0].status, 'selected');
+  assert.equal(plan2.entries[0].status, 'selected');
+  assert.equal(plan1.entries[0].selection.isbn13, plan2.entries[0].selection.isbn13);
+  assert.equal(plan1.entries[0].selection.score, plan2.entries[0].selection.score);
+});
+
+test('13. cover.reference counts as cover availability without fabricating a URL', async t => {
+  const refCoverCandidate = makeCandidate({
+    recordId: 'edition-ref',
+    cover: { url: null, reference: 'open_library_cover_id:98765' },
+  });
+  const { directory, adapter } = await createTestIndex([refCoverCandidate]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const plan = await planCatalogPilot({
+    sources: [{ key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' }],
+    adapter,
+  });
+
+  assert.equal(plan.entries[0].status, 'selected');
+  assert.equal(plan.entries[0].quality.hasCover, true);
+  assert.equal(plan.summary.selectedQuality.withCover, 1);
+  assert.equal(plan.summary.selectedQuality.withoutCover, 0);
+  assert.ok(plan.entries[0].selection.reasons.includes('cover'));
+});
+
+test('14. Exact YYYY-MM-DD is classified exact_day', () => {
+  assert.equal(isExactGregorianDay('2021-05-14'), true);
+  assert.equal(isExactGregorianDay('2024-02-29'), true); // Leap year
+  assert.equal(isExactGregorianDay('2021-02-29'), false); // Non-leap year
+  assert.equal(isExactGregorianDay('2021-04-31'), false);
+  assert.equal(isExactGregorianDay('2021'), false);
+  assert.equal(isExactGregorianDay('May 2021'), false);
+
+  assert.equal(classifyPublicationDatePrecision('2021-05-14', 2021), 'exact_day');
+});
+
+test('15. Year-only / partial dates are NOT converted to January 1 / first of month', () => {
+  assert.equal(classifyPublicationDatePrecision('2021', 2021), 'year_or_partial');
+  assert.equal(classifyPublicationDatePrecision('May 2021', 2021), 'year_or_partial');
+  assert.equal(classifyPublicationDatePrecision('2021-05', 2021), 'year_or_partial');
+  assert.equal(classifyPublicationDatePrecision(null, 2021), 'year_or_partial');
+  assert.equal(classifyPublicationDatePrecision(null, null), 'unknown');
+});
+
+test('16. Controlled genre mapping is reported without DB writes', async t => {
+  const candidate = makeCandidate({
+    subjects: ['Science Fiction', 'Space Opera', 'Unknown Tag'],
+  });
+  const { directory, adapter } = await createTestIndex([candidate]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const plan = await planCatalogPilot({
+    sources: [{ key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' }],
+    adapter,
+  });
+
+  assert.equal(plan.entries[0].status, 'selected');
+  assert.equal(plan.entries[0].quality.hasMappedGenre, true);
+  assert.deepEqual(plan.entries[0].quality.mappedGenres, ['science-fiction']);
+});
+
+test('17. Aggregate summary counts and score confidence are deterministic', async t => {
+  const candSelected = makeCandidate({
+    recordId: 'edition-1',
+    isbn13: '9780141439518',
+    subjects: ['Romance'],
+    publicationDate: '2003-05-14',
+  });
+  const candAudio = makeCandidate({
+    recordId: 'edition-audio',
+    isbn13: '9780451524935',
+    title: 'Sense and Sensibility',
+    authors: ['Jane Austen'],
+    format: 'Audiobook',
+  });
+
+  const { directory, adapter } = await createTestIndex([candSelected, candAudio]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const sources = [
+    { key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' },
+    { key: 'sense-and-sensibility', title: 'Sense and Sensibility', author: 'Jane Austen' },
+    { key: 'emma', title: 'Emma', author: 'Jane Austen' },
+  ];
+
+  const plan = await planCatalogPilot({ sources, adapter });
+  assert.deepEqual(plan.summary, {
+    requestedWorks: 3,
+    selected: 1,
+    needsReview: 0,
+    noMatch: 2,
+    candidateCount: 2,
+    rejectedByReason: {
+      rejected_audiobook: 1,
+    },
+    selectedQuality: {
+      withCover: 1,
+      withoutCover: 0,
+      withPublisher: 1,
+      withoutPublisher: 0,
+      withMappedGenre: 1,
+      withoutMappedGenre: 0,
+      exactPublicationDate: 1,
+      yearOrPartialPublicationDate: 0,
+      unknownPublicationDate: 0,
+    },
+    selectionConfidence: {
+      minScore: plan.entries[0].selection.score,
+      medianScore: plan.entries[0].selection.score,
+      maxScore: plan.entries[0].selection.score,
+      lowConfidenceCount: 0,
+    },
+  });
+});
+
+test('18. CLI execution works with --source, --index, and --output arguments', async t => {
+  const candidate = makeCandidate();
+  const { directory, indexPath } = await createTestIndex([candidate]);
+  const sourcePath = join(directory, 'source.json');
+  const outputPath = join(directory, 'output-plan.json');
+
+  await fs.writeFile(sourcePath, JSON.stringify([
+    { key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' },
+  ]), 'utf8');
+
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const { stdout } = await execFileAsync('node', [
+    'scripts/catalog-pilot-plan.js',
+    '--source', sourcePath,
+    '--index', indexPath,
+    '--output', outputPath,
+  ]);
+
+  assert.equal(stdout.trim(), '');
+  const writtenPlan = JSON.parse(await fs.readFile(outputPath, 'utf8'));
+  assert.equal(writtenPlan.planVersion, PILOT_PLAN_VERSION);
+  assert.equal(writtenPlan.summary.selected, 1);
+  assert.equal(writtenPlan.entries[0].selection.isbn13, '9780141439518');
+});
