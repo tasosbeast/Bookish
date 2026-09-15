@@ -178,7 +178,7 @@ test('Challenges frontend: protection, navigation, progress states, completed st
   });
   const navLinks = Array.from(document.querySelectorAll('.main-nav a')).map(a => a.textContent);
   assert.ok(navLinks.includes('Challenges'), 'Challenges appears in main navigation');
-  assert.deepEqual(navLinks, ['Discover', 'Feed', 'My Books', 'Challenges', 'Friends'], 'Main navigation has all 5 items in correct order');
+  assert.deepEqual(navLinks, ['Discover', 'Releases', 'Feed', 'My Books', 'Challenges', 'Friends'], 'Main navigation has items in correct order');
 
   // 3. Partial progress rendering (2 of 3 books)
   await act(async () => {
