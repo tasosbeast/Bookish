@@ -365,7 +365,7 @@ Returns normalized book release events within the requested inclusive date range
 - `from` and `to` are required date strings in `YYYY-MM-DD` format.
 - Validation rejects invalid calendar dates (e.g. `2026-02-31`), `from > to`, and date ranges spanning more than 42 calendar days.
 - **Event Types**:
-  - `release`: Catalog book editions with an exact `publicationDate` in the requested range. Event ID: `release:<bookId>:<publicationDate>`.
+  - `release`: Catalog book editions with verified release provenance (`ReleaseMetadataSource`) where `verifiedPublicationDate` matches `Book.publicationDate` exactly within the requested range. Books without trusted release provenance or with mismatched dates are excluded. Event ID: `release:<bookId>:<publicationDate>`.
 - **Ordering**: Events are sorted deterministically by:
   1. `publicationDate ASC` (date ASC)
   2. `id ASC`

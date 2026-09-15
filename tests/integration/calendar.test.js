@@ -20,6 +20,7 @@ test('PostgreSQL: GET /api/calendar date bounds, release-only events, and valida
 
     t.after(async () => {
       if (bookIds.length) {
+        await prisma.releaseMetadataSource.deleteMany({ where: { bookId: { in: bookIds } } });
         await prisma.bookGenre.deleteMany({ where: { bookId: { in: bookIds } } });
         await prisma.book.deleteMany({ where: { id: { in: bookIds } } });
       }
@@ -64,38 +65,57 @@ test('PostgreSQL: GET /api/calendar date bounds, release-only events, and valida
     genreId = genre.id;
 
     // Helper to create test book
-    async function createBook(title, publicationDate, publicationYear = null) {
+    async function createBook(title, publicationDate, publicationYear = null, verifiedPublicationDate = undefined) {
+      const isbn = `978${Math.floor(1000000000 + Math.random() * 9000000000)}`;
       const book = await prisma.book.create({
         data: {
           title: `${title} ${tag}`,
           author: `Author ${tag}`,
-          isbn: `978${Math.floor(1000000000 + Math.random() * 9000000000)}`,
+          isbn,
           publicationYear: publicationYear ?? (publicationDate ? Number(publicationDate.slice(0, 4)) : 2026),
           publicationDate: publicationDate ? new Date(`${publicationDate}T00:00:00.000Z`) : null,
           bookGenres: { create: { genreId } },
         },
       });
       bookIds.push(book.id);
+
+      if (verifiedPublicationDate !== undefined && verifiedPublicationDate !== null) {
+        await prisma.releaseMetadataSource.create({
+          data: {
+            bookId: book.id,
+            provider: 'prh',
+            sourceUrl: `https://example.com/books/${isbn}`,
+            sourceIsbn: isbn,
+            verifiedPublicationDate: new Date(`${verifiedPublicationDate}T00:00:00.000Z`),
+            lastVerifiedAt: new Date(),
+          },
+        });
+      }
+
       return book;
     }
 
     const rangeFrom = '2026-08-31';
     const rangeTo = '2026-10-11';
 
-    // 1. Release on first visible date (2026-08-31)
-    const bRelFirst = await createBook('Release First Day', '2026-08-31');
-    // 2. Release on last visible date (2026-10-11)
-    const bRelLast = await createBook('Release Last Day', '2026-10-11');
-    // 3. Release inside range (2026-09-15)
-    const bRelMid = await createBook('Release Mid Range', '2026-09-15');
+    // 1. Release on first visible date (2026-08-31) with matching verified date
+    const bRelFirst = await createBook('Release First Day', '2026-08-31', null, '2026-08-31');
+    // 2. Release on last visible date (2026-10-11) with matching verified date
+    const bRelLast = await createBook('Release Last Day', '2026-10-11', null, '2026-10-11');
+    // 3. Release inside range (2026-09-15) with matching verified date
+    const bRelMid = await createBook('Release Mid Range', '2026-09-15', null, '2026-09-15');
     // 4. Another release on same date (2026-09-15) to verify deterministic ID sorting
-    const bRelMid2 = await createBook('Release Mid Range Two', '2026-09-15');
+    const bRelMid2 = await createBook('Release Mid Range Two', '2026-09-15', null, '2026-09-15');
     // 5. Release before range (2026-08-30) - should NOT appear
-    const bRelBefore = await createBook('Release Before', '2026-08-30');
+    const bRelBefore = await createBook('Release Before', '2026-08-30', null, '2026-08-30');
     // 6. Release after range (2026-10-12) - should NOT appear
-    const bRelAfter = await createBook('Release After', '2026-10-12');
+    const bRelAfter = await createBook('Release After', '2026-10-12', null, '2026-10-12');
     // 7. Book with publicationYear only (null publicationDate) - should NOT appear
-    const bYearOnly = await createBook('Release Year Only', null, 2026);
+    const bYearOnly = await createBook('Release Year Only', null, 2026, null);
+    // 8. Book with publicationDate but NO ReleaseMetadataSource (unverified) - should NOT appear
+    const bUnverified = await createBook('Release Unverified', '2026-09-20', null, null);
+    // 9. Book with ReleaseMetadataSource verifiedPublicationDate that does NOT match publicationDate - should NOT appear
+    const bMismatched = await createBook('Release Mismatched', '2026-09-20', null, '2026-09-25');
 
     // ============================================================
     // Test 1: Authentication required
@@ -161,6 +181,8 @@ test('PostgreSQL: GET /api/calendar date bounds, release-only events, and valida
     assert.ok(!eventIds.includes(`release:${bRelBefore.id}:2026-08-30`), 'Release before range excluded');
     assert.ok(!eventIds.includes(`release:${bRelAfter.id}:2026-10-12`), 'Release after range excluded');
     assert.ok(!eventIds.some(id => id.includes(bYearOnly.id)), 'publicationYear-only book excluded');
+    assert.ok(!eventIds.some(id => id.includes(bUnverified.id)), 'Unverified publicationDate book excluded');
+    assert.ok(!eventIds.some(id => id.includes(bMismatched.id)), 'Mismatched publicationDate vs verifiedPublicationDate excluded');
 
     // All events must have type: 'release'
     for (const e of events) {

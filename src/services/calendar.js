@@ -15,39 +15,62 @@ export async function getCalendarEvents({ from, to }) {
   const fromDate = new Date(Date.UTC(fromY, fromM - 1, fromD));
   const dayAfterToDate = new Date(Date.UTC(toY, toM - 1, toD + 1));
 
-  const booksWithReleases = await prisma.book.findMany({
+  const metadataSources = await prisma.releaseMetadataSource.findMany({
     where: {
-      publicationDate: {
+      verifiedPublicationDate: {
         gte: fromDate,
         lt: dayAfterToDate,
       },
+      book: {
+        publicationDate: {
+          not: null,
+        },
+      },
     },
     select: {
-      id: true,
-      title: true,
-      author: true,
-      coverImageUrl: true,
-      publicationDate: true,
+      verifiedPublicationDate: true,
+      book: {
+        select: {
+          id: true,
+          title: true,
+          author: true,
+          coverImageUrl: true,
+          publicationDate: true,
+        },
+      },
     },
     orderBy: [
-      { publicationDate: 'asc' },
-      { id: 'asc' },
+      { verifiedPublicationDate: 'asc' },
+      { bookId: 'asc' },
     ],
   });
 
-  const releaseEvents = booksWithReleases.map(book => {
-    const dateStr = formatUtcDate(book.publicationDate);
-    return {
-      id: `release:${book.id}:${dateStr}`,
+  const releaseEvents = [];
+  for (const source of metadataSources) {
+    if (!source.book?.publicationDate) continue;
+    const verifiedDateStr = formatUtcDate(source.verifiedPublicationDate);
+    const bookDateStr = formatUtcDate(source.book.publicationDate);
+
+    // Strict calendar date equality between verified date and Book.publicationDate
+    if (verifiedDateStr !== bookDateStr) continue;
+
+    releaseEvents.push({
+      id: `release:${source.book.id}:${verifiedDateStr}`,
       type: 'release',
-      date: dateStr,
+      date: verifiedDateStr,
       book: {
-        id: book.id,
-        title: book.title,
-        author: book.author,
-        coverImageUrl: book.coverImageUrl,
+        id: source.book.id,
+        title: source.book.title,
+        author: source.book.author,
+        coverImageUrl: source.book.coverImageUrl,
       },
-    };
+    });
+  }
+
+  releaseEvents.sort((a, b) => {
+    const dateComp = a.date.localeCompare(b.date);
+    if (dateComp !== 0) return dateComp;
+    return a.book.id.localeCompare(b.book.id);
   });
 
   return {
@@ -58,4 +81,5 @@ export async function getCalendarEvents({ from, to }) {
     events: releaseEvents,
   };
 }
+
 
