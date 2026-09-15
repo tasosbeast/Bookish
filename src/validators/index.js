@@ -188,3 +188,37 @@ export const releasesSchema = z.object({
   }).strict(),
 });
 
+export function isValidCalendarDate(val) {
+  if (typeof val !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(val)) return false;
+  const [year, month, day] = val.split('-').map(Number);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const d = new Date(Date.UTC(year, month - 1, day));
+  return d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day;
+}
+
+export const calendarQuerySchema = z.object({
+  query: z.object({
+    from: z.string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be a date-only string in YYYY-MM-DD format')
+      .refine(isValidCalendarDate, 'Must be a valid calendar date'),
+    to: z.string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be a date-only string in YYYY-MM-DD format')
+      .refine(isValidCalendarDate, 'Must be a valid calendar date'),
+  }).strict()
+    .refine(({ from, to }) => from <= to, {
+      message: 'from date must be before or equal to to date',
+      path: ['from'],
+    })
+    .refine(({ from, to }) => {
+      const [fromY, fromM, fromD] = from.split('-').map(Number);
+      const [toY, toM, toD] = to.split('-').map(Number);
+      const fromMs = Date.UTC(fromY, fromM - 1, fromD);
+      const toMs = Date.UTC(toY, toM - 1, toD);
+      const days = Math.round((toMs - fromMs) / (24 * 60 * 60 * 1000)) + 1;
+      return days <= 42;
+    }, {
+      message: 'Date range cannot exceed 42 calendar days',
+      path: ['to'],
+    }),
+});
+

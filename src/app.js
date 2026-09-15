@@ -20,6 +20,7 @@ import { pushRouter } from './routes/push.js';
 import { feedRouter } from './routes/feed.js';
 import { challengesRouter } from './routes/challenges.js';
 import { releasesRouter } from './routes/releases.js';
+import { calendarRouter } from './routes/calendar.js';
 
 export const app = express();
 app.disable('x-powered-by');
@@ -54,6 +55,7 @@ app.use('/api/push', pushRouter);
 app.use('/api/feed', feedRouter);
 app.use('/api/challenges', challengesRouter);
 app.use('/api/releases', releasesRouter);
+app.use('/api/calendar', calendarRouter);
 app.use((req, res, next) => next(new AppError(404, 'NOT_FOUND', 'Route not found')));
 
 app.use(errorHandler);
