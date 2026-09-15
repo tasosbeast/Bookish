@@ -178,11 +178,13 @@ test('5. Non-book / boxed-set / merchandise formats are rejected', async t => {
   assert.equal(plan.summary.rejectedByReason.rejected_boxed_set, 1);
 });
 
-test('6. Known non-English edition is rejected', async t => {
+test('6. Known non-English edition is rejected via language semantics (not title mismatch)', async t => {
   const spanishCandidate = makeCandidate({
     recordId: 'edition-es',
+    isbn13: '9780141439518',
+    title: 'Pride and Prejudice',
+    authors: ['Jane Austen'],
     language: 'spa',
-    title: 'Orgullo y Prejuicio',
   });
   const { directory, adapter } = await createTestIndex([spanishCandidate]);
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
@@ -192,6 +194,7 @@ test('6. Known non-English edition is rejected', async t => {
     adapter,
   });
   assert.equal(plan.entries[0].status, 'no_match');
+  assert.equal(plan.summary.rejectedByReason.rejected_non_english, 1);
 });
 
 test('7. Missing language does not automatically reject an otherwise good edition', async t => {
@@ -228,7 +231,6 @@ test('8. Preferred ISBN receives existing preference semantics', async t => {
   const { directory, adapter } = await createTestIndex([candA, candB]);
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
 
-  // Requesting with preferredIsbn13 = candB
   const plan = await planCatalogPilot({
     sources: [{
       key: 'pride-and-prejudice',
@@ -245,29 +247,54 @@ test('8. Preferred ISBN receives existing preference semantics', async t => {
   assert.ok(plan.entries[0].selection.reasons.includes('preferred_isbn'));
 });
 
-test('9. Pinned ISBN semantics remain respected', async t => {
-  const candA = makeCandidate({
-    recordId: 'edition-a',
+test('9. Pinned ISBN semantics remain respected and never select alternate edition', async t => {
+  const candPinned = makeCandidate({
+    recordId: 'edition-pinned',
     isbn13: '9780141439518',
+    publisher: 'Penguin',
+    format: 'Paperback',
+    cover: null,
+    description: null,
+  });
+  const candAlternateStronger = makeCandidate({
+    recordId: 'edition-alternate',
+    isbn13: '9780451524935',
+    publisher: 'Deluxe Press',
+    format: 'Hardcover',
+    cover: { url: 'https://example.test/deluxe.jpg', reference: 'cover-deluxe' },
+    description: 'Extremely detailed deluxe edition description.',
   });
 
-  const { directory, adapter } = await createTestIndex([candA]);
+  const { directory, adapter } = await createTestIndex([candPinned, candAlternateStronger]);
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
 
-  // Pinned to ISBN B which does not exist in local index
+  // Source pinned to ISBN 9780141439518
   const plan = await planCatalogPilot({
     sources: [{
       key: 'pride-and-prejudice',
       title: 'Pride and Prejudice',
       author: 'Jane Austen',
-      pinnedIsbn13: '9780451524935',
+      pinnedIsbn13: '9780141439518',
     }],
     adapter,
   });
 
-  // Since only candA was found and it mismatches pinnedIsbn13
-  assert.equal(plan.entries[0].status, 'needs_review');
-  assert.equal(plan.entries[0].reason, 'pinned_isbn_mismatch');
+  // Valid pinned edition is selected, alternate is NOT silently chosen despite higher metadata score
+  assert.equal(plan.entries[0].status, 'selected');
+  assert.equal(plan.entries[0].selection.isbn13, '9780141439518');
+
+  // Test when pinned ISBN does not exist in local index: must return needs_review / pinned_isbn_mismatch
+  const missingPinnedPlan = await planCatalogPilot({
+    sources: [{
+      key: 'pride-and-prejudice',
+      title: 'Pride and Prejudice',
+      author: 'Jane Austen',
+      pinnedIsbn13: '9781234567897',
+    }],
+    adapter,
+  });
+  assert.equal(missingPinnedPlan.entries[0].status, 'needs_review');
+  assert.equal(missingPinnedPlan.entries[0].reason, 'pinned_isbn_mismatch');
 });
 
 test('10. No local candidates -> no_match', async t => {
@@ -285,7 +312,6 @@ test('10. No local candidates -> no_match', async t => {
 });
 
 test('11. Ambiguous / unsafe selection -> needs_review rather than guessing', async t => {
-  // Two identically strong candidates with different ISBNs and no preferred ISBN
   const candA = makeCandidate({
     recordId: 'edition-a',
     isbn13: '9780141439518',
@@ -366,8 +392,8 @@ test('13. cover.reference counts as cover availability without fabricating a URL
 
 test('14. Exact YYYY-MM-DD is classified exact_day', () => {
   assert.equal(isExactGregorianDay('2021-05-14'), true);
-  assert.equal(isExactGregorianDay('2024-02-29'), true); // Leap year
-  assert.equal(isExactGregorianDay('2021-02-29'), false); // Non-leap year
+  assert.equal(isExactGregorianDay('2024-02-29'), true);
+  assert.equal(isExactGregorianDay('2021-02-29'), false);
   assert.equal(isExactGregorianDay('2021-04-31'), false);
   assert.equal(isExactGregorianDay('2021'), false);
   assert.equal(isExactGregorianDay('May 2021'), false);
@@ -478,4 +504,105 @@ test('18. CLI execution works with --source, --index, and --output arguments', a
   assert.equal(writtenPlan.planVersion, PILOT_PLAN_VERSION);
   assert.equal(writtenPlan.summary.selected, 1);
   assert.equal(writtenPlan.entries[0].selection.isbn13, '9780141439518');
+});
+
+test('19. Open Library work-identity ambiguity: conflicting distinct work IDs return needs_review', async t => {
+  // Two plausible candidates with same requested title/author, but distinct OL work IDs
+  const candWorkA = makeCandidate({
+    recordId: 'edition-work-a',
+    isbn13: '9780141439518',
+    publisher: 'Penguin',
+    sourceIdentifiers: {
+      openLibraryEdition: '/books/OL100M',
+      openLibraryWorks: '/works/OL100W',
+    },
+    // Higher metadata score
+    cover: { url: 'https://example.test/cover.jpg', reference: 'cover-1' },
+    description: 'Richer description.',
+  });
+  const candWorkB = makeCandidate({
+    recordId: 'edition-work-b',
+    isbn13: '9780451524935',
+    publisher: 'Signet',
+    sourceIdentifiers: {
+      openLibraryEdition: '/books/OL200M',
+      openLibraryWorks: '/works/OL200W',
+    },
+    cover: null,
+    description: null,
+  });
+
+  const { directory, adapter } = await createTestIndex([candWorkA, candWorkB]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const plan = await planCatalogPilot({
+    sources: [{ key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' }],
+    adapter,
+  });
+
+  assert.equal(plan.entries[0].status, 'needs_review');
+  assert.equal(plan.entries[0].reason, 'conflicting_open_library_works');
+  assert.deepEqual(plan.entries[0].conflictingWorkIds, ['/works/OL100W', '/works/OL200W']);
+  assert.equal(plan.entries[0].selection, null);
+});
+
+test('20. Same Open Library work ID across multiple editions proceeds to normal edition selection', async t => {
+  const candA = makeCandidate({
+    recordId: 'edition-work-same-a',
+    isbn13: '9780141439518',
+    publisher: 'Penguin',
+    format: 'Paperback',
+    cover: { url: 'https://example.test/cover.jpg', reference: 'cover-1' },
+    description: 'Detailed description.',
+    sourceIdentifiers: {
+      openLibraryEdition: '/books/OL100M',
+      openLibraryWorks: '/works/OL100W',
+    },
+  });
+  const candB = makeCandidate({
+    recordId: 'edition-work-same-b',
+    isbn13: '9780451524935',
+    publisher: null,
+    format: null,
+    cover: null,
+    description: null,
+    sourceIdentifiers: {
+      openLibraryEdition: '/books/OL101M',
+      openLibraryWorks: '/works/OL100W',
+    },
+  });
+
+  const { directory, adapter } = await createTestIndex([candA, candB]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const plan = await planCatalogPilot({
+    sources: [{ key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' }],
+    adapter,
+  });
+
+  assert.equal(plan.entries[0].status, 'selected');
+  assert.equal(plan.entries[0].selection.isbn13, '9780141439518');
+  assert.deepEqual(plan.entries[0].selection.openLibraryWorks, ['/works/OL100W']);
+});
+
+test('21. Planner explicitly performs no network calls (throws if fetch is called)', async t => {
+  const candidate = makeCandidate();
+  const { directory, adapter } = await createTestIndex([candidate]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () => {
+    throw new Error('Network disabled: no network calls allowed in local pilot planner');
+  };
+
+  try {
+    const plan = await planCatalogPilot({
+      sources: [{ key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' }],
+      adapter,
+    });
+    assert.equal(plan.entries[0].status, 'selected');
+    assert.equal(plan.entries[0].selection.isbn13, '9780141439518');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

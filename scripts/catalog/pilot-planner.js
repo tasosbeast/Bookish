@@ -175,7 +175,82 @@ export async function evaluateSourceEntry(adapter, rawSource) {
     };
   }
 
-  const selectionResult = selectEdition(source, eligibleAdaptedCandidates);
+  // Inspect Open Library work identities across eligible candidates
+  const candidateWorkSets = eligibleAdaptedCandidates
+    .map(c => (c._canonical?.sourceIdentifiers?.openLibraryWorks
+      ? c._canonical.sourceIdentifiers.openLibraryWorks.split(',').map(s => s.trim()).filter(Boolean)
+      : []))
+    .filter(workIds => workIds.length > 0);
+
+  const distinctWorkIds = [...new Set(candidateWorkSets.flat())].sort();
+
+  if (distinctWorkIds.length > 1) {
+    const allShareWorkId = distinctWorkIds.some(workId =>
+      candidateWorkSets.every(workSet => workSet.includes(workId))
+    );
+
+    if (!allShareWorkId) {
+      return {
+        key: source.key,
+        status: 'needs_review',
+        reason: 'conflicting_open_library_works',
+        conflictingWorkIds: distinctWorkIds,
+        candidateCount: canonicalCandidates.length,
+        requested: {
+          key: source.key,
+          title: source.title,
+          author: source.author,
+        },
+        selection: null,
+        quality: null,
+        evaluations,
+      };
+    }
+  }
+
+  // Handle pinnedIsbn13 or preferredIsbn13 without allowAlternateIsbn
+  let candidatesForSelection = eligibleAdaptedCandidates;
+  if (source.pinnedIsbn13) {
+    const matchingPinned = eligibleAdaptedCandidates.filter(c => c.isbn13.includes(source.pinnedIsbn13));
+    if (!matchingPinned.length) {
+      return {
+        key: source.key,
+        status: 'needs_review',
+        reason: 'pinned_isbn_mismatch',
+        candidateCount: canonicalCandidates.length,
+        requested: {
+          key: source.key,
+          title: source.title,
+          author: source.author,
+        },
+        selection: null,
+        quality: null,
+        evaluations,
+      };
+    }
+    candidatesForSelection = matchingPinned;
+  } else if (source.preferredIsbn13 && !source.allowAlternateIsbn) {
+    const matchingPreferred = eligibleAdaptedCandidates.filter(c => c.isbn13.includes(source.preferredIsbn13));
+    if (!matchingPreferred.length) {
+      return {
+        key: source.key,
+        status: 'needs_review',
+        reason: 'preferred_isbn_mismatch',
+        candidateCount: canonicalCandidates.length,
+        requested: {
+          key: source.key,
+          title: source.title,
+          author: source.author,
+        },
+        selection: null,
+        quality: null,
+        evaluations,
+      };
+    }
+    candidatesForSelection = matchingPreferred;
+  }
+
+  const selectionResult = selectEdition(source, candidatesForSelection);
 
   if (selectionResult.status === 'selected') {
     const winningIsbn = selectionResult.isbn;
