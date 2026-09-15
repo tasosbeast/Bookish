@@ -185,7 +185,6 @@ export const feedQuerySchema = z.object({
 export const releasesSchema = z.object({
   query: z.object({
     limit: z.coerce.number().int().min(1).max(50).default(24),
-    asOf: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be a date-only string in YYYY-MM-DD format').optional(),
   }).strict(),
 });
 

@@ -49,12 +49,10 @@ test('Releases validation: releasesSchema validates query params and limits', ()
   // Default limit
   const res1 = releasesSchema.parse({ query: {} });
   assert.equal(res1.query.limit, 24);
-  assert.equal(res1.query.asOf, undefined);
 
   // Custom limit clamped to max 50
-  const res2 = releasesSchema.parse({ query: { limit: '50', asOf: '2026-09-15' } });
+  const res2 = releasesSchema.parse({ query: { limit: '50' } });
   assert.equal(res2.query.limit, 50);
-  assert.equal(res2.query.asOf, '2026-09-15');
 
   // Over limit rejected
   assert.throws(() => releasesSchema.parse({ query: { limit: '51' } }));
@@ -62,10 +60,8 @@ test('Releases validation: releasesSchema validates query params and limits', ()
   assert.throws(() => releasesSchema.parse({ query: { limit: '0' } }));
   assert.throws(() => releasesSchema.parse({ query: { limit: '-5' } }));
 
-  // Invalid date format rejected
-  assert.throws(() => releasesSchema.parse({ query: { asOf: 'invalid-date' } }));
-  assert.throws(() => releasesSchema.parse({ query: { asOf: '2026/09/15' } }));
-  assert.throws(() => releasesSchema.parse({ query: { asOf: '09-15-2026' } }));
+  // asOf query param is rejected by strict validator
+  assert.throws(() => releasesSchema.parse({ query: { asOf: '2026-09-15' } }));
 });
 
 test('Releases filtering and sorting logic with explicit asOf date', () => {

@@ -5,6 +5,13 @@ import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { app } from '../../src/app.js';
 import { prisma } from '../../src/lib/prisma.js';
+import { calculateReleaseWindows, getUtcTodayString } from '../../src/services/releases.js';
+
+function addDays(isoDateStr, days) {
+  const d = new Date(`${isoDateStr}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
 
 test('PostgreSQL: GET /api/releases rolling date windows, sorting, limits and database semantics',
   { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async t => {
@@ -29,7 +36,17 @@ test('PostgreSQL: GET /api/releases rolling date windows, sorting, limits and da
     });
     genreId = genre.id;
 
-    const asOf = '2026-09-15';
+    const todayStr = getUtcTodayString();
+    const windows = calculateReleaseWindows(todayStr);
+
+    const dateToday = todayStr;
+    const date90DaysAgo = windows.windows.newReleases.from;
+    const date91DaysAgo = addDays(date90DaysAgo, -1);
+    const dateTomorrow = addDays(todayStr, 1);
+    const date180DaysFuture = windows.windows.upcoming.to;
+    const date181DaysFuture = addDays(date180DaysFuture, 1);
+    const dateMidNew = addDays(todayStr, -10);
+    const dateProv = addDays(todayStr, -5);
 
     // Helper to create test books
     async function createTestBook(title, publicationDate, options = {}) {
@@ -63,42 +80,39 @@ test('PostgreSQL: GET /api/releases rolling date windows, sorting, limits and da
     const bNull = await createTestBook('Book Null Date', null);
     // 2. publicationYear only
     const bYearOnly = await createTestBook('Book Year Only', null, { publicationYear: 2026 });
-    // 3. exactly today: 2026-09-15
-    const bToday = await createTestBook('Book Today', '2026-09-15');
-    // 4. 90 days before: 2026-06-17
-    const b90DaysAgo = await createTestBook('Book 90 Days Ago', '2026-06-17');
-    // 5. 91 days before: 2026-06-16
-    const b91DaysAgo = await createTestBook('Book 91 Days Ago', '2026-06-16');
-    // 6. tomorrow: 2026-09-16
-    const bTomorrow = await createTestBook('Book Tomorrow', '2026-09-16');
-    // 7. 180 days after: 2027-03-14
-    const b180DaysFuture = await createTestBook('Book 180 Days Future', '2027-03-14');
-    // 8. 181 days after: 2027-03-15
-    const b181DaysFuture = await createTestBook('Book 181 Days Future', '2027-03-15');
+    // 3. exactly today
+    const bToday = await createTestBook('Book Today', dateToday);
+    // 4. 90 days before
+    const b90DaysAgo = await createTestBook('Book 90 Days Ago', date90DaysAgo);
+    // 5. 91 days before
+    const b91DaysAgo = await createTestBook('Book 91 Days Ago', date91DaysAgo);
+    // 6. tomorrow
+    const bTomorrow = await createTestBook('Book Tomorrow', dateTomorrow);
+    // 7. 180 days after
+    const b180DaysFuture = await createTestBook('Book 180 Days Future', date180DaysFuture);
+    // 8. 181 days after
+    const b181DaysFuture = await createTestBook('Book 181 Days Future', date181DaysFuture);
     // 9. Book with provenance
-    const bWithProv = await createTestBook('Book With Provenance', '2026-09-10', { withProvenance: true });
+    const bWithProv = await createTestBook('Book With Provenance', dateProv, { withProvenance: true });
     // 10 & 11: Two books on same day for tie-breaking
-    const bTieA = await createTestBook('Book Tie A', '2026-08-01');
-    const bTieB = await createTestBook('Book Tie B', '2026-08-01');
+    const bTieA = await createTestBook('Book Tie A', dateMidNew);
+    const bTieB = await createTestBook('Book Tie B', dateMidNew);
 
-    // Make request to GET /api/releases with explicit asOf
+    // Verify GET /api/releases?asOf=... is rejected with 400
+    await request(app)
+      .get('/api/releases')
+      .query({ asOf: '2026-09-15' })
+      .expect(400);
+
+    // Make request to public GET /api/releases
     const res = await request(app)
       .get('/api/releases')
-      .query({ asOf, limit: 50 })
+      .query({ limit: 50 })
       .expect(200);
 
     // Verify response structure
-    assert.equal(res.body.asOf, '2026-09-15');
-    assert.deepEqual(res.body.windows, {
-      newReleases: {
-        from: '2026-06-17',
-        to: '2026-09-15',
-      },
-      upcoming: {
-        fromExclusive: '2026-09-15',
-        to: '2027-03-14',
-      },
-    });
+    assert.equal(res.body.asOf, todayStr);
+    assert.deepEqual(res.body.windows, windows.windows);
 
     const newIds = res.body.newReleases.map(b => b.id);
     const upIds = res.body.upcoming.map(b => b.id);
@@ -143,7 +157,7 @@ test('PostgreSQL: GET /api/releases rolling date windows, sorting, limits and da
     }
 
     // 12: Deterministic tie-breaking by id
-    const ties = filteredNew.filter(b => b.publicationDate === '2026-08-01');
+    const ties = filteredNew.filter(b => b.publicationDate === dateMidNew);
     assert.equal(ties.length, 2);
     assert.ok(ties[0].id < ties[1].id, 'tie-breaker sorts by id asc');
 
@@ -155,7 +169,7 @@ test('PostgreSQL: GET /api/releases rolling date windows, sorting, limits and da
     // 14: Limit behavior
     const limitRes = await request(app)
       .get('/api/releases')
-      .query({ asOf, limit: 1 })
+      .query({ limit: 1 })
       .expect(200);
     assert.ok(limitRes.body.newReleases.length <= 1);
     assert.ok(limitRes.body.upcoming.length <= 1);
