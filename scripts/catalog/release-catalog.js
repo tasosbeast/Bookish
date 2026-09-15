@@ -192,25 +192,23 @@ export function validateReleaseCatalogRecords(rawRecords) {
     }
 
     // 6. genres
-    const rawGenres = typeof record.genres === 'string' ? record.genres.trim() : '';
     let genreSlugs = [];
-    if (!rawGenres) {
+    if (Array.isArray(record.genres)) {
+      genreSlugs = record.genres.map(g => typeof g === 'string' ? g.trim() : '').filter(Boolean);
+    } else if (typeof record.genres === 'string' && record.genres.trim()) {
+      genreSlugs = record.genres.split(';').map(g => g.trim()).filter(Boolean);
+    }
+    if (genreSlugs.length === 0) {
       invalidRows.push({ line, row, field: 'genres', message: 'genres is required and cannot be blank (at least 1 genre required)' });
       isRecordValid = false;
+    } else if (genreSlugs.length > 3) {
+      invalidRows.push({ line, row, field: 'genres', value: record.genres, message: `Too many genres (${genreSlugs.length}); maximum 3 allowed` });
+      isRecordValid = false;
     } else {
-      genreSlugs = rawGenres.split(';').map(g => g.trim()).filter(Boolean);
-      if (genreSlugs.length === 0) {
-        invalidRows.push({ line, row, field: 'genres', message: 'genres cannot be empty; at least 1 genre required' });
+      const unique = new Set(genreSlugs);
+      if (unique.size !== genreSlugs.length) {
+        invalidRows.push({ line, row, field: 'genres', value: record.genres, message: `Duplicate genre slugs in row: ${Array.isArray(record.genres) ? record.genres.join(';') : record.genres}` });
         isRecordValid = false;
-      } else if (genreSlugs.length > 3) {
-        invalidRows.push({ line, row, field: 'genres', value: rawGenres, message: `Too many genres (${genreSlugs.length}); maximum 3 allowed` });
-        isRecordValid = false;
-      } else {
-        const unique = new Set(genreSlugs);
-        if (unique.size !== genreSlugs.length) {
-          invalidRows.push({ line, row, field: 'genres', value: rawGenres, message: `Duplicate genre slugs in row: ${rawGenres}` });
-          isRecordValid = false;
-        }
       }
     }
 
@@ -286,16 +284,29 @@ export async function importReleaseCatalog(db, options = {}) {
     apply = false,
   } = options;
 
-  let csvContent = options.csvContent;
-  if (csvContent === undefined) {
-    if (!fs.existsSync(source)) {
-      throw new ReleaseCatalogError('source_missing', `Source file not found: ${source}`);
-    }
-    csvContent = fs.readFileSync(source, 'utf8');
-  }
+  let rawRecordsLength = 0;
+  let invalidRows, validRows;
 
-  const rawRecords = parseReleaseCatalogCsv(csvContent);
-  const { invalidRows, validRows } = validateReleaseCatalogRecords(rawRecords);
+  if (options.records || options.entries) {
+    const rawInput = options.records || options.entries;
+    rawRecordsLength = rawInput.length;
+    const validated = validateReleaseCatalogRecords(rawInput);
+    invalidRows = validated.invalidRows;
+    validRows = validated.validRows;
+  } else {
+    let csvContent = options.csvContent;
+    if (csvContent === undefined) {
+      if (!fs.existsSync(source)) {
+        throw new ReleaseCatalogError('source_missing', `Source file not found: ${source}`);
+      }
+      csvContent = fs.readFileSync(source, 'utf8');
+    }
+    const rawRecords = parseReleaseCatalogCsv(csvContent);
+    rawRecordsLength = rawRecords.length;
+    const validated = validateReleaseCatalogRecords(rawRecords);
+    invalidRows = validated.invalidRows;
+    validRows = validated.validRows;
+  }
 
   const seenIsbns = new Map();
   const seenWorks = new Map();
@@ -525,7 +536,7 @@ export async function importReleaseCatalog(db, options = {}) {
   );
 
   const summary = {
-    sourceRows: rawRecords.length,
+    sourceRows: rawRecordsLength,
     validRows: validRows.length,
     invalidRows: details.invalidRows.length,
     duplicateIsbns: details.duplicateIsbns.length,

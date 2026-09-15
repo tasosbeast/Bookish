@@ -26,6 +26,7 @@
     "catalog:ol-author-index-build": "node scripts/ol-author-index-build.js",
     "catalog:ol-snapshot-build": "node scripts/ol-snapshot-build.js",
     "release:readiness": "node scripts/release-data-readiness.js",
+    "release:prh-sync": "node scripts/sync-prh-releases.js",
     "test": "node --test tests/*.test.js",
     "test:integration": "node --test --test-concurrency=1 tests/integration/*.test.js",
     "db:generate": "prisma generate",
