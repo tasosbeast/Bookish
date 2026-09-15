@@ -163,23 +163,31 @@ test('Discover releases integration: limit 24, default 8, independent inline exp
   assert.equal(mainNavReleases, undefined, 'Releases main-nav link remains absent');
 
   // ============================================================
-  // Test 4, 5, 6, 7: Show more / Show less buttons & independent expansion
+  // Test 4, 5, 6, 7: Show more / Show less buttons & independent expansion below grids
   // ============================================================
   const newSection = document.querySelector('section[aria-labelledby="new-releases-heading"]');
   const upcomingSection = document.querySelector('section[aria-labelledby="upcoming-releases-heading"]');
 
-  const showMoreNew = newSection.querySelector('button.text-button');
-  const showMoreUpcoming = upcomingSection.querySelector('button.text-button');
+  // Verify section headings do not contain expansion buttons
+  assert.equal(newSection.querySelector('.section-heading button'), null, 'New Releases heading has no expansion button');
+  assert.equal(upcomingSection.querySelector('.section-heading button'), null, 'Upcoming heading has no expansion button');
+
+  const showMoreNew = newSection.querySelector('.section-actions button.text-button');
+  const showMoreUpcoming = upcomingSection.querySelector('.section-actions button.text-button');
 
   assert.ok(showMoreNew, 'New Releases Show more button rendered when >8 books');
   assert.equal(showMoreNew.textContent.trim(), 'Show more');
   assert.equal(showMoreNew.getAttribute('aria-expanded'), 'false');
   assert.equal(showMoreNew.getAttribute('aria-controls'), 'new-releases-grid');
+  assert.ok(newGrid.nextElementSibling.contains(showMoreNew), 'Show more container appears immediately after New Releases grid');
+  assert.ok(newGrid.compareDocumentPosition(showMoreNew) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING, 'Show more appears after New Releases grid');
 
   assert.ok(showMoreUpcoming, 'Upcoming Show more button rendered when >8 books');
   assert.equal(showMoreUpcoming.textContent.trim(), 'Show more');
   assert.equal(showMoreUpcoming.getAttribute('aria-expanded'), 'false');
   assert.equal(showMoreUpcoming.getAttribute('aria-controls'), 'upcoming-releases-grid');
+  assert.ok(upGrid.nextElementSibling.contains(showMoreUpcoming), 'Show more container appears immediately after Upcoming grid');
+  assert.ok(upGrid.compareDocumentPosition(showMoreUpcoming) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING, 'Show more appears after Upcoming grid');
 
   // Test 6: Expanding New Releases does NOT expand Upcoming
   await act(async () => {
@@ -189,6 +197,7 @@ test('Discover releases integration: limit 24, default 8, independent inline exp
   assert.equal(newSection.querySelectorAll('.book-card').length, 12, 'New Releases expands to all 12 returned books');
   assert.equal(showMoreNew.textContent.trim(), 'Show less', 'Button text toggles to Show less');
   assert.equal(showMoreNew.getAttribute('aria-expanded'), 'true');
+  assert.ok(newGrid.compareDocumentPosition(showMoreNew) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING, 'Show less remains below the expanded New Releases grid');
   assert.equal(upcomingSection.querySelectorAll('.book-card').length, 8, 'Upcoming remains collapsed at 8 books');
 
   // Test 7: Expanding Upcoming does NOT collapse New Releases (independent expansion)
@@ -199,6 +208,7 @@ test('Discover releases integration: limit 24, default 8, independent inline exp
   assert.equal(upcomingSection.querySelectorAll('.book-card').length, 10, 'Upcoming expands to all 10 returned books');
   assert.equal(showMoreUpcoming.textContent.trim(), 'Show less');
   assert.equal(showMoreUpcoming.getAttribute('aria-expanded'), 'true');
+  assert.ok(upGrid.compareDocumentPosition(showMoreUpcoming) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING, 'Show less remains below the expanded Upcoming grid');
   assert.equal(newSection.querySelectorAll('.book-card').length, 12, 'New Releases remains expanded');
 
   // Test 4: Show less collapses back to 8
@@ -209,6 +219,7 @@ test('Discover releases integration: limit 24, default 8, independent inline exp
   assert.equal(newSection.querySelectorAll('.book-card').length, 8, 'New Releases collapses back to 8 books');
   assert.equal(showMoreNew.textContent.trim(), 'Show more');
   assert.equal(showMoreNew.getAttribute('aria-expanded'), 'false');
+  assert.ok(newGrid.compareDocumentPosition(showMoreNew) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING, 'Show more appears immediately after 8-card grid');
   assert.equal(upcomingSection.querySelectorAll('.book-card').length, 10, 'Upcoming remains expanded');
 
   // ============================================================

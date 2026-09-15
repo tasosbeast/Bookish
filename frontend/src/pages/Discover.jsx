@@ -186,30 +186,34 @@ export default function Discover() {
                   <p className="eyebrow">Just arrived</p>
                   <h2 id="new-releases-heading">New Releases</h2>
                 </div>
-                {allNewReleases.length > 8 && (
-                  <button
-                    type="button"
-                    className="text-button"
-                    aria-expanded={expandedNew}
-                    aria-controls="new-releases-grid"
-                    onClick={() => setExpandedNew(prev => !prev)}
-                  >
-                    {expandedNew ? 'Show less' : 'Show more'}
-                  </button>
-                )}
               </div>
               {allNewReleases.length > 0 ? (
-                <div id="new-releases-grid" className="book-grid">
-                  {visibleNewReleases.map(book => (
-                    <ReleaseCard
-                      key={book.id}
-                      book={book}
-                      type="new"
-                      onSelectAuthor={author => change({ author })}
-                      onSelectGenre={slug => change({ genre: slug })}
-                    />
-                  ))}
-                </div>
+                <>
+                  <div id="new-releases-grid" className="book-grid">
+                    {visibleNewReleases.map(book => (
+                      <ReleaseCard
+                        key={book.id}
+                        book={book}
+                        type="new"
+                        onSelectAuthor={author => change({ author })}
+                        onSelectGenre={slug => change({ genre: slug })}
+                      />
+                    ))}
+                  </div>
+                  {allNewReleases.length > 8 && (
+                    <div className="section-actions">
+                      <button
+                        type="button"
+                        className="text-button"
+                        aria-expanded={expandedNew}
+                        aria-controls="new-releases-grid"
+                        onClick={() => setExpandedNew(prev => !prev)}
+                      >
+                        {expandedNew ? 'Show less' : 'Show more'}
+                      </button>
+                    </div>
+                  )}
+                </>
               ) : (
                 <EmptyState title="No recent releases yet.">
                   Check back soon for freshly published books added to the catalog.
@@ -223,30 +227,34 @@ export default function Discover() {
                   <p className="eyebrow">On the horizon</p>
                   <h2 id="upcoming-releases-heading">Upcoming</h2>
                 </div>
-                {allUpcoming.length > 8 && (
-                  <button
-                    type="button"
-                    className="text-button"
-                    aria-expanded={expandedUpcoming}
-                    aria-controls="upcoming-releases-grid"
-                    onClick={() => setExpandedUpcoming(prev => !prev)}
-                  >
-                    {expandedUpcoming ? 'Show less' : 'Show more'}
-                  </button>
-                )}
               </div>
               {allUpcoming.length > 0 ? (
-                <div id="upcoming-releases-grid" className="book-grid">
-                  {visibleUpcoming.map(book => (
-                    <ReleaseCard
-                      key={book.id}
-                      book={book}
-                      type="upcoming"
-                      onSelectAuthor={author => change({ author })}
-                      onSelectGenre={slug => change({ genre: slug })}
-                    />
-                  ))}
-                </div>
+                <>
+                  <div id="upcoming-releases-grid" className="book-grid">
+                    {visibleUpcoming.map(book => (
+                      <ReleaseCard
+                        key={book.id}
+                        book={book}
+                        type="upcoming"
+                        onSelectAuthor={author => change({ author })}
+                        onSelectGenre={slug => change({ genre: slug })}
+                      />
+                    ))}
+                  </div>
+                  {allUpcoming.length > 8 && (
+                    <div className="section-actions">
+                      <button
+                        type="button"
+                        className="text-button"
+                        aria-expanded={expandedUpcoming}
+                        aria-controls="upcoming-releases-grid"
+                        onClick={() => setExpandedUpcoming(prev => !prev)}
+                      >
+                        {expandedUpcoming ? 'Show less' : 'Show more'}
+                      </button>
+                    </div>
+                  )}
+                </>
               ) : (
                 <EmptyState title="No upcoming releases yet.">
                   Check back soon for upcoming titles arriving in the coming months.
