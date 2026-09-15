@@ -96,7 +96,7 @@ test('Calendar helpers: formatUtcDate handles string and Date instances without 
   assert.equal(formatUtcDate(d2), '2027-01-01');
 });
 
-test('Calendar normalization and deterministic ordering: sorts by date ASC, type ASC, id ASC', () => {
+test('Calendar normalization and deterministic ordering: sorts releases by date ASC, id ASC', () => {
   const events = [
     {
       id: 'release:book-2:2026-09-15',
@@ -105,16 +105,10 @@ test('Calendar normalization and deterministic ordering: sorts by date ASC, type
       book: { id: 'book-2', title: 'Book 2', author: 'Author 2', coverImageUrl: null },
     },
     {
-      id: 'finished:act-2',
-      type: 'finished',
+      id: 'release:book-3:2026-09-15',
+      type: 'release',
       date: '2026-09-15',
-      book: { id: 'book-1', title: 'Book 1', author: 'Author 1', coverImageUrl: null },
-    },
-    {
-      id: 'finished:act-1',
-      type: 'finished',
-      date: '2026-09-15',
-      book: { id: 'book-1', title: 'Book 1', author: 'Author 1', coverImageUrl: null },
+      book: { id: 'book-3', title: 'Book 3', author: 'Author 3', coverImageUrl: null },
     },
     {
       id: 'release:book-1:2026-09-01',
@@ -123,26 +117,24 @@ test('Calendar normalization and deterministic ordering: sorts by date ASC, type
       book: { id: 'book-1', title: 'Book 1', author: 'Author 1', coverImageUrl: null },
     },
     {
-      id: 'finished:act-3',
-      type: 'finished',
+      id: 'release:book-4:2026-09-20',
+      type: 'release',
       date: '2026-09-20',
-      book: { id: 'book-3', title: 'Book 3', author: 'Author 3', coverImageUrl: null },
+      book: { id: 'book-4', title: 'Book 4', author: 'Author 4', coverImageUrl: null },
     },
   ];
 
   const sorted = [...events].sort((a, b) => {
     const dateComp = a.date.localeCompare(b.date);
     if (dateComp !== 0) return dateComp;
-    const typeComp = a.type.localeCompare(b.type);
-    if (typeComp !== 0) return typeComp;
     return a.id.localeCompare(b.id);
   });
 
   assert.deepEqual(sorted.map(e => e.id), [
     'release:book-1:2026-09-01',
-    'finished:act-1',
-    'finished:act-2',
     'release:book-2:2026-09-15',
-    'finished:act-3',
+    'release:book-3:2026-09-15',
+    'release:book-4:2026-09-20',
   ]);
 });
+

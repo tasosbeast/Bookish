@@ -109,26 +109,14 @@ export default function Calendar() {
   }
 
   const selectedEvents = selectedDate ? eventsByDate.get(selectedDate) || [] : [];
-  const selectedReleases = selectedEvents.filter(e => e.type === 'release');
-  const selectedFinished = selectedEvents.filter(e => e.type === 'finished');
 
   return (
     <div className="container calendar-page">
       <header className="calendar-page-header">
         <div>
-          <p className="eyebrow">Reading Schedule</p>
+          <p className="eyebrow">Release Schedule</p>
           <h1>Calendar</h1>
-          <p className="calendar-subtitle">Your reading life, one month at a time.</p>
-        </div>
-        <div className="calendar-legend" aria-label="Calendar legend">
-          <span className="legend-item legend-release">
-            <Icon name="book" size={13} />
-            <span>Book release</span>
-          </span>
-          <span className="legend-item legend-finished">
-            <Icon name="check" size={13} />
-            <span>Finished reading</span>
-          </span>
+          <p className="calendar-subtitle">Book releases, one month at a time.</p>
         </div>
       </header>
 
@@ -199,7 +187,7 @@ export default function Calendar() {
                   className={`calendar-cell${cell.isCurrentMonth ? '' : ' outside-month'}${isToday ? ' is-today' : ''}${isSelected ? ' is-selected' : ''}`}
                   role="gridcell"
                   tabIndex={0}
-                  aria-label={`${cell.dateStr}: ${dayEvents.length} events`}
+                  aria-label={`${cell.dateStr}: ${dayEvents.length} releases`}
                   onClick={() => setSelectedDate(cell.dateStr)}
                   onKeyDown={e => {
                     if (e.key === 'Enter' || e.key === ' ') {
@@ -219,11 +207,11 @@ export default function Calendar() {
                       <Link
                         key={event.id}
                         to={`/books/${event.book.id}`}
-                        className={`calendar-event-badge event-${event.type}`}
-                        aria-label={`${event.type === 'release' ? 'Release' : 'Finished'}: ${event.book.title}`}
+                        className="calendar-event-badge event-release"
+                        aria-label={`Release: ${event.book.title}`}
                         onClick={e => e.stopPropagation()}
                       >
-                        <Icon name={event.type === 'release' ? 'book' : 'check'} size={12} />
+                        <Icon name="book" size={12} />
                         <span className="calendar-event-title">{event.book.title}</span>
                       </Link>
                     ))}
@@ -232,7 +220,7 @@ export default function Calendar() {
                       <button
                         type="button"
                         className="calendar-more-button text-button"
-                        aria-label={`View ${dayEvents.length} events on ${cell.dateStr}`}
+                        aria-label={`View ${dayEvents.length} releases on ${cell.dateStr}`}
                         onClick={e => {
                           e.stopPropagation();
                           setSelectedDate(cell.dateStr);
@@ -266,46 +254,25 @@ export default function Calendar() {
           </div>
 
           {selectedEvents.length === 0 ? (
-            <p className="muted small">No events recorded on this date.</p>
+            <p className="muted small">No book releases on this date.</p>
           ) : (
             <div className="day-details-content">
-              {selectedReleases.length > 0 && (
-                <div className="day-details-group">
-                  <h4>Book releases ({selectedReleases.length})</h4>
-                  <ul className="day-events-list">
-                    {selectedReleases.map(event => (
-                      <li key={event.id} className="day-event-item">
-                        <Icon name="book" size={16} />
-                        <div className="day-event-info">
-                          <Link to={`/books/${event.book.id}`} className="day-event-book-title">
-                            {event.book.title}
-                          </Link>
-                          <span className="day-event-author">by {event.book.author}</span>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {selectedFinished.length > 0 && (
-                <div className="day-details-group">
-                  <h4>Finished reading ({selectedFinished.length})</h4>
-                  <ul className="day-events-list">
-                    {selectedFinished.map(event => (
-                      <li key={event.id} className="day-event-item">
-                        <Icon name="check" size={16} />
-                        <div className="day-event-info">
-                          <Link to={`/books/${event.book.id}`} className="day-event-book-title">
-                            {event.book.title}
-                          </Link>
-                          <span className="day-event-author">by {event.book.author}</span>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+              <div className="day-details-group">
+                <h4>Releases ({selectedEvents.length})</h4>
+                <ul className="day-events-list">
+                  {selectedEvents.map(event => (
+                    <li key={event.id} className="day-event-item">
+                      <Icon name="book" size={16} />
+                      <div className="day-event-info">
+                        <Link to={`/books/${event.book.id}`} className="day-event-book-title">
+                          {event.book.title}
+                        </Link>
+                        <span className="day-event-author">by {event.book.author}</span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </div>
           )}
         </section>
@@ -313,3 +280,4 @@ export default function Calendar() {
     </div>
   );
 }
+

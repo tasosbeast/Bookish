@@ -360,17 +360,15 @@ All calendar routes require `Authorization: Bearer <accessToken>`. Responses use
 
 `GET /api/calendar?from=YYYY-MM-DD&to=YYYY-MM-DD`
 
-Returns normalized calendar events within the requested inclusive date range `[from, to]`.
+Returns normalized book release events within the requested inclusive date range `[from, to]`.
 
 - `from` and `to` are required date strings in `YYYY-MM-DD` format.
 - Validation rejects invalid calendar dates (e.g. `2026-02-31`), `from > to`, and date ranges spanning more than 42 calendar days.
 - **Event Types**:
   - `release`: Catalog book editions with an exact `publicationDate` in the requested range. Event ID: `release:<bookId>:<publicationDate>`.
-  - `finished`: Finished reading activity records (`Activity.type = finished_reading`) for the authenticated user where `finishedOn` is in the requested range. Event ID: `finished:<activityId>`. `historical=true` completions are included; rereads are preserved as distinct events.
 - **Ordering**: Events are sorted deterministically by:
-  1. `date ASC`
-  2. `type ASC` (`'finished'` before `'release'`)
-  3. `id ASC`
+  1. `publicationDate ASC` (date ASC)
+  2. `id ASC`
 
 Response shape:
 
@@ -381,17 +379,6 @@ Response shape:
     "to": "2026-10-11"
   },
   "events": [
-    {
-      "id": "finished:22222222-2222-4222-8222-222222222222",
-      "type": "finished",
-      "date": "2026-09-05",
-      "book": {
-        "id": "33333333-3333-4333-8333-333333333333",
-        "title": "The Hobbit",
-        "author": "J.R.R. Tolkien",
-        "coverImageUrl": null
-      }
-    },
     {
       "id": "release:44444444-4444-4444-8444-444444444444:2026-09-24",
       "type": "release",
@@ -406,6 +393,7 @@ Response shape:
   ]
 }
 ```
+
 
 
 

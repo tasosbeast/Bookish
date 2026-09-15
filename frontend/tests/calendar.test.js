@@ -57,34 +57,34 @@ test('Calendar frontend: protection, nav, 42-cell grid, month navigation, URL st
         },
       },
       {
-        id: 'finished:act-fin-1',
-        type: 'finished',
+        id: 'release:book-rel-2:2026-09-05',
+        type: 'release',
         date: '2026-09-05',
         book: {
-          id: 'book-fin-1',
+          id: 'book-rel-2',
           title: 'The Great Journey',
           author: 'John Writer',
           coverImageUrl: null,
         },
       },
-      // Third event on 2026-09-05 to cause overflow (>2)
+      // Third release event on 2026-09-05 to cause overflow (>2)
       {
-        id: 'finished:act-fin-2',
-        type: 'finished',
+        id: 'release:book-rel-3:2026-09-05',
+        type: 'release',
         date: '2026-09-05',
         book: {
-          id: 'book-fin-2',
+          id: 'book-rel-3',
           title: 'Another Tale',
           author: 'Third Author',
           coverImageUrl: null,
         },
       },
       {
-        id: 'release:book-rel-2:2026-09-24',
+        id: 'release:book-rel-4:2026-09-24',
         type: 'release',
         date: '2026-09-24',
         book: {
-          id: 'book-rel-2',
+          id: 'book-rel-4',
           title: 'Winter Horizon',
           author: 'Jane Author',
           coverImageUrl: null,
@@ -268,7 +268,8 @@ test('Calendar frontend: protection, nav, 42-cell grid, month navigation, URL st
 
   // Header & Title
   assert.ok(document.body.textContent.includes('September 2026'), 'Month title rendered in header');
-  assert.ok(document.querySelector('.calendar-legend'), 'Legend rendered');
+  assert.equal(document.body.textContent.includes('Finished reading'), false, 'No finished reading text rendered');
+  assert.equal(document.querySelector('.legend-finished'), null, 'No finished legend rendered');
 
   // Weekdays (Mon - Sun)
   const weekdays = [...document.querySelectorAll('.calendar-weekday-header')].map(el => el.textContent.trim());
@@ -283,9 +284,9 @@ test('Calendar frontend: protection, nav, 42-cell grid, month navigation, URL st
   assert.ok(cells[41].classList.contains('outside-month'), 'Last cell has outside-month styling');
   assert.ok(!cells[1].classList.contains('outside-month'), 'Sep 1 cell is current month');
 
-  // Release and Finished event badges
+  // Release event badges
   assert.ok(document.body.textContent.includes('Autumn Leaves'), 'Release event rendered');
-  assert.ok(document.body.textContent.includes('The Great Journey'), 'Finished event rendered');
+  assert.ok(document.body.textContent.includes('The Great Journey'), 'Second release event rendered');
   assert.ok(document.body.textContent.includes('Winter Horizon'), 'Winter Horizon release rendered');
 
   // Event links point to /books/:id
@@ -298,7 +299,7 @@ test('Calendar frontend: protection, nav, 42-cell grid, month navigation, URL st
   assert.ok(moreBtn, '+N more button rendered for day with 3 events');
   assert.equal(moreBtn.textContent.trim(), '+1 more');
 
-  // Clicking +1 more opens day details panel with all 3 events
+  // Clicking +1 more opens day details panel with all 3 release events
   await act(async () => {
     moreBtn.click();
   });
@@ -306,9 +307,9 @@ test('Calendar frontend: protection, nav, 42-cell grid, month navigation, URL st
   let dayDetails = document.querySelector('.calendar-day-details');
   assert.ok(dayDetails, 'Selected day details panel rendered');
   assert.ok(dayDetails.textContent.includes('September 5, 2026'), 'Details date header rendered');
-  assert.ok(dayDetails.textContent.includes('Book releases (1)'), 'Releases heading in details');
-  assert.ok(dayDetails.textContent.includes('Finished reading (2)'), 'Finished heading in details');
-  assert.ok(dayDetails.textContent.includes('Another Tale'), '3rd event visible in details');
+  assert.ok(dayDetails.textContent.includes('Releases (3)'), 'Releases count heading in details');
+  assert.equal(dayDetails.textContent.includes('Finished reading'), false, 'No finished reading section in details');
+  assert.ok(dayDetails.textContent.includes('Another Tale'), '3rd release event visible in details');
 
   // ============================================================
   // Test 21, 22, 23: Previous, Next, Today controls & selected-day reset
@@ -359,7 +360,7 @@ test('Calendar frontend: protection, nav, 42-cell grid, month navigation, URL st
   assert.equal(document.querySelector('.calendar-day-details'), null, 'Direct URL/query month change cleared selected day');
 
   // ============================================================
-  // Test 24: Empty month still renders 42-cell calendar
+  // Test 24: Empty month still renders 42-cell calendar and empty details
   // ============================================================
   calendarApiResponse = {
     range: { from: '2026-08-31', to: '2026-10-11' },
@@ -380,6 +381,13 @@ test('Calendar frontend: protection, nav, 42-cell grid, month navigation, URL st
 
   assert.equal(document.querySelectorAll('.calendar-cell').length, 42, 'Empty month still renders 42 cells');
   assert.equal(document.querySelectorAll('.calendar-event-badge').length, 0, 'No event badges in empty month');
+
+  // Click cell in empty month
+  const emptyCell = document.querySelectorAll('.calendar-cell')[1];
+  await act(async () => {
+    emptyCell.click();
+  });
+  assert.ok(document.body.textContent.includes('No book releases on this date.'), 'Empty day details message rendered');
 
   // ============================================================
   // Test 25: API error shows ErrorNotice and retry button without breaking shell
@@ -409,4 +417,5 @@ test('Calendar frontend: protection, nav, 42-cell grid, month navigation, URL st
   });
   assert.equal(document.querySelector('[role="alert"]'), null, 'Error notice dismissed on successful retry');
 });
+
 
