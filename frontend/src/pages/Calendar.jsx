@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useResource } from '../hooks/useResource.js';
 import { Icon, ErrorNotice, Loading } from '../components/shared.jsx';
@@ -80,10 +80,19 @@ export default function Calendar() {
   const parsedMonth = useMemo(() => parseMonthParam(rawMonth), [rawMonth]);
 
   const [selectedDate, setSelectedDate] = useState(null);
+  const detailsRef = useRef(null);
+  const shouldScrollRef = useRef(false);
 
   useEffect(() => {
     setSelectedDate(null);
   }, [parsedMonth.str]);
+
+  useEffect(() => {
+    if (selectedDate && shouldScrollRef.current) {
+      shouldScrollRef.current = false;
+      detailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [selectedDate]);
 
   const { cells, from, to } = useMemo(
     () => computeMonthGrid(parsedMonth.year, parsedMonth.month),
@@ -223,7 +232,12 @@ export default function Calendar() {
                         aria-label={`View ${dayEvents.length} releases on ${cell.dateStr}`}
                         onClick={e => {
                           e.stopPropagation();
-                          setSelectedDate(cell.dateStr);
+                          if (selectedDate === cell.dateStr) {
+                            detailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                          } else {
+                            shouldScrollRef.current = true;
+                            setSelectedDate(cell.dateStr);
+                          }
                         }}
                       >
                         +{overflowCount} more
@@ -238,7 +252,7 @@ export default function Calendar() {
       </div>
 
       {selectedDate && (
-        <section className="calendar-day-details" aria-labelledby="selected-day-heading">
+        <section ref={detailsRef} className="calendar-day-details" aria-labelledby="selected-day-heading">
           <div className="day-details-header">
             <div>
               <p className="eyebrow">Selected date</p>

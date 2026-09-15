@@ -19,6 +19,10 @@ test('Calendar frontend: protection, nav, 42-cell grid, month navigation, URL st
   }
   Object.defineProperty(navigator, 'locks', { value: { request: (_key, _options, work) => work() } });
   globalThis.window.scrollTo = () => {};
+  const scrollCalls = [];
+  dom.window.HTMLElement.prototype.scrollIntoView = function (options) {
+    scrollCalls.push({ element: this, options });
+  };
   const nativeFetch = globalThis.fetch;
   let server, root, session;
   const requests = [];
@@ -299,7 +303,8 @@ test('Calendar frontend: protection, nav, 42-cell grid, month navigation, URL st
   assert.ok(moreBtn, '+N more button rendered for day with 3 events');
   assert.equal(moreBtn.textContent.trim(), '+1 more');
 
-  // Clicking +1 more opens day details panel with all 3 release events
+  scrollCalls.length = 0;
+  // Clicking +1 more opens day details panel with all 3 release events and scrolls it into view
   await act(async () => {
     moreBtn.click();
   });
@@ -310,6 +315,11 @@ test('Calendar frontend: protection, nav, 42-cell grid, month navigation, URL st
   assert.ok(dayDetails.textContent.includes('Releases (3)'), 'Releases count heading in details');
   assert.equal(dayDetails.textContent.includes('Finished reading'), false, 'No finished reading section in details');
   assert.ok(dayDetails.textContent.includes('Another Tale'), '3rd release event visible in details');
+
+  // Verify scrollIntoView was called on details panel
+  assert.equal(scrollCalls.length, 1, 'scrollIntoView was called exactly once');
+  assert.equal(scrollCalls[0].element, dayDetails, 'scrollIntoView was called on details panel');
+  assert.deepEqual(scrollCalls[0].options, { behavior: 'smooth', block: 'start' }, 'Smooth scroll to start options');
 
   // ============================================================
   // Test 21, 22, 23: Previous, Next, Today controls & selected-day reset
