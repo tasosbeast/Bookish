@@ -85,10 +85,16 @@ export default function Discover() {
   const showCurated = Boolean(page === 1 && !q && !genre && !author);
   const showTopPicks = Boolean(auth.user && showCurated);
   const topPicksResource = useResource(showTopPicks ? '/recommendations/top-picks?limit=6' : null, 'required');
-  const releasesResource = useResource(showCurated ? '/releases?limit=8' : null, 'none', 'releases-home');
+  const releasesResource = useResource(showCurated ? '/releases?limit=24' : null, 'none', 'releases-home');
 
-  const newReleases = (releasesResource.data?.newReleases ?? []).slice(0, 8);
-  const upcoming = (releasesResource.data?.upcoming ?? []).slice(0, 8);
+  const [expandedNew, setExpandedNew] = useState(false);
+  const [expandedUpcoming, setExpandedUpcoming] = useState(false);
+
+  const allNewReleases = releasesResource.data?.newReleases ?? [];
+  const allUpcoming = releasesResource.data?.upcoming ?? [];
+
+  const visibleNewReleases = expandedNew ? allNewReleases.slice(0, 24) : allNewReleases.slice(0, 8);
+  const visibleUpcoming = expandedUpcoming ? allUpcoming.slice(0, 24) : allUpcoming.slice(0, 8);
 
   function change(values, keepPage = false) {
     const next = new URLSearchParams(params);
@@ -180,11 +186,21 @@ export default function Discover() {
                   <p className="eyebrow">Just arrived</p>
                   <h2 id="new-releases-heading">New Releases</h2>
                 </div>
-                <Link to="/releases" className="text-button">View all</Link>
+                {allNewReleases.length > 8 && (
+                  <button
+                    type="button"
+                    className="text-button"
+                    aria-expanded={expandedNew}
+                    aria-controls="new-releases-grid"
+                    onClick={() => setExpandedNew(prev => !prev)}
+                  >
+                    {expandedNew ? 'Show less' : 'Show more'}
+                  </button>
+                )}
               </div>
-              {newReleases.length > 0 ? (
-                <div className="book-grid">
-                  {newReleases.map(book => (
+              {allNewReleases.length > 0 ? (
+                <div id="new-releases-grid" className="book-grid">
+                  {visibleNewReleases.map(book => (
                     <ReleaseCard
                       key={book.id}
                       book={book}
@@ -207,11 +223,21 @@ export default function Discover() {
                   <p className="eyebrow">On the horizon</p>
                   <h2 id="upcoming-releases-heading">Upcoming</h2>
                 </div>
-                <Link to="/releases" className="text-button">View all</Link>
+                {allUpcoming.length > 8 && (
+                  <button
+                    type="button"
+                    className="text-button"
+                    aria-expanded={expandedUpcoming}
+                    aria-controls="upcoming-releases-grid"
+                    onClick={() => setExpandedUpcoming(prev => !prev)}
+                  >
+                    {expandedUpcoming ? 'Show less' : 'Show more'}
+                  </button>
+                )}
               </div>
-              {upcoming.length > 0 ? (
-                <div className="book-grid">
-                  {upcoming.map(book => (
+              {allUpcoming.length > 0 ? (
+                <div id="upcoming-releases-grid" className="book-grid">
+                  {visibleUpcoming.map(book => (
                     <ReleaseCard
                       key={book.id}
                       book={book}

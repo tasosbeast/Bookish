@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
 import { createServer } from 'vite';
 
-test('Discover releases integration: order, auth rules, filter hiding, single API call, dates, links, error resilience, empty states', { timeout: 60000 }, async t => {
+test('Discover releases integration: limit 24, default 8, independent inline expansion, filters, error, empty states, and route removal', { timeout: 60000 }, async t => {
   const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost:5173' });
   const original = new Map();
   for (const [key, value] of Object.entries({
@@ -41,20 +41,18 @@ test('Discover releases integration: order, auth rules, filter hiding, single AP
     }
   });
 
-  let topPicksResponseData = {
-    data: [
-      {
-        id: 'rec-1',
-        title: 'Top Pick Title',
-        author: 'Top Pick Author',
-        coverImageUrl: null,
-        averageRating: 4.8,
-        genres: [{ id: 'g1', name: 'Thriller', slug: 'thriller' }],
-        reason: { type: 'author', label: 'Top Pick Author' },
-      },
-    ],
-    meta: { personalized: true, ratedBooks: 5, minimumRatings: 3 },
-  };
+  // Create 12 new releases and 10 upcoming releases (>8 each)
+  const generateBooks = (prefix, count, date, type) => Array.from({ length: count }, (_, i) => ({
+    id: `book-${prefix}-${i + 1}`,
+    title: `${type} Book ${i + 1}`,
+    author: `Author ${prefix} ${i + 1}`,
+    isbn: `97800000000${String(i).padStart(2, '0')}`,
+    coverImageUrl: null,
+    publicationYear: 2026,
+    publicationDate: date,
+    averageRating: 4.5,
+    genres: [{ id: `g-${prefix}`, name: 'Fiction', slug: 'fiction' }],
+  }));
 
   let releasesApiResponse = {
     asOf: '2026-09-15',
@@ -62,32 +60,8 @@ test('Discover releases integration: order, auth rules, filter hiding, single AP
       newReleases: { from: '2026-06-17', to: '2026-09-15' },
       upcoming: { fromExclusive: '2026-09-15', to: '2027-03-14' },
     },
-    newReleases: [
-      {
-        id: 'book-new-1',
-        title: 'The Autumn Story',
-        author: 'Jane Author',
-        isbn: '9781111111111',
-        coverImageUrl: null,
-        publicationYear: 2026,
-        publicationDate: '2026-09-05',
-        averageRating: 4.5,
-        genres: [{ id: 'g1', name: 'Fiction', slug: 'fiction' }],
-      },
-    ],
-    upcoming: [
-      {
-        id: 'book-up-1',
-        title: 'The Winter Horizon',
-        author: 'John Writer',
-        isbn: '9782222222222',
-        coverImageUrl: null,
-        publicationYear: 2026,
-        publicationDate: '2026-09-24',
-        averageRating: null,
-        genres: [{ id: 'g2', name: 'Sci-Fi', slug: 'sci-fi' }],
-      },
-    ],
+    newReleases: generateBooks('new', 12, '2026-09-05', 'New'),
+    upcoming: generateBooks('up', 10, '2026-09-24', 'Upcoming'),
   };
 
   let releasesApiError = false;
@@ -115,7 +89,7 @@ test('Discover releases integration: order, auth rules, filter hiding, single AP
       }));
     }
     if (url.pathname === '/api/recommendations/top-picks') {
-      return Promise.resolve(jsonResponse(topPicksResponseData));
+      return Promise.resolve(jsonResponse({ data: [], meta: { personalized: false } }));
     }
     if (url.pathname === '/api/releases') {
       if (releasesApiError) {
@@ -139,6 +113,7 @@ test('Discover releases integration: order, auth rules, filter hiding, single AP
     optimizeDeps: { noDiscovery: true, include: [] },
   });
 
+  const { default: App } = await server.ssrLoadModule('/src/App.jsx');
   const { default: Discover } = await server.ssrLoadModule('/src/pages/Discover.jsx');
   const { default: Layout } = await server.ssrLoadModule('/src/components/Layout.jsx');
   ({ session } = await server.ssrLoadModule('/src/lib/api.js'));
@@ -147,12 +122,10 @@ test('Discover releases integration: order, auth rules, filter hiding, single AP
   const { MemoryRouter, Routes, Route } = await import('react-router-dom');
 
   root = createRoot(document.getElementById('root'));
-
-  // Initialize session as guest
   await session.initialize();
 
   // ============================================================
-  // Test 1: Logged-out unfiltered Discover
+  // Test 1: Discover calls /api/releases?limit=24 exactly once in curated state
   // ============================================================
   requests.length = 0;
   await act(async () => root.render(
@@ -160,85 +133,118 @@ test('Discover releases integration: order, auth rules, filter hiding, single AP
       h(Routes, null,
         h(Route, { element: h(Layout) },
           h(Route, { path: '/', element: h(Discover) }),
-          h(Route, { path: 'releases', element: h('div', { id: 'releases-view' }, 'Releases View') }),
           h(Route, { path: 'books/:id', element: h('div', { id: 'book-details-view' }, 'Book Details View') })
         )
       )
     )
   ));
 
-  // Top Picks absent for logged-out
-  assert.equal(document.querySelector('.top-picks-section'), null, 'Top Picks absent for logged-out users');
-  // New Releases & Upcoming shown
-  assert.ok(document.body.textContent.includes('New Releases'), 'New Releases heading rendered');
-  assert.ok(document.body.textContent.includes('Just arrived'), 'New Releases eyebrow rendered');
-  assert.ok(document.body.textContent.includes('Upcoming'), 'Upcoming heading rendered');
-  assert.ok(document.body.textContent.includes('On the horizon'), 'Upcoming eyebrow rendered');
-  assert.ok(document.body.textContent.includes('The Autumn Story'), 'New release book rendered');
-  assert.ok(document.body.textContent.includes('The Winter Horizon'), 'Upcoming book rendered');
-
-  // Test 3: Release API called once with limit=8
   const releaseRequests = requests.filter(r => r.includes('/api/releases'));
-  assert.equal(releaseRequests.length, 1, 'Release API is called exactly once on initial load');
-  assert.ok(releaseRequests[0].includes('limit=8'), 'Release API is queried with limit=8');
+  assert.equal(releaseRequests.length, 1, 'Release API called exactly once on unfiltered Discover');
+  assert.ok(releaseRequests[0].includes('limit=24'), 'Release API called with limit=24');
 
-  // Test 4: Exact date labels render
+  // ============================================================
+  // Test 2 & 3: Initially shows max 8 books per section
+  // ============================================================
+  const newGrid = document.getElementById('new-releases-grid');
+  const upGrid = document.getElementById('upcoming-releases-grid');
+  assert.ok(newGrid, 'New releases grid rendered');
+  assert.ok(upGrid, 'Upcoming releases grid rendered');
+
+  assert.equal(newGrid.querySelectorAll('.book-card').length, 8, 'New Releases initially shows max 8 books');
+  assert.equal(upGrid.querySelectorAll('.book-card').length, 8, 'Upcoming initially shows max 8 books');
+
+  // Test 9: Exact date labels
   assert.ok(document.body.textContent.includes('Released Sep 5, 2026'), 'Exact released date label rendered');
   assert.ok(document.body.textContent.includes('Coming Sep 24, 2026'), 'Exact upcoming date label rendered');
 
-  // Test 5: "View all" links navigate to /releases
-  const viewAllLinks = [...document.querySelectorAll('a')].filter(a => a.textContent === 'View all');
-  assert.equal(viewAllLinks.length, 2, 'Two View all links exist in section headings');
-  assert.equal(viewAllLinks[0].getAttribute('href'), '/releases');
-  assert.equal(viewAllLinks[1].getAttribute('href'), '/releases');
-
-  // Test 6: Releases main-nav link no longer exists
+  // Test 17: Releases main-nav link remains absent
   const mainNavReleases = [...document.querySelectorAll('.main-nav a')].find(a => a.textContent === 'Releases');
-  assert.equal(mainNavReleases, undefined, 'Releases link removed from main nav in Layout');
-
-  // Test 15: Clicking release book navigates to /books/:id
-  const newBookLink = document.querySelector('a[href="/books/book-new-1"]');
-  assert.ok(newBookLink, 'Cover/title link to /books/book-new-1 exists');
+  assert.equal(mainNavReleases, undefined, 'Releases main-nav link remains absent');
 
   // ============================================================
-  // Test 2: Authenticated unfiltered Discover & Section Order
+  // Test 4, 5, 6, 7: Show more / Show less buttons & independent expansion
   // ============================================================
-  await session.authenticate('login', {});
-  requests.length = 0;
+  const newSection = document.querySelector('section[aria-labelledby="new-releases-heading"]');
+  const upcomingSection = document.querySelector('section[aria-labelledby="upcoming-releases-heading"]');
+
+  const showMoreNew = newSection.querySelector('button.text-button');
+  const showMoreUpcoming = upcomingSection.querySelector('button.text-button');
+
+  assert.ok(showMoreNew, 'New Releases Show more button rendered when >8 books');
+  assert.equal(showMoreNew.textContent.trim(), 'Show more');
+  assert.equal(showMoreNew.getAttribute('aria-expanded'), 'false');
+  assert.equal(showMoreNew.getAttribute('aria-controls'), 'new-releases-grid');
+
+  assert.ok(showMoreUpcoming, 'Upcoming Show more button rendered when >8 books');
+  assert.equal(showMoreUpcoming.textContent.trim(), 'Show more');
+  assert.equal(showMoreUpcoming.getAttribute('aria-expanded'), 'false');
+  assert.equal(showMoreUpcoming.getAttribute('aria-controls'), 'upcoming-releases-grid');
+
+  // Test 6: Expanding New Releases does NOT expand Upcoming
+  await act(async () => {
+    showMoreNew.click();
+  });
+
+  assert.equal(newSection.querySelectorAll('.book-card').length, 12, 'New Releases expands to all 12 returned books');
+  assert.equal(showMoreNew.textContent.trim(), 'Show less', 'Button text toggles to Show less');
+  assert.equal(showMoreNew.getAttribute('aria-expanded'), 'true');
+  assert.equal(upcomingSection.querySelectorAll('.book-card').length, 8, 'Upcoming remains collapsed at 8 books');
+
+  // Test 7: Expanding Upcoming does NOT collapse New Releases (independent expansion)
+  await act(async () => {
+    showMoreUpcoming.click();
+  });
+
+  assert.equal(upcomingSection.querySelectorAll('.book-card').length, 10, 'Upcoming expands to all 10 returned books');
+  assert.equal(showMoreUpcoming.textContent.trim(), 'Show less');
+  assert.equal(showMoreUpcoming.getAttribute('aria-expanded'), 'true');
+  assert.equal(newSection.querySelectorAll('.book-card').length, 12, 'New Releases remains expanded');
+
+  // Test 4: Show less collapses back to 8
+  await act(async () => {
+    showMoreNew.click();
+  });
+
+  assert.equal(newSection.querySelectorAll('.book-card').length, 8, 'New Releases collapses back to 8 books');
+  assert.equal(showMoreNew.textContent.trim(), 'Show more');
+  assert.equal(showMoreNew.getAttribute('aria-expanded'), 'false');
+  assert.equal(upcomingSection.querySelectorAll('.book-card').length, 10, 'Upcoming remains expanded');
+
+  // ============================================================
+  // Test 8: If a section contains <=8 books, no Show more button is rendered
+  // ============================================================
+  releasesApiResponse = {
+    asOf: '2026-09-15',
+    windows: {
+      newReleases: { from: '2026-06-17', to: '2026-09-15' },
+      upcoming: { fromExclusive: '2026-09-15', to: '2027-03-14' },
+    },
+    newReleases: generateBooks('new', 5, '2026-09-05', 'New'),
+    upcoming: generateBooks('up', 8, '2026-09-24', 'Upcoming'),
+  };
+
   await act(async () => root.unmount());
   root = createRoot(document.getElementById('root'));
   await act(async () => root.render(
     h(MemoryRouter, { initialEntries: ['/'] },
       h(Routes, null,
         h(Route, { element: h(Layout) },
-          h(Route, { path: '/', element: h(Discover) }),
-          h(Route, { path: 'releases', element: h('div', { id: 'releases-view' }, 'Releases View') }),
-          h(Route, { path: 'books/:id', element: h('div', { id: 'book-details-view' }, 'Book Details View') })
+          h(Route, { path: '/', element: h(Discover) })
         )
       )
     )
   ));
 
-  // Top Picks shown
-  const topPicksSection = document.querySelector('.top-picks-section');
-  assert.ok(topPicksSection, 'Top Picks rendered for logged-in user');
-
-  const controlsSection = document.querySelector('.discovery-controls');
-  const newReleasesHeading = document.getElementById('new-releases-heading');
-  const upcomingHeading = document.getElementById('upcoming-releases-heading');
-  const catalogHeading = document.getElementById('discover-heading');
-
-  // Section order check: controls -> topPicks -> newReleases -> upcoming -> catalog
-  assert.ok(controlsSection.compareDocumentPosition(topPicksSection) & 4, 'Controls before Top Picks');
-  assert.ok(topPicksSection.compareDocumentPosition(newReleasesHeading) & 4, 'Top Picks before New Releases');
-  assert.ok(newReleasesHeading.compareDocumentPosition(upcomingHeading) & 4, 'New Releases before Upcoming');
-  assert.ok(upcomingHeading.compareDocumentPosition(catalogHeading) & 4, 'Upcoming before Catalog');
+  const newSec5 = document.querySelector('section[aria-labelledby="new-releases-heading"]');
+  const upSec8 = document.querySelector('section[aria-labelledby="upcoming-releases-heading"]');
+  assert.equal(newSec5.querySelector('button.text-button'), null, 'No Show more button for 5 books');
+  assert.equal(upSec8.querySelector('button.text-button'), null, 'No Show more button for 8 books');
 
   // ============================================================
-  // Tests 8, 9, 10, 11: Filters & Pagination hide all curated sections
+  // Tests 10, 11, 12, 13: Filters & Pagination hide all curated sections
   // ============================================================
-
-  // Test 8: Search query hides all curated sections
+  // Test 10: Search hides curated sections
   requests.length = 0;
   await act(async () => root.unmount());
   root = createRoot(document.getElementById('root'));
@@ -247,12 +253,11 @@ test('Discover releases integration: order, auth rules, filter hiding, single AP
       h(Routes, null, h(Route, { path: '/', element: h(Discover) }))
     )
   ));
-  assert.equal(document.querySelector('.top-picks-section'), null, 'Search query hides Top Picks');
   assert.equal(document.getElementById('new-releases-heading'), null, 'Search query hides New Releases');
   assert.equal(document.getElementById('upcoming-releases-heading'), null, 'Search query hides Upcoming');
   assert.ok(!requests.some(r => r.includes('/api/releases')), 'Search query does not fetch releases');
 
-  // Test 9: Genre filter hides all curated sections
+  // Test 11: Genre filter hides curated sections
   requests.length = 0;
   await act(async () => root.unmount());
   root = createRoot(document.getElementById('root'));
@@ -261,26 +266,24 @@ test('Discover releases integration: order, auth rules, filter hiding, single AP
       h(Routes, null, h(Route, { path: '/', element: h(Discover) }))
     )
   ));
-  assert.equal(document.querySelector('.top-picks-section'), null, 'Genre filter hides Top Picks');
   assert.equal(document.getElementById('new-releases-heading'), null, 'Genre filter hides New Releases');
   assert.equal(document.getElementById('upcoming-releases-heading'), null, 'Genre filter hides Upcoming');
   assert.ok(!requests.some(r => r.includes('/api/releases')), 'Genre filter does not fetch releases');
 
-  // Test 10: Author filter hides all curated sections
+  // Test 12: Author filter hides curated sections
   requests.length = 0;
   await act(async () => root.unmount());
   root = createRoot(document.getElementById('root'));
   await act(async () => root.render(
-    h(MemoryRouter, { initialEntries: ['/?author=Jane+Author'] },
+    h(MemoryRouter, { initialEntries: ['/?author=Author+new+1'] },
       h(Routes, null, h(Route, { path: '/', element: h(Discover) }))
     )
   ));
-  assert.equal(document.querySelector('.top-picks-section'), null, 'Author filter hides Top Picks');
   assert.equal(document.getElementById('new-releases-heading'), null, 'Author filter hides New Releases');
   assert.equal(document.getElementById('upcoming-releases-heading'), null, 'Author filter hides Upcoming');
   assert.ok(!requests.some(r => r.includes('/api/releases')), 'Author filter does not fetch releases');
 
-  // Test 11: Page > 1 hides all curated sections
+  // Test 13: Page > 1 hides curated sections
   requests.length = 0;
   await act(async () => root.unmount());
   root = createRoot(document.getElementById('root'));
@@ -289,13 +292,12 @@ test('Discover releases integration: order, auth rules, filter hiding, single AP
       h(Routes, null, h(Route, { path: '/', element: h(Discover) }))
     )
   ));
-  assert.equal(document.querySelector('.top-picks-section'), null, 'Page > 1 hides Top Picks');
   assert.equal(document.getElementById('new-releases-heading'), null, 'Page > 1 hides New Releases');
   assert.equal(document.getElementById('upcoming-releases-heading'), null, 'Page > 1 hides Upcoming');
   assert.ok(!requests.some(r => r.includes('/api/releases')), 'Page > 1 does not fetch releases');
 
   // ============================================================
-  // Test 12: Release API error does not prevent normal Discover catalog rendering
+  // Test 14: Release API error does not break normal Discover catalog
   // ============================================================
   releasesApiError = true;
   await act(async () => root.unmount());
@@ -305,16 +307,13 @@ test('Discover releases integration: order, auth rules, filter hiding, single AP
       h(Routes, null, h(Route, { path: '/', element: h(Discover) }))
     )
   ));
-
   assert.ok(document.querySelector('[role="alert"]'), 'Error alert rendered for releases failure');
   assert.ok(document.body.textContent.includes('Failed to load releases'));
   assert.ok(document.body.textContent.includes('Catalog Book 1'), 'Catalog book continues to render despite releases error');
-
-  // Recover from error
   releasesApiError = false;
 
   // ============================================================
-  // Tests 13 & 14: Empty states for New Releases and Upcoming
+  // Test 15: Empty states remain correct
   // ============================================================
   releasesApiResponse = {
     asOf: '2026-09-15',
@@ -337,4 +336,15 @@ test('Discover releases integration: order, auth rules, filter hiding, single AP
   assert.ok(document.body.textContent.includes('No recent releases yet.'), 'New Releases empty state rendered');
   assert.ok(document.body.textContent.includes('No upcoming releases yet.'), 'Upcoming empty state rendered');
   assert.ok(document.body.textContent.includes('Catalog Book 1'), 'Catalog book still rendered with empty release sections');
+
+  // ============================================================
+  // Test 16: /releases route no longer exists (renders fallback 404)
+  // ============================================================
+  await act(async () => root.unmount());
+  root = createRoot(document.getElementById('root'));
+  window.history.pushState({}, '', '/releases');
+  await act(async () => root.render(h(App)));
+
+  assert.ok(document.body.textContent.includes('This page has turned'), '/releases route hits 404 fallback');
+  assert.ok(document.body.textContent.includes('Use Discover to find your way back to the books.'));
 });
