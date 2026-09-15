@@ -11,6 +11,7 @@ import {
   PrhSyncError,
   calculateDefaultDateWindow,
   formatPreferenceRank,
+  isEnglishPrhLanguage,
 } from '../scripts/catalog/prh-sync.js';
 import { CANONICAL_GENRE_SLUGS, mapPrhCategoriesToGenres } from '../scripts/catalog/prh-genre-map.js';
 
@@ -1178,3 +1179,98 @@ test('34. Second sync run with same data discovers 0 new books (idempotent)', as
   assert.equal(run2.summary.discovery.plannedNew, 0);
   assert.equal(run2.summary.discovery.created, 0);
 });
+
+// =========================================================================
+// 35-43: PRH LANGUAGE HANDLING TESTS
+// =========================================================================
+
+test('35. isEnglishPrhLanguage: language "E" is accepted', () => {
+  assert.equal(isEnglishPrhLanguage({ language: 'E' }), true);
+  assert.equal(isEnglishPrhLanguage('E'), true);
+});
+
+test('36. isEnglishPrhLanguage: language "e" is accepted', () => {
+  assert.equal(isEnglishPrhLanguage({ language: 'e' }), true);
+  assert.equal(isEnglishPrhLanguage('e'), true);
+});
+
+test('37. isEnglishPrhLanguage: language "English" is accepted', () => {
+  assert.equal(isEnglishPrhLanguage({ language: 'English' }), true);
+  assert.equal(isEnglishPrhLanguage({ languageDescription: 'English' }), true);
+  assert.equal(isEnglishPrhLanguage({ language: '', languageDescription: 'English' }), true);
+  assert.equal(isEnglishPrhLanguage('English'), true);
+});
+
+test('38. isEnglishPrhLanguage: language "ENG" is accepted', () => {
+  assert.equal(isEnglishPrhLanguage({ language: 'ENG' }), true);
+  assert.equal(isEnglishPrhLanguage({ language: 'en' }), true);
+  assert.equal(isEnglishPrhLanguage('ENG'), true);
+});
+
+test('39. isEnglishPrhLanguage: blank/missing language is accepted', () => {
+  assert.equal(isEnglishPrhLanguage({}), true);
+  assert.equal(isEnglishPrhLanguage({ language: '' }), true);
+  assert.equal(isEnglishPrhLanguage({ language: '   ' }), true);
+  assert.equal(isEnglishPrhLanguage({ language: null }), true);
+  assert.equal(isEnglishPrhLanguage({ languageDescription: '' }), true);
+  assert.equal(isEnglishPrhLanguage(null), true);
+  assert.equal(isEnglishPrhLanguage(undefined), true);
+  assert.equal(isEnglishPrhLanguage(''), true);
+});
+
+test('40. isEnglishPrhLanguage: language "SP" is rejected', () => {
+  assert.equal(isEnglishPrhLanguage({ language: 'SP' }), false);
+  assert.equal(isEnglishPrhLanguage('SP'), false);
+});
+
+test('41. isEnglishPrhLanguage: language "Spanish" is rejected', () => {
+  assert.equal(isEnglishPrhLanguage({ language: 'Spanish' }), false);
+  assert.equal(isEnglishPrhLanguage({ languageDescription: 'Spanish' }), false);
+  assert.equal(isEnglishPrhLanguage({ language: '', languageDescription: 'Spanish' }), false);
+  assert.equal(isEnglishPrhLanguage('Spanish'), false);
+});
+
+test('42. isEnglishPrhLanguage: explicit unknown non-empty code is rejected', () => {
+  assert.equal(isEnglishPrhLanguage({ language: 'FR' }), false);
+  assert.equal(isEnglishPrhLanguage({ language: 'DE' }), false);
+  assert.equal(isEnglishPrhLanguage({ language: 'XYZ' }), false);
+  assert.equal(isEnglishPrhLanguage('XYZ'), false);
+});
+
+test('43. Realistic PRH Title fixture with language "E" survives discovery filtering', async () => {
+  const isbn = makeValidIsbn13('978059399993');
+  const db = createMockDb();
+  const realisticPrhTitleFixture = {
+    isbn,
+    workId: 456789,
+    title: 'The Starlight Archive',
+    author: 'Brandon Sanderson',
+    onsale: '2026-08-15',
+    language: 'E',
+    languageDescription: 'English',
+    format: { code: 'HC', description: 'Hardcover' },
+    formatDescription: 'Hardcover',
+    seoFriendlyUrl: '/books/456789/the-starlight-archive-by-brandon-sanderson',
+    _links: [
+      { rel: 'icon', href: 'https://images.penguinrandomhouse.com/cover/456789.jpg' },
+    ],
+    categories: [
+      { catUri: '/categories/epic-fantasy', description: 'Epic Fantasy' },
+    ],
+  };
+
+  const client = {
+    getTitleByIsbn: async () => null,
+    listTitlesByOnSaleRange: async () => ({
+      titles: [realisticPrhTitleFixture],
+    }),
+  };
+
+  const res = await syncPrhReleases(db, { client, asOf: '2026-07-01', apply: false });
+  assert.equal(res.summary.discovery.eligiblePrintTitles, 1);
+  assert.equal(res.summary.discovery.invalidCandidates, 0);
+  assert.equal(res.summary.discovery.plannedNew, 1);
+  assert.equal(res.details.discovery.plannedNew[0].isbn, isbn);
+  assert.equal(res.details.discovery.plannedNew[0].title, 'The Starlight Archive');
+});
+

@@ -76,6 +76,70 @@ export function formatPreferenceRank(formatObj, formatDescriptionStr = '') {
   return 4; // other ordinary print
 }
 
+export function isEnglishPrhLanguage(titleOrLang) {
+  if (titleOrLang === null || titleOrLang === undefined) {
+    return true;
+  }
+
+  let langVal;
+  let descVal;
+
+  if (typeof titleOrLang === 'object') {
+    langVal = titleOrLang.language;
+    descVal = titleOrLang.languageDescription;
+  } else if (typeof titleOrLang === 'string') {
+    langVal = titleOrLang;
+    descVal = undefined;
+  }
+
+  let rawLang = '';
+  if (typeof langVal === 'string') {
+    rawLang = langVal.trim();
+  } else if (langVal && typeof langVal === 'object') {
+    if (typeof langVal.code === 'string') {
+      rawLang = langVal.code.trim();
+    }
+    if (!descVal && typeof langVal.description === 'string') {
+      descVal = langVal.description;
+    }
+  }
+
+  let rawDesc = '';
+  if (typeof descVal === 'string') {
+    rawDesc = descVal.trim();
+  }
+
+  // Missing or blank language data: ACCEPT (absence should not reject)
+  if (!rawLang && !rawDesc) {
+    return true;
+  }
+
+  function matchesEnglish(val) {
+    if (!val) return false;
+    const upper = val.toUpperCase();
+    if (upper === 'E' || upper === 'EN' || upper === 'ENG') {
+      return true;
+    }
+    const lower = val.toLowerCase();
+    if (lower === 'english' || lower.startsWith('english')) {
+      return true;
+    }
+    return false;
+  }
+
+  // Prefer checking language code first if present
+  if (rawLang) {
+    return matchesEnglish(rawLang);
+  }
+
+  // Fall back to checking language description
+  if (rawDesc) {
+    return matchesEnglish(rawDesc);
+  }
+
+  return false;
+}
+
 export async function syncPrhReleases(db, options = {}) {
   const apply = Boolean(options.apply);
 
@@ -401,13 +465,15 @@ export async function syncPrhReleases(db, options = {}) {
     const onsale = t.onsale ? String(t.onsale).slice(0, 10) : '';
 
     // Language check if language data present
-    const lang = (t.language || t.languageDescription || '').toLowerCase();
-    if (lang && !lang.includes('english')) {
+    if (!isEnglishPrhLanguage(t)) {
       discovery.invalidCandidates++;
+      const langReport = typeof t.language === 'object'
+        ? JSON.stringify(t.language)
+        : (t.language || t.languageDescription || 'Non-English');
       details.discovery.invalidCandidates.push({
         isbn: rawIsbn,
         title: titleText,
-        reason: `Non-English language: "${lang}"`,
+        reason: `Non-English language: "${langReport}"`,
       });
       continue;
     }
@@ -638,8 +704,48 @@ export async function syncPrhReleases(db, options = {}) {
   });
 
   const sortedCandidates = [...upcoming, ...recent];
-  const plannedNew = sortedCandidates.slice(0, maxNew);
+  const candidateSlice = sortedCandidates.slice(0, maxNew);
   const deferred = sortedCandidates.slice(maxNew);
+
+  // Preflight planned candidates through release-catalog importer in dry-run mode
+  // as the final preflight authority before reporting them as plannedNew.
+  const plannedNew = [];
+  if (candidateSlice.length > 0) {
+    const preflightRecords = candidateSlice.map(c => ({
+      title: c.title,
+      author: c.author,
+      isbn: c.isbn,
+      publicationDate: c.onsale,
+      coverImageUrl: c.coverImageUrl,
+      genres: c.genres,
+      sourceUrl: c.sourceUrl,
+    }));
+
+    const preflightResult = await importReleaseCatalog(db, {
+      records: preflightRecords,
+      apply: false,
+    });
+
+    const approvedIsbns = new Set((preflightResult.details.newBooks || []).map(b => b.isbn));
+
+    for (const cand of candidateSlice) {
+      if (approvedIsbns.has(cand.isbn)) {
+        plannedNew.push(cand);
+      } else {
+        discovery.invalidCandidates++;
+        const missingG = (preflightResult.details.missingGenres || []).find(m => m.isbn === cand.isbn);
+        const exactC = (preflightResult.details.exactIsbnConflicts || []).find(m => m.isbn === cand.isbn);
+        const workC = (preflightResult.details.existingWorkCollisions || []).find(m => m.isbn === cand.isbn);
+        const provC = (preflightResult.details.provenanceConflicts || []).find(m => m.isbn === cand.isbn);
+        const reason = missingG?.message || exactC?.message || workC?.message || provC?.message || 'Rejected by release-catalog importer preflight';
+        details.discovery.invalidCandidates.push({
+          isbn: cand.isbn,
+          title: cand.title,
+          reason,
+        });
+      }
+    }
+  }
 
   discovery.plannedNew = plannedNew.length;
   discovery.deferredByLimit = deferred.length;
