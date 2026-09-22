@@ -26,6 +26,7 @@ import {
 export const TARGETED_ARTIFACT_FORMAT = 'bookish-open-library-targeted-candidates';
 export const TARGETED_ARTIFACT_VERSION = 1;
 export const DEFAULT_TARGETED_BATCH_SIZE = 10_000;
+export const DEFAULT_PROGRESS_INTERVAL = 500_000;
 
 const plainObject = value => value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 
@@ -178,8 +179,8 @@ export async function validateBuiltTargetedArtifact(artifactPath, expectations =
       fail('corrupt_targeted_artifact', 'Targeted artifact candidate row count does not match metadata association count');
     }
 
-    const candidateRows = database.prepare('SELECT source_key, candidate_record_key, canonical_json FROM candidates').all();
-    for (const r of candidateRows) {
+    const candidateStatement = database.prepare('SELECT source_key, candidate_record_key, canonical_json FROM candidates ORDER BY source_key, candidate_record_key');
+    for (const r of candidateStatement.iterate()) {
       let parsed;
       try {
         parsed = JSON.parse(r.canonical_json);
@@ -210,6 +211,7 @@ export async function buildTargetedOpenLibraryArtifact({
   outputPath,
   snapshotId,
   batchSize = DEFAULT_TARGETED_BATCH_SIZE,
+  progressInterval = DEFAULT_PROGRESS_INTERVAL,
   onProgress = null,
 }) {
   const cleanSnapshotId = text(snapshotId);
@@ -341,6 +343,11 @@ export async function buildTargetedOpenLibraryArtifact({
     for await (const record of readOpenLibraryBulkRecords(inputPath)) {
       statistics.rowsScanned += 1;
 
+      if (typeof onProgress === 'function' && statistics.rowsScanned % progressInterval === 0) {
+        statistics.elapsedMs = Date.now() - startTime;
+        onProgress(statistics);
+      }
+
       if (record instanceof SnapshotRecordError) {
         statistics.malformedRows += 1;
         continue;
@@ -385,10 +392,6 @@ export async function buildTargetedOpenLibraryArtifact({
         database.exec('COMMIT; BEGIN IMMEDIATE;');
         pendingOperations = 0;
       }
-
-      if (typeof onProgress === 'function' && statistics.rowsScanned % 100_000 === 0) {
-        onProgress(statistics);
-      }
     }
 
     database.exec('COMMIT;');
@@ -427,8 +430,12 @@ export async function buildTargetedOpenLibraryArtifact({
             resolvedAuthorsMap.set(key, conflictMarker);
           }
         }
-      } catch (err) {
-        if (err.code !== 'ENOENT') throw err;
+      } catch (cause) {
+        if (cause instanceof CatalogContractError) throw cause;
+        throw new CatalogContractError(
+          'missing_author_shard',
+          `Required author shard ${shardName(shard)} is missing or unreadable at ${shardFile}: ${cause.message}`,
+        );
       }
     }
 
@@ -466,13 +473,13 @@ export async function buildTargetedOpenLibraryArtifact({
       'INSERT OR IGNORE INTO candidates (source_key, candidate_record_key, canonical_json) VALUES (?, ?, ?)'
     );
 
-    const pendingEditions = database.prepare(
+    const pendingEditionsStatement = database.prepare(
       'SELECT id, edition_key, line_number, payload_json, passes_title FROM pending_editions ORDER BY id'
-    ).all();
+    );
 
     pendingOperations = 0;
 
-    for (const pendingRow of pendingEditions) {
+    for (const pendingRow of pendingEditionsStatement.iterate()) {
       const data = JSON.parse(pendingRow.payload_json);
       const record = {
         type: '/type/edition',

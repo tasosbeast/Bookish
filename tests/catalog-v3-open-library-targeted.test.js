@@ -1112,3 +1112,244 @@ test('23. no network access is required and CLI tool executes completely offline
     assert.equal(parsed.statistics.authorKeysResolved, 1);
   });
 });
+
+test('24. pending edition finalization does not require one .all() over all pending rows', async () => {
+  await withTempDir(async ({ dir }) => {
+    const authorIndexDir = await createAuthorIndex(dir, [
+      { key: '/authors/OL1A', name: 'Jane Austen' },
+    ]);
+
+    const dumpPath = join(dir, 'editions.txt');
+    await fs.writeFile(dumpPath, dumpLine({
+      key: '/books/OL100M',
+      title: 'Pride and Prejudice',
+      isbn13: '9780141439518',
+      authors: [{ key: '/authors/OL1A' }],
+    }));
+
+    const sources = [
+      { key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' },
+    ];
+
+    const { DatabaseSync } = await import('node:sqlite');
+    const dummyDb = new DatabaseSync(':memory:');
+    const stmtProto = Object.getPrototypeOf(dummyDb.prepare('SELECT 1'));
+    dummyDb.close();
+
+    const originalAll = stmtProto.all;
+    let pendingEditionsAllCalled = false;
+    stmtProto.all = function (...args) {
+      if (typeof this.sourceSQL === 'string' && this.sourceSQL.includes('FROM pending_editions')) {
+        pendingEditionsAllCalled = true;
+      }
+      return originalAll.apply(this, args);
+    };
+
+    const outputPath = join(dir, 'targeted.sqlite');
+    try {
+      const result = await buildTargetedOpenLibraryArtifact({
+        sources,
+        inputPath: dumpPath,
+        authorIndexPath: authorIndexDir,
+        outputPath,
+        snapshotId: SNAPSHOT_ID,
+      });
+      assert.equal(result.statistics.matchedEditions, 1);
+      assert.equal(pendingEditionsAllCalled, false, 'pending_editions must not be queried via .all()');
+    } finally {
+      stmtProto.all = originalAll;
+    }
+  });
+});
+
+test('25. candidate validation does not require one .all() over all candidates', async () => {
+  await withTempDir(async ({ dir }) => {
+    const authorIndexDir = await createAuthorIndex(dir, [
+      { key: '/authors/OL1A', name: 'Jane Austen' },
+    ]);
+
+    const dumpPath = join(dir, 'editions.txt');
+    await fs.writeFile(dumpPath, dumpLine({
+      key: '/books/OL100M',
+      title: 'Pride and Prejudice',
+      isbn13: '9780141439518',
+      authors: [{ key: '/authors/OL1A' }],
+    }));
+
+    const sources = [
+      { key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' },
+    ];
+
+    const outputPath = join(dir, 'targeted.sqlite');
+    await buildTargetedOpenLibraryArtifact({
+      sources,
+      inputPath: dumpPath,
+      authorIndexPath: authorIndexDir,
+      outputPath,
+      snapshotId: SNAPSHOT_ID,
+    });
+
+    const { DatabaseSync } = await import('node:sqlite');
+    const dummyDb = new DatabaseSync(':memory:');
+    const stmtProto = Object.getPrototypeOf(dummyDb.prepare('SELECT 1'));
+    dummyDb.close();
+
+    const originalAll = stmtProto.all;
+    let candidatesAllCalled = false;
+    stmtProto.all = function (...args) {
+      if (typeof this.sourceSQL === 'string' && this.sourceSQL.includes('FROM candidates')) {
+        candidatesAllCalled = true;
+      }
+      return originalAll.apply(this, args);
+    };
+
+    try {
+      await validateBuiltTargetedArtifact(outputPath);
+      assert.equal(candidatesAllCalled, false, 'candidates must not be validated via .all()');
+    } finally {
+      stmtProto.all = originalAll;
+    }
+  });
+});
+
+test('26. missing required author shard fails closed and preserves known-good artifact', async () => {
+  await withTempDir(async ({ dir }) => {
+    const authorKey = '/authors/OL1A';
+    const shard = shardFor(authorKey);
+    const authorIndexDir = await createAuthorIndex(dir, [
+      { key: authorKey, name: 'Jane Austen' },
+    ]);
+
+    const dumpPath = join(dir, 'editions.txt');
+    await fs.writeFile(dumpPath, dumpLine({
+      key: '/books/OL100M',
+      title: 'Pride and Prejudice',
+      isbn13: '9780141439518',
+      authors: [{ key: authorKey }],
+    }));
+
+    const sources = [
+      { key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' },
+    ];
+
+    const outputPath = join(dir, 'targeted.sqlite');
+    await buildTargetedOpenLibraryArtifact({
+      sources,
+      inputPath: dumpPath,
+      authorIndexPath: authorIndexDir,
+      outputPath,
+      snapshotId: SNAPSHOT_ID,
+    });
+
+    const adapter1 = await createTargetedCanonicalAdapter({ artifactPath: outputPath });
+    const candidatesBefore = await adapter1.getCandidates(sources[0]);
+    assert.equal(candidatesBefore.length, 1);
+    adapter1.close();
+
+    const requiredShardPath = join(authorIndexDir, 'authors', shardName(shard));
+    await fs.rm(requiredShardPath, { force: true });
+
+    await assert.rejects(
+      () => buildTargetedOpenLibraryArtifact({
+        sources,
+        inputPath: dumpPath,
+        authorIndexPath: authorIndexDir,
+        outputPath,
+        snapshotId: SNAPSHOT_ID,
+      }),
+      (err) => err instanceof CatalogContractError && err.code === 'missing_author_shard',
+    );
+
+    const adapter2 = await createTargetedCanonicalAdapter({ artifactPath: outputPath });
+    const candidatesAfter = await adapter2.getCandidates(sources[0]);
+    assert.equal(candidatesAfter.length, 1, 'known-good artifact should be preserved after failed build');
+    adapter2.close();
+  });
+});
+
+test('27. progress fires based on rows scanned even if the triggering row is irrelevant', async () => {
+  await withTempDir(async ({ dir }) => {
+    const authorIndexDir = await createAuthorIndex(dir, [
+      { key: '/authors/OL1A', name: 'Jane Austen' },
+    ]);
+
+    const dumpPath = join(dir, 'editions.txt');
+    await fs.writeFile(dumpPath, [
+      dumpLine({ key: '/books/OLIRR1M', title: 'Irrelevant 1', isbn13: '9780000000001', authors: [{ key: '/authors/OLOTHER' }] }),
+      dumpLine({ key: '/books/OLIRR2M', title: 'Irrelevant 2', isbn13: '9780000000002', authors: [{ key: '/authors/OLOTHER' }] }),
+      dumpLine({ key: '/books/OLIRR3M', title: 'Irrelevant 3', isbn13: '9780000000003', authors: [{ key: '/authors/OLOTHER' }] }),
+      dumpLine({ key: '/books/OLIRR4M', title: 'Irrelevant 4', isbn13: '9780000000004', authors: [{ key: '/authors/OLOTHER' }] }),
+    ].join(''));
+
+    const sources = [
+      { key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' },
+    ];
+
+    const progressCalls = [];
+    const outputPath = join(dir, 'targeted.sqlite');
+    const result = await buildTargetedOpenLibraryArtifact({
+      sources,
+      inputPath: dumpPath,
+      authorIndexPath: authorIndexDir,
+      outputPath,
+      snapshotId: SNAPSHOT_ID,
+      progressInterval: 2,
+      onProgress: (stats) => {
+        progressCalls.push({
+          rowsScanned: stats.rowsScanned,
+          pendingEditions: stats.pendingEditions,
+        });
+      },
+    });
+
+    assert.equal(result.statistics.rowsScanned, 4);
+    assert.equal(result.statistics.pendingEditions, 0);
+    assert.deepEqual(progressCalls, [
+      { rowsScanned: 2, pendingEditions: 0 },
+      { rowsScanned: 4, pendingEditions: 0 },
+    ]);
+  });
+});
+
+test('28. CLI progress with --json sends progress to stderr and preserves parseable stdout JSON', async () => {
+  await withTempDir(async ({ dir }) => {
+    const authorIndexDir = await createAuthorIndex(dir, [
+      { key: '/authors/OL1A', name: 'Jane Austen' },
+    ]);
+
+    const dumpPath = join(dir, 'editions.txt');
+    await fs.writeFile(dumpPath, dumpLine({
+      key: '/books/OL100M',
+      title: 'Pride and Prejudice',
+      isbn13: '9780141439518',
+      authors: [{ key: '/authors/OL1A' }],
+    }));
+
+    const sources = [
+      { key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' },
+    ];
+    const sourcePath = join(dir, 'sources.json');
+    await fs.writeFile(sourcePath, JSON.stringify(sources, null, 2));
+
+    const outputPath = join(dir, 'targeted.sqlite');
+    const extractScript = join(process.cwd(), 'scripts', 'ol-targeted-extract.js');
+
+    const result = await execFileAsync(process.execPath, [
+      '--experimental-sqlite',
+      extractScript,
+      '--source', sourcePath,
+      '--input', dumpPath,
+      '--author-index', authorIndexDir,
+      '--output', outputPath,
+      '--snapshot-id', SNAPSHOT_ID,
+      '--progress-interval', '1',
+      '--json',
+    ]);
+
+    assert.ok(result.stderr.includes('[progress] rows scanned: 1'), 'stderr should contain coarse progress output');
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.statistics.matchedEditions, 1);
+    assert.equal(parsed.statistics.rowsScanned, 1);
+    assert.equal(parsed.statistics.canonicalCandidates, 1);
+  });
+});

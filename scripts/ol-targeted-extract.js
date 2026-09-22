@@ -10,6 +10,7 @@ function parseArguments(args) {
     output: null,
     snapshotId: null,
     batchSize: undefined,
+    progressInterval: undefined,
     json: false,
   };
 
@@ -17,7 +18,7 @@ function parseArguments(args) {
     const argument = args[index];
     if (argument === '--json') {
       options.json = true;
-    } else if (['--source', '--input', '--author-index', '--output', '--snapshot-id', '--batch-size'].includes(argument)) {
+    } else if (['--source', '--input', '--author-index', '--output', '--snapshot-id', '--batch-size', '--progress-interval'].includes(argument)) {
       const value = args[++index];
       if (!value) throw new Error(`${argument} requires a value`);
       if (argument === '--snapshot-id') {
@@ -26,6 +27,10 @@ function parseArguments(args) {
         const parsed = Number(value);
         if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error('--batch-size must be a positive integer');
         options.batchSize = parsed;
+      } else if (argument === '--progress-interval') {
+        const parsed = Number(value);
+        if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error('--progress-interval must be a positive integer');
+        options.progressInterval = parsed;
       } else {
         const key = argument.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
         options[key] = resolve(value);
@@ -44,6 +49,17 @@ function parseArguments(args) {
 try {
   const options = parseArguments(process.argv.slice(2));
   const sources = JSON.parse(await readFile(options.source, 'utf8'));
+
+  const onProgress = (stats) => {
+    const elapsedSec = (stats.elapsedMs / 1000).toFixed(1);
+    const line = `[progress] rows scanned: ${stats.rowsScanned.toLocaleString()} | pending: ${stats.pendingEditions.toLocaleString()} | title hits: ${stats.rowsPassingTitlePrefilter.toLocaleString()} | ISBN hits: ${stats.rowsPassingIsbnPrefilter.toLocaleString()} | elapsed: ${elapsedSec}s\n`;
+    if (options.json) {
+      process.stderr.write(line);
+    } else {
+      process.stdout.write(line);
+    }
+  };
+
   const result = await buildTargetedOpenLibraryArtifact({
     sources,
     inputPath: options.input,
@@ -51,6 +67,8 @@ try {
     outputPath: options.output,
     snapshotId: options.snapshotId,
     batchSize: options.batchSize,
+    progressInterval: options.progressInterval,
+    onProgress,
   });
 
   if (options.json) {
