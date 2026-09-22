@@ -20,12 +20,16 @@ function parseArguments(args) {
 try {
   const options = parseArguments(process.argv.slice(2));
   const authorLookup = await createOpenLibraryAuthorLookup({ indexPath: options.authorIndex, snapshotId: options.snapshotId });
-  console.log(JSON.stringify(await buildSnapshotIndex({
-    records: readOpenLibraryEditionCandidates({ inputPath: options.input, snapshotId: options.snapshotId, authorLookup }),
-    outputPath: options.output,
-    sourceName: 'open-library-bulk',
-    snapshotId: options.snapshotId,
-  })));
+  try {
+    console.log(JSON.stringify(await buildSnapshotIndex({
+      records: readOpenLibraryEditionCandidates({ inputPath: options.input, snapshotId: options.snapshotId, authorLookup }),
+      outputPath: options.output,
+      sourceName: 'open-library-bulk',
+      snapshotId: options.snapshotId,
+    })));
+  } finally {
+    authorLookup.close?.();
+  }
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;

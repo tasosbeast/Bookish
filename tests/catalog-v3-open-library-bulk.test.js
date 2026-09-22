@@ -11,6 +11,7 @@ import { getCanonicalCandidates } from '../scripts/catalog/canonical-source.js';
 import { normalizeIsbn10ToIsbn13 } from '../scripts/catalog/normalize.js';
 import {
   buildOpenLibraryAuthorIndex,
+  buildOpenLibraryAuthorLookup,
   createOpenLibraryAuthorLookup,
   readOpenLibraryEditionCandidates,
 } from '../scripts/catalog/open-library-bulk.js';
@@ -29,6 +30,7 @@ async function temporaryDirectory() {
 async function authorLookup(directory) {
   const authorIndex = join(directory, 'authors');
   const metadata = await buildOpenLibraryAuthorIndex({ inputPath: fileURLToPath(AUTHORS), outputPath: authorIndex, snapshotId: SNAPSHOT_ID, generatedAt: '2026-09-10T00:00:00.000Z' });
+  await buildOpenLibraryAuthorLookup({ indexPath: authorIndex, snapshotId: SNAPSHOT_ID, batchSize: 1 });
   return { metadata, authorIndex, lookup: await createOpenLibraryAuthorLookup({ indexPath: authorIndex, snapshotId: SNAPSHOT_ID }) };
 }
 
@@ -109,6 +111,68 @@ test('author lookup lazily caches complete parsed shards while preserving unreso
   );
 });
 
+test('SQLite author lookup builds from the author index without materializing NDJSON shards', async t => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const inputPath = join(directory, 'authors.txt');
+  const authorIndex = join(directory, 'author-index');
+  await fs.writeFile(inputPath, [
+    authorDumpLine({ key: '/authors/OLUNIQUEA', name: 'Unique Author' }),
+    authorDumpLine({ key: '/authors/OLSECONDA', name: 'Second Author' }),
+    authorDumpLine({ key: '/authors/OLCONFLICTA', name: 'Conflict One' }),
+    authorDumpLine({ key: '/authors/OLCONFLICTA', name: 'Conflict Two' }),
+  ].join(''));
+  await buildOpenLibraryAuthorIndex({ inputPath, outputPath: authorIndex, snapshotId: SNAPSHOT_ID, generatedAt: '2026-09-10T00:00:00.000Z' });
+  const built = await buildOpenLibraryAuthorLookup({ indexPath: authorIndex, snapshotId: SNAPSHOT_ID, batchSize: 1 });
+  assert.equal(built.sourceAuthorCount, 4);
+  assert.equal(built.authorCount, 3);
+  assert.equal(built.conflictedCount, 1);
+
+  await fs.rename(join(authorIndex, 'authors'), join(authorIndex, 'authors-hidden'));
+  const lookup = await createOpenLibraryAuthorLookup({ indexPath: authorIndex, snapshotId: SNAPSHOT_ID });
+  try {
+    const names = await lookup.getNames(['/authors/OLUNIQUEA', '/authors/OLSECONDA', '/authors/OLCONFLICTA', '/authors/OLMISSINGA']);
+    assert.deepEqual([...names], [['/authors/OLUNIQUEA', 'Unique Author'], ['/authors/OLSECONDA', 'Second Author']]);
+  } finally {
+    lookup.close();
+  }
+  const indexFile = join(authorIndex, 'index.json');
+  const changedMetadata = JSON.parse(await fs.readFile(indexFile, 'utf8'));
+  changedMetadata.snapshotId = 'different-snapshot';
+  await fs.writeFile(indexFile, `${JSON.stringify(changedMetadata)}\n`);
+  await assert.rejects(
+    createOpenLibraryAuthorLookup({ indexPath: authorIndex, snapshotId: 'different-snapshot' }),
+    error => error.code === 'author_snapshot_mismatch',
+  );
+});
+
+test('invalid SQLite lookup fails instead of falling back to NDJSON', async t => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const authorIndex = join(directory, 'authors');
+  await buildOpenLibraryAuthorIndex({ inputPath: fileURLToPath(AUTHORS), outputPath: authorIndex, snapshotId: SNAPSHOT_ID, generatedAt: '2026-09-10T00:00:00.000Z' });
+  await fs.writeFile(join(authorIndex, 'lookup.sqlite'), 'not a SQLite database');
+  await assert.rejects(createOpenLibraryAuthorLookup({ indexPath: authorIndex, snapshotId: SNAPSHOT_ID }));
+});
+
+test('failed SQLite temp build preserves an existing known-good lookup', async t => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const authorIndex = join(directory, 'authors');
+  await buildOpenLibraryAuthorIndex({ inputPath: fileURLToPath(AUTHORS), outputPath: authorIndex, snapshotId: SNAPSHOT_ID, generatedAt: '2026-09-10T00:00:00.000Z' });
+  await buildOpenLibraryAuthorLookup({ indexPath: authorIndex, snapshotId: SNAPSHOT_ID, batchSize: 1 });
+  const shard = (await fs.readdir(join(authorIndex, 'authors'))).find(file => file.endsWith('.ndjson'));
+  await fs.appendFile(join(authorIndex, 'authors', shard), '{broken-json\n');
+  await assert.rejects(buildOpenLibraryAuthorLookup({ indexPath: authorIndex, snapshotId: SNAPSHOT_ID, batchSize: 1 }));
+  const lookup = await createOpenLibraryAuthorLookup({ indexPath: authorIndex, snapshotId: SNAPSHOT_ID });
+  try {
+    assert.equal((await lookup.getNames(['/authors/OL1A'])).get('/authors/OL1A'), 'Jane Austen');
+  } finally {
+    lookup.close();
+  }
+  assert.deepEqual((await fs.readdir(authorIndex)).filter(name => name.includes('.building-')), []);
+});
+
 test('Open Library edition dump maps local author keys and edition-only metadata into canonical candidates', async t => {
   const directory = await temporaryDirectory();
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
@@ -132,6 +196,7 @@ test('Open Library edition dump maps local author keys and edition-only metadata
   assert.equal(candidates.find(candidate => candidate.recordId === '/books/OLAUDIOM').format, 'audiobook');
   assert.equal(candidates.find(candidate => candidate.recordId === '/books/OLYEARCONFLICTM').publicationYear, null);
   assert.deepEqual(errors.map(error => error.code).sort(), ['invalid_json', 'malformed_isbn_identifier', 'missing_author', 'no_usable_isbn', 'wrong_record_type']);
+  lookup.close();
 });
 
 test('gzip-compressed dump input produces the same candidates without network access', async t => {
@@ -143,6 +208,7 @@ test('gzip-compressed dump input produces the same candidates without network ac
   const records = await collect(readOpenLibraryEditionCandidates({ inputPath: gzipPath, snapshotId: SNAPSHOT_ID, authorLookup: lookup }));
   assert.equal(records.filter(record => !(record instanceof SnapshotRecordError)).length, 6);
   assert.equal(records.filter(record => record instanceof SnapshotRecordError).length, 5);
+  lookup.close();
 });
 
 test('edition candidate stream feeds the snapshot index and supports exact pinned ISBN lookup', async t => {
@@ -163,6 +229,7 @@ test('edition candidate stream feeds the snapshot index and supports exact pinne
   });
   assert.equal(candidates[0].isbn13, '9780141439518');
   assert.ok(candidates.some(candidate => candidate.isbn13 === '9780451524935'));
+  lookup.close();
 });
 
 test('several thousand local edition rows stream through parser and index without an input array', async t => {
@@ -190,6 +257,7 @@ test('several thousand local edition rows stream through parser and index withou
   });
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0].recordId, `/books/OLSYN${target}M`);
+  lookup.close();
 });
 
 test('local Open Library author and edition build CLIs require only local dump files', async t => {
@@ -198,11 +266,16 @@ test('local Open Library author and edition build CLIs require only local dump f
   const authorIndex = join(directory, 'authors');
   const editionIndex = join(directory, 'editions');
   const authorScript = join(process.cwd(), 'scripts', 'ol-author-index-build.js');
+  const lookupScript = join(process.cwd(), 'scripts', 'ol-author-lookup-build.js');
   const editionScript = join(process.cwd(), 'scripts', 'ol-snapshot-build.js');
   const authorResult = await execFileAsync(process.execPath, [authorScript, '--input', fileURLToPath(AUTHORS), '--output', authorIndex, '--snapshot-id', SNAPSHOT_ID]);
   assert.equal(JSON.parse(authorResult.stdout).statistics.accepted, 2);
+  const lookupResult = await execFileAsync(process.execPath, ['--experimental-sqlite', lookupScript, '--index', authorIndex, '--snapshot-id', SNAPSHOT_ID]);
+  assert.equal(JSON.parse(lookupResult.stdout).authorCount, 2);
+  const rebuiltLookup = await execFileAsync(process.execPath, ['--experimental-sqlite', lookupScript, '--index', authorIndex, '--snapshot-id', SNAPSHOT_ID]);
+  assert.equal(JSON.parse(rebuiltLookup.stdout).authorCount, 2);
   const editionResult = await execFileAsync(process.execPath, [
-    editionScript, '--input', fileURLToPath(EDITIONS), '--output', editionIndex, '--author-index', authorIndex, '--snapshot-id', SNAPSHOT_ID,
+    '--experimental-sqlite', editionScript, '--input', fileURLToPath(EDITIONS), '--output', editionIndex, '--author-index', authorIndex, '--snapshot-id', SNAPSHOT_ID,
   ]);
   assert.equal(JSON.parse(editionResult.stdout).recordCount, 6);
 });

@@ -118,14 +118,15 @@ The snapshot index is not yet wired into resolved-artifact production. Database 
 
 ### Open Library bulk editions
 
-Download matching local editions and authors dumps manually from [Open Library's Data Dumps documentation](https://openlibrary.org/developers/dumps). The parser accepts the documented tab-separated dump rows (`type`, `key`, `revision`, `last_modified`, JSON payload) as either plain text or `.gz` files. Build the local author-key join first, then the editions index with the same local snapshot identifier:
+Download matching local editions and authors dumps manually from [Open Library's Data Dumps documentation](https://openlibrary.org/developers/dumps). The parser accepts the documented tab-separated dump rows (`type`, `key`, `revision`, `last_modified`, JSON payload) as either plain text or `.gz` files. Build the canonical local author index, derive its SQLite lookup accelerator, then build the editions index with the same local snapshot identifier:
 
 ```powershell
 npm run catalog:ol-author-index-build -- --input path/to/ol_dump_authors.txt.gz --output scripts/catalog-cache/open-library-authors --snapshot-id local-snapshot-id
+npm run catalog:ol-author-lookup-build -- --index scripts/catalog-cache/open-library-authors --snapshot-id local-snapshot-id
 npm run catalog:ol-snapshot-build -- --input path/to/ol_dump_editions.txt.gz --author-index scripts/catalog-cache/open-library-authors --output scripts/catalog-cache/open-library-index --snapshot-id local-snapshot-id
 ```
 
-The editions parser emits one candidate for each valid ISBN-13 (including validated ISBN-10 conversions), retains Open Library cover IDs as references, and uses only edition-level publication metadata. It needs the local author index because edition rows normally carry author keys rather than trustworthy author names. These commands are entirely local: they do not download files, contact providers, or access PostgreSQL.
+The derived `lookup.sqlite` is built beside `index.json` through a validated temporary database and atomic rename; the NDJSON author index remains canonical. The editions parser uses indexed exact-key SQLite lookups when that file exists and rejects an invalid or snapshot-mismatched database instead of falling back. Small fixture indexes without `lookup.sqlite` retain the NDJSON fallback. These commands are entirely local: they do not download files, contact providers, or access PostgreSQL.
 
 Before a large local bulk build, check the target volume. The preflight uses an intentionally conservative 8× input-size temporary-space estimate plus a reserve; it refuses the check with a non-zero exit status when that requirement exceeds free space. Override the amplification only with measurements from a comparable local build.
 

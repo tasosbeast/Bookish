@@ -13,8 +13,12 @@ import { DEFAULT_MAX_OPEN_RUNS, DEFAULT_SORT_CHUNK_SIZE, DEFAULT_WRITE_BUFFER_BY
 
 export const OPEN_LIBRARY_BULK_SOURCE = 'open-library-bulk';
 export const OPEN_LIBRARY_AUTHOR_INDEX_VERSION = 2;
+export const OPEN_LIBRARY_AUTHOR_LOOKUP_VERSION = 1;
 const AUTHOR_INDEX_FORMAT = 'bookish-open-library-author-index';
+const AUTHOR_LOOKUP_FORMAT = 'bookish-open-library-author-lookup';
 const AUTHOR_SHARD_COUNT = 64;
+const AUTHOR_LOOKUP_FILE = 'lookup.sqlite';
+const AUTHOR_LOOKUP_BATCH_SIZE = 50_000;
 
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 const plainObject = value => value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
@@ -248,6 +252,202 @@ function validateAuthorIndexMetadata(value) {
   return value;
 }
 
+async function readAuthorIndexMetadata(path) {
+  try { return validateAuthorIndexMetadata(JSON.parse(await fs.readFile(join(path, 'index.json'), 'utf8'))); }
+  catch (cause) {
+    if (cause instanceof CatalogContractError) throw cause;
+    throw new CatalogContractError('invalid_author_index', `Unable to read author index: ${cause.message}`);
+  }
+}
+
+async function sqlite() {
+  try { return await import('node:sqlite'); }
+  catch (cause) {
+    throw new CatalogContractError('sqlite_unavailable', `Open Library author lookup requires node:sqlite; run this catalog command with --experimental-sqlite (${cause.message})`);
+  }
+}
+
+function lookupMetadata(database) {
+  const row = database.prepare(`
+    SELECT snapshot_id, source_name, author_index_version, lookup_format,
+           lookup_version, source_author_count, author_count, conflicted_count
+      FROM metadata
+     WHERE singleton = 1
+  `).get();
+  if (!row || row.lookup_format !== AUTHOR_LOOKUP_FORMAT || row.lookup_version !== OPEN_LIBRARY_AUTHOR_LOOKUP_VERSION
+      || row.source_name !== OPEN_LIBRARY_BULK_SOURCE || row.author_index_version !== OPEN_LIBRARY_AUTHOR_INDEX_VERSION
+      || typeof row.snapshot_id !== 'string' || !row.snapshot_id
+      || !Number.isSafeInteger(row.source_author_count) || row.source_author_count < 0
+      || !Number.isSafeInteger(row.author_count) || row.author_count < 0
+      || !Number.isSafeInteger(row.conflicted_count) || row.conflicted_count < 0) {
+    fail('invalid_author_lookup', 'Open Library author lookup metadata is malformed or incompatible');
+  }
+  return row;
+}
+
+function validateLookupMetadata(database, authorMetadata) {
+  const metadata = lookupMetadata(database);
+  if (metadata.snapshot_id !== authorMetadata.snapshotId) fail('author_snapshot_mismatch', 'SQLite author lookup snapshotId does not match the author index');
+  if (metadata.source_author_count !== authorMetadata.statistics.accepted) fail('invalid_author_lookup', 'SQLite author lookup source count does not match the author index');
+  return metadata;
+}
+
+async function validateBuiltAuthorLookup(path, authorMetadata) {
+  const { DatabaseSync } = await sqlite();
+  const database = new DatabaseSync(path, { readOnly: true });
+  try {
+    const metadata = validateLookupMetadata(database, authorMetadata);
+    const integrity = database.prepare('PRAGMA integrity_check').all();
+    if (integrity.length !== 1 || integrity[0].integrity_check !== 'ok') fail('invalid_author_lookup', 'SQLite author lookup failed integrity validation');
+    const count = database.prepare('SELECT COUNT(*) AS count FROM authors').get().count;
+    const conflicts = database.prepare('SELECT COUNT(*) AS count FROM authors WHERE conflicted = 1').get().count;
+    if (count !== metadata.author_count || conflicts !== metadata.conflicted_count) fail('invalid_author_lookup', 'SQLite author lookup row counts do not match metadata');
+    database.prepare('SELECT name, conflicted FROM authors WHERE key = ?').get('/authors/validation-probe');
+    return metadata;
+  } finally {
+    database.close();
+  }
+}
+
+export async function buildOpenLibraryAuthorLookup({ indexPath, snapshotId, batchSize = AUTHOR_LOOKUP_BATCH_SIZE }) {
+  const path = resolve(indexPath);
+  const metadata = await readAuthorIndexMetadata(path);
+  if (snapshotId && metadata.snapshotId !== snapshotId) fail('author_snapshot_mismatch', 'Author index snapshotId does not match the requested lookup snapshot');
+  if (!Number.isSafeInteger(batchSize) || batchSize < 1) fail('invalid_author_lookup', 'batchSize must be a positive safe integer');
+
+  const outputPath = join(path, AUTHOR_LOOKUP_FILE);
+  const tempPath = `${outputPath}.building-${process.pid}-${Date.now()}`;
+  const { DatabaseSync } = await sqlite();
+  let database;
+  let sourceAuthorCount = 0;
+  let authorCount = 0;
+  let conflictedCount = 0;
+  let pending = 0;
+  let transactionOpen = false;
+  try {
+    await fs.rm(tempPath, { force: true });
+    database = new DatabaseSync(tempPath);
+    database.exec(`
+      PRAGMA journal_mode = OFF;
+      PRAGMA synchronous = OFF;
+      PRAGMA temp_store = FILE;
+      PRAGMA cache_size = -32768;
+      PRAGMA locking_mode = EXCLUSIVE;
+      CREATE TABLE metadata (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        snapshot_id TEXT NOT NULL,
+        source_name TEXT NOT NULL,
+        author_index_version INTEGER NOT NULL,
+        lookup_format TEXT NOT NULL,
+        lookup_version INTEGER NOT NULL,
+        source_author_count INTEGER NOT NULL,
+        author_count INTEGER NOT NULL,
+        conflicted_count INTEGER NOT NULL
+      );
+      CREATE TABLE authors (
+        key TEXT PRIMARY KEY,
+        name TEXT,
+        conflicted INTEGER NOT NULL CHECK (conflicted IN (0, 1)),
+        CHECK ((conflicted = 0 AND name IS NOT NULL) OR (conflicted = 1 AND name IS NULL))
+      ) WITHOUT ROWID;
+      PRAGMA user_version = ${OPEN_LIBRARY_AUTHOR_LOOKUP_VERSION};
+      BEGIN IMMEDIATE;
+    `);
+    transactionOpen = true;
+    const insertAuthor = database.prepare('INSERT INTO authors (key, name, conflicted) VALUES (?, ?, ?)');
+    const insertMetadata = database.prepare(`
+      INSERT INTO metadata (
+        singleton, snapshot_id, source_name, author_index_version, lookup_format,
+        lookup_version, source_author_count, author_count, conflicted_count
+      ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    function writeAuthor(key, name, conflicted) {
+      insertAuthor.run(key, conflicted ? null : name, conflicted ? 1 : 0);
+      authorCount += 1;
+      if (conflicted) conflictedCount += 1;
+      pending += 1;
+      if (pending >= batchSize) {
+        database.exec('COMMIT; BEGIN IMMEDIATE;');
+        pending = 0;
+      }
+    }
+
+    for (let shard = 0; shard < AUTHOR_SHARD_COUNT; shard++) {
+      let currentKey = null;
+      let currentName = null;
+      let conflicted = false;
+      let previousKey = null;
+      let previousName = null;
+      try {
+        for await (const row of readNdjson(join(path, 'authors', shardName(shard)))) {
+          const key = typeof row?.key === 'string' ? row.key : null;
+          const name = text(row?.name);
+          if (!plainObject(row) || !key || !name) fail('invalid_author_index', `Malformed author row in shard ${shardName(shard)}`);
+          if (previousKey !== null && (previousKey.localeCompare(key) > 0 || (previousKey === key && previousName.localeCompare(name) > 0))) {
+            fail('invalid_author_index', `Author shard ${shardName(shard)} is not sorted`);
+          }
+          previousKey = key;
+          previousName = name;
+          sourceAuthorCount += 1;
+          if (key !== currentKey) {
+            if (currentKey !== null) writeAuthor(currentKey, currentName, conflicted);
+            currentKey = key;
+            currentName = name;
+            conflicted = false;
+          } else if (name !== currentName) {
+            conflicted = true;
+          }
+        }
+      } catch (cause) {
+        if (cause.code !== 'ENOENT') throw cause;
+      }
+      if (currentKey !== null) writeAuthor(currentKey, currentName, conflicted);
+    }
+    if (sourceAuthorCount !== metadata.statistics.accepted) fail('invalid_author_index', 'Author shard row count does not match index metadata');
+    database.exec('COMMIT;');
+    transactionOpen = false;
+    database.exec('PRAGMA locking_mode = NORMAL; PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; BEGIN IMMEDIATE;');
+    transactionOpen = true;
+    insertMetadata.run(
+      metadata.snapshotId, OPEN_LIBRARY_BULK_SOURCE, OPEN_LIBRARY_AUTHOR_INDEX_VERSION,
+      AUTHOR_LOOKUP_FORMAT, OPEN_LIBRARY_AUTHOR_LOOKUP_VERSION, sourceAuthorCount, authorCount, conflictedCount,
+    );
+    database.exec('COMMIT;');
+    transactionOpen = false;
+    database.exec('PRAGMA optimize;');
+    database.close();
+    database = null;
+
+    await validateBuiltAuthorLookup(tempPath, metadata);
+    await fs.rename(tempPath, outputPath);
+    return {
+      format: AUTHOR_LOOKUP_FORMAT,
+      lookupVersion: OPEN_LIBRARY_AUTHOR_LOOKUP_VERSION,
+      snapshotId: metadata.snapshotId,
+      sourceName: OPEN_LIBRARY_BULK_SOURCE,
+      sourceAuthorCount,
+      authorCount,
+      conflictedCount,
+      outputPath,
+    };
+  } catch (cause) {
+    if (database && transactionOpen) {
+      try { database.exec('ROLLBACK;'); } catch {}
+    }
+    throw cause;
+  } finally {
+    if (database) {
+      try { database.close(); } catch {}
+    }
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+    await fs.rm(`${tempPath}-journal`, { force: true }).catch(() => {});
+    await fs.rm(`${tempPath}-wal`, { force: true }).catch(() => {});
+    await fs.rm(`${tempPath}-shm`, { force: true }).catch(() => {});
+  }
+}
+
+
 async function appendAuthor(handles, directory, key, value) {
   const path = join(directory, shardName(shardFor(key)));
   let handle = handles.get(path);
@@ -403,13 +603,40 @@ export async function buildOpenLibraryAuthorIndex({
 
 export async function createOpenLibraryAuthorLookup({ indexPath, snapshotId }) {
   const path = resolve(indexPath);
-  let metadata;
-  try { metadata = validateAuthorIndexMetadata(JSON.parse(await fs.readFile(join(path, 'index.json'), 'utf8'))); }
-  catch (cause) {
-    if (cause instanceof CatalogContractError) throw cause;
-    throw new CatalogContractError('invalid_author_index', `Unable to read author index: ${cause.message}`);
-  }
+  const metadata = await readAuthorIndexMetadata(path);
   if (snapshotId && metadata.snapshotId !== snapshotId) fail('author_snapshot_mismatch', 'Author index snapshotId does not match the edition snapshot');
+  const lookupPath = join(path, AUTHOR_LOOKUP_FILE);
+  try {
+    await fs.access(lookupPath);
+    const { DatabaseSync } = await sqlite();
+    const database = new DatabaseSync(lookupPath, { readOnly: true });
+    try {
+      validateLookupMetadata(database, metadata);
+      const query = database.prepare('SELECT name, conflicted FROM authors WHERE key = ?');
+      let closed = false;
+      return {
+        async getNames(keys) {
+          const result = new Map();
+          for (const key of new Set(keys)) {
+            const row = query.get(key);
+            if (row && row.conflicted === 0 && typeof row.name === 'string') result.set(key, row.name);
+          }
+          return result;
+        },
+        close() {
+          if (!closed) {
+            database.close();
+            closed = true;
+          }
+        },
+      };
+    } catch (cause) {
+      database.close();
+      throw cause;
+    }
+  } catch (cause) {
+    if (cause.code !== 'ENOENT') throw cause;
+  }
   const conflict = Symbol('conflicting_author_names');
   const shardCache = new Map();
 
