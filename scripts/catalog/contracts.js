@@ -113,6 +113,15 @@ export function validateSourceManifest(entries) {
   return normalized;
 }
 
+export function manifestFingerprint(entries) {
+  const normalized = validateSourceManifest(entries);
+  const fingerprints = normalized.map(entry => ({
+    key: entry.key,
+    fingerprint: sourceFingerprint(entry),
+  })).sort((a, b) => a.key.localeCompare(b.key));
+  return `sha256:${createHash('sha256').update(JSON.stringify(fingerprints)).digest('hex')}`;
+}
+
 function validateFingerprint(value) {
   if (typeof value !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(value)) fail('invalid_fingerprint', 'sourceFingerprint must be a SHA-256 fingerprint');
   return value;

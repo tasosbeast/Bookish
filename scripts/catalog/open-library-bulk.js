@@ -132,7 +132,7 @@ function publicationYear(data) {
   return selectEditionPublicationYear({ publicationDates: [data.publish_date ?? data.publication_date], publicationYears: [] });
 }
 
-function isbn13Values(data) {
+export function isbn13Values(data) {
   const valid = new Set();
   let invalid = 0;
   for (const value of Array.isArray(data.isbn_13) ? data.isbn_13 : []) {
@@ -157,7 +157,7 @@ function error(message, code, lineNumber) {
   return new SnapshotRecordError(message, { code, lineNumber });
 }
 
-async function authorNames(authorLookup, keys) {
+export async function authorNames(authorLookup, keys) {
   if (!keys.length || !authorLookup || typeof authorLookup.getNames !== 'function') return null;
   const names = await authorLookup.getNames(keys);
   if (!(names instanceof Map)) return null;
@@ -165,7 +165,7 @@ async function authorNames(authorLookup, keys) {
   return resolved.every(Boolean) ? resolved : null;
 }
 
-export async function* mapOpenLibraryEditionRecord(record, { snapshotId, authorLookup } = {}) {
+export async function* mapOpenLibraryEditionRecord(record, { snapshotId, authorLookup, authors: preResolvedAuthors } = {}) {
   if (record instanceof SnapshotRecordError) {
     yield record;
     return;
@@ -180,11 +180,13 @@ export async function* mapOpenLibraryEditionRecord(record, { snapshotId, authorL
     return;
   }
   const authorKeys = referenceKeys(record.data.authors);
-  let authors;
-  try { authors = await authorNames(authorLookup, authorKeys); }
-  catch (cause) {
-    yield new SnapshotRecordError(`Unable to resolve edition authors for ${record.key}`, { code: 'author_lookup_error', lineNumber: record.lineNumber, cause });
-    return;
+  let authors = Array.isArray(preResolvedAuthors) && preResolvedAuthors.length ? preResolvedAuthors : null;
+  if (!authors) {
+    try { authors = await authorNames(authorLookup, authorKeys); }
+    catch (cause) {
+      yield new SnapshotRecordError(`Unable to resolve edition authors for ${record.key}`, { code: 'author_lookup_error', lineNumber: record.lineNumber, cause });
+      return;
+    }
   }
   if (!authors?.length) {
     yield error(`Edition ${record.key} has no reliable author names`, 'missing_author', record.lineNumber);
