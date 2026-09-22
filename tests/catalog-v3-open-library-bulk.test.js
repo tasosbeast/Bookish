@@ -48,10 +48,65 @@ function dumpLine({ key, title, isbn13 }) {
   return `/type/edition\t${key}\t1\t2026-01-01T00:00:00.000000\t${JSON.stringify({ title, authors: [{ key: '/authors/OL1A' }], isbn_13: [isbn13], languages: [{ key: '/languages/eng' }] })}\n`;
 }
 
+function authorDumpLine({ key, name }) {
+  return `/type/author\t${key}\t1\t2026-01-01T00:00:00.000000\t${JSON.stringify({ name })}\n`;
+}
+
 test('ISBN-10 conversion validates its own checksum and produces canonical ISBN-13', () => {
   assert.equal(normalizeIsbn10ToIsbn13('0141439513'), '9780141439518');
   assert.throws(() => normalizeIsbn10ToIsbn13('0141439514'), /Invalid ISBN-10/);
   assert.throws(() => normalizeIsbn10ToIsbn13('not-an-isbn'), /Invalid ISBN-10/);
+});
+
+test('author lookup lazily caches complete parsed shards while preserving unresolved semantics', async t => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const inputPath = join(directory, 'authors.txt');
+  const authorIndex = join(directory, 'author-index');
+  const conflictKey = '/authors/OLCONFLICTA';
+  const authors = Array.from({ length: 128 }, (_, index) => ({
+    key: `/authors/OLCACHE${index}A`,
+    name: `Cached Author ${index}`,
+  }));
+  await fs.writeFile(inputPath, [
+    ...authors.map(authorDumpLine),
+    authorDumpLine({ key: conflictKey, name: 'Conflicting Author One' }),
+    authorDumpLine({ key: conflictKey, name: 'Conflicting Author Two' }),
+  ].join(''));
+  await buildOpenLibraryAuthorIndex({
+    inputPath,
+    outputPath: authorIndex,
+    snapshotId: SNAPSHOT_ID,
+    generatedAt: '2026-09-10T00:00:00.000Z',
+  });
+
+  const shardsPath = join(authorIndex, 'authors');
+  const shards = new Map(await Promise.all((await fs.readdir(shardsPath)).map(async file => [
+    file,
+    (await fs.readFile(join(shardsPath, file), 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse),
+  ])));
+  const reusableShard = [...shards].find(([, rows]) => rows.filter(row => row.key !== conflictKey).length >= 2);
+  const otherShard = [...shards].find(([file, rows]) => file !== reusableShard?.[0] && rows.some(row => row.key !== conflictKey));
+  assert.ok(reusableShard, 'synthetic index should contain two authors in one shard');
+  assert.ok(otherShard, 'synthetic index should contain authors in a different shard');
+  const [reusableFile, reusableRows] = reusableShard;
+  const [first, second] = reusableRows.filter(row => row.key !== conflictKey);
+  const other = otherShard[1].find(row => row.key !== conflictKey);
+
+  const lookup = await createOpenLibraryAuthorLookup({ indexPath: authorIndex, snapshotId: SNAPSHOT_ID });
+  assert.equal((await lookup.getNames([first.key])).get(first.key), first.name);
+  assert.equal((await lookup.getNames([first.key])).get(first.key), first.name);
+  assert.equal((await lookup.getNames([other.key])).get(other.key), other.name);
+  assert.equal((await lookup.getNames([conflictKey])).has(conflictKey), false);
+
+  await fs.rename(join(shardsPath, reusableFile), join(directory, reusableFile));
+  assert.equal((await lookup.getNames([second.key])).get(second.key), second.name);
+  assert.equal((await lookup.getNames([first.key])).get(first.key), first.name);
+  assert.equal((await lookup.getNames(['/authors/OLMISSINGA'])).has('/authors/OLMISSINGA'), false);
+  await assert.rejects(
+    createOpenLibraryAuthorLookup({ indexPath: authorIndex, snapshotId: 'different-snapshot' }),
+    error => error.code === 'author_snapshot_mismatch',
+  );
 });
 
 test('Open Library edition dump maps local author keys and edition-only metadata into canonical candidates', async t => {

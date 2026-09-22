@@ -410,16 +410,47 @@ export async function createOpenLibraryAuthorLookup({ indexPath, snapshotId }) {
     throw new CatalogContractError('invalid_author_index', `Unable to read author index: ${cause.message}`);
   }
   if (snapshotId && metadata.snapshotId !== snapshotId) fail('author_snapshot_mismatch', 'Author index snapshotId does not match the edition snapshot');
+  const conflict = Symbol('conflicting_author_names');
+  const shardCache = new Map();
+
+  async function loadShard(shard) {
+    const names = new Map();
+    try {
+      for await (const row of readNdjson(join(path, 'authors', shardName(shard)))) {
+        const key = typeof row?.key === 'string' ? row.key : null;
+        const name = text(row?.name);
+        if (key === null || !name) continue;
+        const existing = names.get(key);
+        if (existing === undefined) names.set(key, name);
+        else if (existing !== name) names.set(key, conflict);
+      }
+    } catch (cause) {
+      if (cause.code !== 'ENOENT') throw cause;
+    }
+    return names;
+  }
+
+  function getShard(shard) {
+    let names = shardCache.get(shard);
+    if (!names) {
+      names = loadShard(shard);
+      shardCache.set(shard, names);
+    }
+    return names;
+  }
+
   return {
     async getNames(keys) {
+      const requestedKeys = [...keys];
+      const shardNames = new Map();
       const result = new Map();
-      for (const key of keys) {
-        const file = join(path, 'authors', shardName(shardFor(key)));
-        let rows = [];
-        try { rows = (await fs.readFile(file, 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse); }
-        catch (cause) { if (cause.code !== 'ENOENT') throw cause; }
-        const names = [...new Set(rows.filter(row => row?.key === key && text(row.name)).map(row => text(row.name)))];
-        if (names.length === 1) result.set(key, names[0]);
+      for (const key of requestedKeys) {
+        const shard = shardFor(key);
+        if (!shardNames.has(shard)) shardNames.set(shard, await getShard(shard));
+      }
+      for (const key of requestedKeys) {
+        const name = shardNames.get(shardFor(key)).get(key);
+        if (typeof name === 'string') result.set(key, name);
       }
       return result;
     },
