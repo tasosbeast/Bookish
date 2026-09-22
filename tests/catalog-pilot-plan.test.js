@@ -13,6 +13,7 @@ import {
   classifyPublicationDatePrecision,
   pilotDisqualificationReason,
   adaptCanonicalCandidateForScoring,
+  buildIsbnMismatchDiagnostic,
   evaluateSourceEntry,
   generatePilotSummary,
   planCatalogPilot,
@@ -606,3 +607,271 @@ test('21. Planner explicitly performs no network calls (throws if fetch is calle
     globalThis.fetch = originalFetch;
   }
 });
+
+test('22. Pinned exact ISBN with unrelated alternate OL work IDs is selected and not blocked by conflicting_open_library_works', async t => {
+  const candWorkA = makeCandidate({
+    recordId: 'edition-work-a',
+    isbn13: '9780141439518',
+    publisher: 'Penguin',
+    format: 'Paperback',
+    sourceIdentifiers: {
+      openLibraryEdition: '/books/OL100M',
+      openLibraryWorks: '/works/OL100W',
+    },
+    cover: { url: 'https://example.test/cover.jpg', reference: 'cover-1' },
+    description: 'Target pinned edition description.',
+  });
+  const candWorkB = makeCandidate({
+    recordId: 'edition-work-b',
+    isbn13: '9780451524935',
+    publisher: 'Signet',
+    sourceIdentifiers: {
+      openLibraryEdition: '/books/OL200M',
+      openLibraryWorks: '/works/OL200W',
+    },
+    cover: null,
+    description: null,
+  });
+
+  const { directory, adapter } = await createTestIndex([candWorkA, candWorkB]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const plan = await planCatalogPilot({
+    sources: [{
+      key: 'pride-and-prejudice',
+      title: 'Pride and Prejudice',
+      author: 'Jane Austen',
+      pinnedIsbn13: '9780141439518',
+    }],
+    adapter,
+  });
+
+  assert.equal(plan.entries[0].status, 'selected');
+  assert.equal(plan.entries[0].selection.isbn13, '9780141439518');
+  assert.deepEqual(plan.entries[0].selection.openLibraryWorks, ['/works/OL100W']);
+});
+
+test('23. preferredIsbn13 with allowAlternateIsbn=false is selected and not blocked by conflicting_open_library_works', async t => {
+  const candWorkA = makeCandidate({
+    recordId: 'edition-work-a',
+    isbn13: '9780141439518',
+    publisher: 'Penguin',
+    format: 'Paperback',
+    sourceIdentifiers: {
+      openLibraryEdition: '/books/OL100M',
+      openLibraryWorks: '/works/OL100W',
+    },
+    cover: { url: 'https://example.test/cover.jpg', reference: 'cover-1' },
+    description: 'Target preferred edition description.',
+  });
+  const candWorkB = makeCandidate({
+    recordId: 'edition-work-b',
+    isbn13: '9780451524935',
+    publisher: 'Signet',
+    sourceIdentifiers: {
+      openLibraryEdition: '/books/OL200M',
+      openLibraryWorks: '/works/OL200W',
+    },
+    cover: null,
+    description: null,
+  });
+
+  const { directory, adapter } = await createTestIndex([candWorkA, candWorkB]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const plan = await planCatalogPilot({
+    sources: [{
+      key: 'pride-and-prejudice',
+      title: 'Pride and Prejudice',
+      author: 'Jane Austen',
+      preferredIsbn13: '9780141439518',
+      allowAlternateIsbn: false,
+    }],
+    adapter,
+  });
+
+  assert.equal(plan.entries[0].status, 'selected');
+  assert.equal(plan.entries[0].selection.isbn13, '9780141439518');
+  assert.deepEqual(plan.entries[0].selection.openLibraryWorks, ['/works/OL100W']);
+});
+
+test('24. preferredIsbn13 with allowAlternateIsbn=true considers alternates and preserves work-conflict protection', async t => {
+  const candWorkA = makeCandidate({
+    recordId: 'edition-work-a',
+    isbn13: '9780141439518',
+    publisher: 'Penguin',
+    format: 'Paperback',
+    sourceIdentifiers: {
+      openLibraryEdition: '/books/OL100M',
+      openLibraryWorks: '/works/OL100W',
+    },
+    cover: { url: 'https://example.test/cover.jpg', reference: 'cover-1' },
+  });
+  const candWorkB = makeCandidate({
+    recordId: 'edition-work-b',
+    isbn13: '9780451524935',
+    publisher: 'Signet',
+    sourceIdentifiers: {
+      openLibraryEdition: '/books/OL200M',
+      openLibraryWorks: '/works/OL200W',
+    },
+    cover: null,
+  });
+
+  const { directory, adapter } = await createTestIndex([candWorkA, candWorkB]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  const plan = await planCatalogPilot({
+    sources: [{
+      key: 'pride-and-prejudice',
+      title: 'Pride and Prejudice',
+      author: 'Jane Austen',
+      preferredIsbn13: '9781234567897',
+      allowAlternateIsbn: true,
+    }],
+    adapter,
+  });
+
+  assert.equal(plan.entries[0].status, 'needs_review');
+  assert.equal(plan.entries[0].reason, 'conflicting_open_library_works');
+  assert.deepEqual(plan.entries[0].conflictingWorkIds, ['/works/OL100W', '/works/OL200W']);
+});
+
+test('25. Missing pinned or preferred ISBN produces mismatch with diagnostics when candidate was not in index', async t => {
+  const candA = makeCandidate({
+    recordId: 'edition-present',
+    isbn13: '9780141439518',
+  });
+  const { directory, adapter } = await createTestIndex([candA]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  // Missing pinned ISBN
+  const pinnedPlan = await planCatalogPilot({
+    sources: [{
+      key: 'pride-and-prejudice',
+      title: 'Pride and Prejudice',
+      author: 'Jane Austen',
+      pinnedIsbn13: '9781234567897',
+    }],
+    adapter,
+  });
+  assert.equal(pinnedPlan.entries[0].status, 'needs_review');
+  assert.equal(pinnedPlan.entries[0].reason, 'pinned_isbn_mismatch');
+  assert.equal(pinnedPlan.entries[0].expectedIsbn13, '9781234567897');
+  assert.equal(pinnedPlan.entries[0].existedBeforeEligibility, false);
+  assert.deepEqual(pinnedPlan.entries[0].rejectionReasons, []);
+  assert.equal(pinnedPlan.entries[0].candidateRecordId, null);
+  assert.equal(pinnedPlan.entries[0].openLibraryEditionId, null);
+
+  // Missing preferred ISBN with allowAlternateIsbn=false
+  const preferredPlan = await planCatalogPilot({
+    sources: [{
+      key: 'pride-and-prejudice',
+      title: 'Pride and Prejudice',
+      author: 'Jane Austen',
+      preferredIsbn13: '9781234567897',
+      allowAlternateIsbn: false,
+    }],
+    adapter,
+  });
+  assert.equal(preferredPlan.entries[0].status, 'needs_review');
+  assert.equal(preferredPlan.entries[0].reason, 'preferred_isbn_mismatch');
+  assert.equal(preferredPlan.entries[0].expectedIsbn13, '9781234567897');
+  assert.equal(preferredPlan.entries[0].existedBeforeEligibility, false);
+  assert.deepEqual(preferredPlan.entries[0].rejectionReasons, []);
+  assert.equal(preferredPlan.entries[0].candidateRecordId, null);
+  assert.equal(preferredPlan.entries[0].openLibraryEditionId, null);
+});
+
+test('26. Ineligible pinned or preferred ISBN produces mismatch with diagnostics explaining why candidate was rejected', async t => {
+  const ineligibleCandidate = makeCandidate({
+    recordId: 'edition-boxed-1',
+    isbn13: '9780141439518',
+    format: 'Boxed Set',
+    sourceIdentifiers: {
+      openLibraryEdition: '/books/OL999M',
+      openLibraryWorks: '/works/OL999W',
+    },
+  });
+  const validCandidate = makeCandidate({
+    recordId: 'edition-valid-1',
+    isbn13: '9780451524935',
+    format: 'Paperback',
+  });
+
+  const { directory, adapter } = await createTestIndex([ineligibleCandidate, validCandidate]);
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+
+  // Ineligible pinned ISBN
+  const pinnedPlan = await planCatalogPilot({
+    sources: [{
+      key: 'pride-and-prejudice',
+      title: 'Pride and Prejudice',
+      author: 'Jane Austen',
+      pinnedIsbn13: '9780141439518',
+    }],
+    adapter,
+  });
+  assert.equal(pinnedPlan.entries[0].status, 'needs_review');
+  assert.equal(pinnedPlan.entries[0].reason, 'pinned_isbn_mismatch');
+  assert.equal(pinnedPlan.entries[0].expectedIsbn13, '9780141439518');
+  assert.equal(pinnedPlan.entries[0].existedBeforeEligibility, true);
+  assert.deepEqual(pinnedPlan.entries[0].rejectionReasons, ['rejected_boxed_set']);
+  assert.equal(pinnedPlan.entries[0].candidateRecordId, 'edition-boxed-1');
+  assert.equal(pinnedPlan.entries[0].openLibraryEditionId, '/books/OL999M');
+
+  // Ineligible preferred ISBN with allowAlternateIsbn=false
+  const preferredPlan = await planCatalogPilot({
+    sources: [{
+      key: 'pride-and-prejudice',
+      title: 'Pride and Prejudice',
+      author: 'Jane Austen',
+      preferredIsbn13: '9780141439518',
+      allowAlternateIsbn: false,
+    }],
+    adapter,
+  });
+  assert.equal(preferredPlan.entries[0].status, 'needs_review');
+  assert.equal(preferredPlan.entries[0].reason, 'preferred_isbn_mismatch');
+  assert.equal(preferredPlan.entries[0].expectedIsbn13, '9780141439518');
+  assert.equal(preferredPlan.entries[0].existedBeforeEligibility, true);
+  assert.deepEqual(preferredPlan.entries[0].rejectionReasons, ['rejected_boxed_set']);
+  assert.equal(preferredPlan.entries[0].candidateRecordId, 'edition-boxed-1');
+  assert.equal(preferredPlan.entries[0].openLibraryEditionId, '/books/OL999M');
+});
+
+test('27. buildIsbnMismatchDiagnostic helper handles matching, missing, and reasons deduplication', () => {
+  const diagNotFound = buildIsbnMismatchDiagnostic('9781111111111', [], []);
+  assert.deepEqual(diagNotFound, {
+    expectedIsbn13: '9781111111111',
+    existedBeforeEligibility: false,
+    rejectionReasons: [],
+    candidateRecordId: null,
+    openLibraryEditionId: null,
+  });
+
+  const cand = {
+    recordId: 'rec-1',
+    isbn13: '9782222222222',
+    sourceIdentifiers: { openLibraryEdition: 'OL222M' },
+  };
+  const ev1 = {
+    isbn: '9782222222222',
+    eligible: false,
+    reasons: ['rejected_calendar', 'format_invalid'],
+  };
+  const ev2 = {
+    isbn: '9782222222222',
+    eligible: false,
+    reasons: ['format_invalid', 'language_mismatch'],
+  };
+  const diagFound = buildIsbnMismatchDiagnostic('9782222222222', [cand], [ev1, ev2]);
+  assert.deepEqual(diagFound, {
+    expectedIsbn13: '9782222222222',
+    existedBeforeEligibility: true,
+    rejectionReasons: ['rejected_calendar', 'format_invalid', 'language_mismatch'],
+    candidateRecordId: 'rec-1',
+    openLibraryEditionId: 'OL222M',
+  });
+});
+

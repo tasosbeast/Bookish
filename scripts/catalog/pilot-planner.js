@@ -104,6 +104,70 @@ export function adaptCanonicalCandidateForScoring(canonicalCandidate) {
   };
 }
 
+export function buildIsbnMismatchDiagnostic(expectedIsbn13, canonicalCandidates = [], evaluations = []) {
+  const matches = (cand) => {
+    if (!cand) return false;
+    if (cand.isbn13 === expectedIsbn13) return true;
+    if (Array.isArray(cand.isbn13) && cand.isbn13.includes(expectedIsbn13)) return true;
+    return false;
+  };
+
+  const matchingCanonical = (canonicalCandidates || []).filter(matches);
+  const existedBeforeEligibility = matchingCanonical.length > 0;
+
+  let candidateRecordId = null;
+  let openLibraryEditionId = null;
+  const rejectionReasons = [];
+
+  if (existedBeforeEligibility) {
+    const firstMatch = matchingCanonical[0];
+    candidateRecordId = firstMatch.recordId ?? null;
+    openLibraryEditionId = firstMatch.sourceIdentifiers?.openLibraryEdition ?? firstMatch.recordId ?? null;
+
+    for (const ev of (evaluations || [])) {
+      const evMatches = ev.isbn === expectedIsbn13
+        || (Array.isArray(ev.isbn) && ev.isbn.includes(expectedIsbn13))
+        || matches(ev.candidate);
+      if (evMatches && !ev.eligible) {
+        if (Array.isArray(ev.reasons)) {
+          rejectionReasons.push(...ev.reasons);
+        }
+      }
+    }
+  }
+
+  return {
+    expectedIsbn13,
+    existedBeforeEligibility,
+    rejectionReasons: [...new Set(rejectionReasons)],
+    candidateRecordId,
+    openLibraryEditionId,
+  };
+}
+
+function isbnMismatchEntry(reason, expectedIsbn13, source, canonicalCandidates, evaluations) {
+  const diagnostic = buildIsbnMismatchDiagnostic(expectedIsbn13, canonicalCandidates, evaluations);
+  return {
+    key: source.key,
+    status: 'needs_review',
+    reason,
+    expectedIsbn13: diagnostic.expectedIsbn13,
+    existedBeforeEligibility: diagnostic.existedBeforeEligibility,
+    rejectionReasons: diagnostic.rejectionReasons,
+    candidateRecordId: diagnostic.candidateRecordId,
+    openLibraryEditionId: diagnostic.openLibraryEditionId,
+    candidateCount: canonicalCandidates.length,
+    requested: {
+      key: source.key,
+      title: source.title,
+      author: source.author,
+    },
+    selection: null,
+    quality: null,
+    evaluations,
+  };
+}
+
 export async function evaluateSourceEntry(adapter, rawSource) {
   const source = validateSourceEntry(rawSource);
   const canonicalCandidates = await adapter.getCandidates(source);
@@ -175,8 +239,24 @@ export async function evaluateSourceEntry(adapter, rawSource) {
     };
   }
 
-  // Inspect Open Library work identities across eligible candidates
-  const candidateWorkSets = eligibleAdaptedCandidates
+  // Handle pinnedIsbn13 or preferredIsbn13 without allowAlternateIsbn FIRST
+  let candidatesForSelection = eligibleAdaptedCandidates;
+  if (source.pinnedIsbn13) {
+    const matchingPinned = eligibleAdaptedCandidates.filter(c => c.isbn13.includes(source.pinnedIsbn13));
+    if (!matchingPinned.length) {
+      return isbnMismatchEntry('pinned_isbn_mismatch', source.pinnedIsbn13, source, canonicalCandidates, evaluations);
+    }
+    candidatesForSelection = matchingPinned;
+  } else if (source.preferredIsbn13 && !source.allowAlternateIsbn) {
+    const matchingPreferred = eligibleAdaptedCandidates.filter(c => c.isbn13.includes(source.preferredIsbn13));
+    if (!matchingPreferred.length) {
+      return isbnMismatchEntry('preferred_isbn_mismatch', source.preferredIsbn13, source, canonicalCandidates, evaluations);
+    }
+    candidatesForSelection = matchingPreferred;
+  }
+
+  // Inspect Open Library work identities across candidatesForSelection
+  const candidateWorkSets = candidatesForSelection
     .map(c => (c._canonical?.sourceIdentifiers?.openLibraryWorks
       ? c._canonical.sourceIdentifiers.openLibraryWorks.split(',').map(s => s.trim()).filter(Boolean)
       : []))
@@ -208,83 +288,15 @@ export async function evaluateSourceEntry(adapter, rawSource) {
     }
   }
 
-  // Handle pinnedIsbn13 or preferredIsbn13 without allowAlternateIsbn
-  let candidatesForSelection = eligibleAdaptedCandidates;
-  if (source.pinnedIsbn13) {
-    const matchingPinned = eligibleAdaptedCandidates.filter(c => c.isbn13.includes(source.pinnedIsbn13));
-    if (!matchingPinned.length) {
-      return {
-        key: source.key,
-        status: 'needs_review',
-        reason: 'pinned_isbn_mismatch',
-        candidateCount: canonicalCandidates.length,
-        requested: {
-          key: source.key,
-          title: source.title,
-          author: source.author,
-        },
-        selection: null,
-        quality: null,
-        evaluations,
-      };
-    }
-    candidatesForSelection = matchingPinned;
-  } else if (source.preferredIsbn13 && !source.allowAlternateIsbn) {
-    const matchingPreferred = eligibleAdaptedCandidates.filter(c => c.isbn13.includes(source.preferredIsbn13));
-    if (!matchingPreferred.length) {
-      return {
-        key: source.key,
-        status: 'needs_review',
-        reason: 'preferred_isbn_mismatch',
-        candidateCount: canonicalCandidates.length,
-        requested: {
-          key: source.key,
-          title: source.title,
-          author: source.author,
-        },
-        selection: null,
-        quality: null,
-        evaluations,
-      };
-    }
-    candidatesForSelection = matchingPreferred;
-  }
-
   const selectionResult = selectEdition(source, candidatesForSelection);
 
   if (selectionResult.status === 'selected') {
     const winningIsbn = selectionResult.isbn;
     if (source.pinnedIsbn13 && winningIsbn !== source.pinnedIsbn13) {
-      return {
-        key: source.key,
-        status: 'needs_review',
-        reason: 'pinned_isbn_mismatch',
-        candidateCount: canonicalCandidates.length,
-        requested: {
-          key: source.key,
-          title: source.title,
-          author: source.author,
-        },
-        selection: null,
-        quality: null,
-        evaluations,
-      };
+      return isbnMismatchEntry('pinned_isbn_mismatch', source.pinnedIsbn13, source, canonicalCandidates, evaluations);
     }
     if (source.preferredIsbn13 && !source.allowAlternateIsbn && winningIsbn !== source.preferredIsbn13) {
-      return {
-        key: source.key,
-        status: 'needs_review',
-        reason: 'preferred_isbn_mismatch',
-        candidateCount: canonicalCandidates.length,
-        requested: {
-          key: source.key,
-          title: source.title,
-          author: source.author,
-        },
-        selection: null,
-        quality: null,
-        evaluations,
-      };
+      return isbnMismatchEntry('preferred_isbn_mismatch', source.preferredIsbn13, source, canonicalCandidates, evaluations);
     }
 
     const canonical = selectionResult.selected._canonical;
