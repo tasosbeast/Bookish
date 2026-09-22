@@ -16,7 +16,7 @@ export const OPEN_LIBRARY_AUTHOR_INDEX_VERSION = 2;
 export const OPEN_LIBRARY_AUTHOR_LOOKUP_VERSION = 1;
 const AUTHOR_INDEX_FORMAT = 'bookish-open-library-author-index';
 const AUTHOR_LOOKUP_FORMAT = 'bookish-open-library-author-lookup';
-const AUTHOR_SHARD_COUNT = 64;
+export const AUTHOR_SHARD_COUNT = 64;
 const AUTHOR_LOOKUP_FILE = 'lookup.sqlite';
 const AUTHOR_LOOKUP_BATCH_SIZE = 50_000;
 
@@ -35,11 +35,11 @@ function hash(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function shardFor(value) {
+export function shardFor(value) {
   return Number.parseInt(hash(value).slice(0, 8), 16) % AUTHOR_SHARD_COUNT;
 }
 
-function shardName(shard) {
+export function shardName(shard) {
   return `${String(shard).padStart(2, '0')}.ndjson`;
 }
 
@@ -242,7 +242,7 @@ function authorIndexMetadata({ snapshotId, generatedAt, statistics }) {
   };
 }
 
-function validateAuthorIndexMetadata(value) {
+export function validateAuthorIndexMetadata(value) {
   if (!plainObject(value) || Object.keys(value).length !== 7) fail('invalid_author_index', 'Author index metadata is malformed');
   if (value.format !== AUTHOR_INDEX_FORMAT || value.indexVersion !== OPEN_LIBRARY_AUTHOR_INDEX_VERSION || value.sourceName !== OPEN_LIBRARY_BULK_SOURCE || value.shardCount !== AUTHOR_SHARD_COUNT) {
     fail('invalid_author_index', 'Author index metadata has incompatible versions or source');
@@ -254,7 +254,7 @@ function validateAuthorIndexMetadata(value) {
   return value;
 }
 
-async function readAuthorIndexMetadata(path) {
+export async function readAuthorIndexMetadata(path) {
   try { return validateAuthorIndexMetadata(JSON.parse(await fs.readFile(join(path, 'index.json'), 'utf8'))); }
   catch (cause) {
     if (cause instanceof CatalogContractError) throw cause;

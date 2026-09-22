@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import * as fs from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import {
   CatalogContractError,
   manifestFingerprint,
@@ -11,14 +11,16 @@ import {
 import { validateCanonicalCandidate } from './canonical-source.js';
 import { normalizeAuthorName, normalizeTitle } from './normalize.js';
 import { SnapshotRecordError } from './snapshot-reader.js';
-import { stableJson } from './external-sort.js';
+import { readNdjson, stableJson } from './external-sort.js';
 import {
   OPEN_LIBRARY_BULK_SOURCE,
   authorNames,
-  createOpenLibraryAuthorLookup,
   isbn13Values,
   mapOpenLibraryEditionRecord,
+  readAuthorIndexMetadata,
   readOpenLibraryBulkRecords,
+  shardFor,
+  shardName,
 } from './open-library-bulk.js';
 
 export const TARGETED_ARTIFACT_FORMAT = 'bookish-open-library-targeted-candidates';
@@ -112,6 +114,11 @@ export async function readTargetedArtifactMetadata(artifactPath) {
   let database;
   try {
     database = new DatabaseSync(resolve(artifactPath), { readOnly: true });
+    const tableRows = database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+    const tableNames = tableRows.map(r => r.name);
+    if (tableNames.includes('pending_editions') || tableNames.includes('pending_author_keys')) {
+      fail('invalid_targeted_artifact', 'Targeted artifact contains internal pending working tables');
+    }
     const row = database.prepare(`
       SELECT artifact_format, artifact_version, source_name, snapshot_id,
              source_manifest_fingerprint, source_manifest_count, rows_scanned,
@@ -137,6 +144,13 @@ export async function validateBuiltTargetedArtifact(artifactPath, expectations =
     if (integrity.length !== 1 || integrity[0].integrity_check !== 'ok') {
       fail('corrupt_targeted_artifact', 'Targeted artifact failed SQLite integrity check');
     }
+
+    const tableRows = database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+    const tableNames = tableRows.map(r => r.name);
+    if (tableNames.includes('pending_editions') || tableNames.includes('pending_author_keys')) {
+      fail('corrupt_targeted_artifact', 'Targeted artifact contains internal pending working tables');
+    }
+
     const row = database.prepare(`
       SELECT artifact_format, artifact_version, source_name, snapshot_id,
              source_manifest_fingerprint, source_manifest_count, rows_scanned,
@@ -192,8 +206,7 @@ export async function validateBuiltTargetedArtifact(artifactPath, expectations =
 export async function buildTargetedOpenLibraryArtifact({
   sources,
   inputPath,
-  authorIndexPath = null,
-  authorLookup = null,
+  authorIndexPath,
   outputPath,
   snapshotId,
   batchSize = DEFAULT_TARGETED_BATCH_SIZE,
@@ -203,7 +216,13 @@ export async function buildTargetedOpenLibraryArtifact({
   if (!cleanSnapshotId) fail('invalid_argument', 'snapshotId is required');
   if (!inputPath) fail('invalid_argument', 'inputPath is required');
   if (!outputPath) fail('invalid_argument', 'outputPath is required');
-  if (!authorLookup && !authorIndexPath) fail('invalid_argument', 'authorIndexPath or authorLookup is required');
+  if (!authorIndexPath) fail('invalid_argument', 'authorIndexPath is required');
+
+  const resolvedAuthorIndexPath = resolve(authorIndexPath);
+  const authorIndexMeta = await readAuthorIndexMetadata(resolvedAuthorIndexPath);
+  if (authorIndexMeta.snapshotId !== cleanSnapshotId) {
+    fail('author_snapshot_mismatch', `Author index snapshotId (${authorIndexMeta.snapshotId}) does not match edition snapshot (${cleanSnapshotId})`);
+  }
 
   let rawSources = sources;
   if (typeof rawSources === 'string') {
@@ -237,8 +256,6 @@ export async function buildTargetedOpenLibraryArtifact({
 
   const { DatabaseSync } = await sqlite();
   let database = null;
-  let openedLookup = null;
-  let activeLookup = authorLookup;
   let transactionOpen = false;
 
   const statistics = {
@@ -248,7 +265,13 @@ export async function buildTargetedOpenLibraryArtifact({
     rejectedRows: 0,
     rowsPassingTitlePrefilter: 0,
     rowsPassingIsbnPrefilter: 0,
-    authorLookupsPerformed: 0,
+    pendingEditions: 0,
+    distinctAuthorKeysNeeded: 0,
+    authorShardsScanned: 0,
+    authorRowsScanned: 0,
+    authorKeysResolved: 0,
+    authorKeysMissing: 0,
+    authorKeysConflicted: 0,
     matchedEditions: 0,
     canonicalCandidates: 0,
     uniqueCandidateAssociations: 0,
@@ -260,11 +283,6 @@ export async function buildTargetedOpenLibraryArtifact({
   const startTime = Date.now();
 
   try {
-    if (!activeLookup) {
-      openedLookup = await createOpenLibraryAuthorLookup({ indexPath: authorIndexPath, snapshotId: cleanSnapshotId });
-      activeLookup = openedLookup;
-    }
-
     await fs.rm(tempPath, { force: true });
     database = new DatabaseSync(tempPath);
     database.exec(`
@@ -292,19 +310,31 @@ export async function buildTargetedOpenLibraryArtifact({
         canonical_json TEXT NOT NULL,
         PRIMARY KEY (source_key, candidate_record_key)
       ) WITHOUT ROWID;
+      CREATE TABLE pending_editions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        edition_key TEXT NOT NULL,
+        line_number INTEGER NOT NULL,
+        payload_json TEXT NOT NULL,
+        passes_title INTEGER NOT NULL
+      );
+      CREATE TABLE pending_author_keys (
+        author_key TEXT PRIMARY KEY,
+        shard INTEGER NOT NULL
+      ) WITHOUT ROWID;
       PRAGMA user_version = ${TARGETED_ARTIFACT_VERSION};
       BEGIN IMMEDIATE;
     `);
     transactionOpen = true;
 
-    const insertCandidate = database.prepare('INSERT OR IGNORE INTO candidates (source_key, candidate_record_key, canonical_json) VALUES (?, ?, ?)');
-    const insertMetadata = database.prepare(`
-      INSERT INTO metadata (
-        singleton, artifact_format, artifact_version, source_name, snapshot_id,
-        source_manifest_fingerprint, source_manifest_count, rows_scanned,
-        matched_edition_count, candidate_association_count, generated_at
-      ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    // ==========================================
+    // PHASE 1 — Scan editions dump once
+    // ==========================================
+    const insertPendingEdition = database.prepare(
+      'INSERT INTO pending_editions (edition_key, line_number, payload_json, passes_title) VALUES (?, ?, ?, ?)'
+    );
+    const insertPendingAuthorKey = database.prepare(
+      'INSERT OR IGNORE INTO pending_author_keys (author_key, shard) VALUES (?, ?)'
+    );
 
     let pendingOperations = 0;
 
@@ -325,14 +355,13 @@ export async function buildTargetedOpenLibraryArtifact({
       const passesTitle = Boolean(normalizedTitle && titleTargets.has(normalizedTitle));
 
       const isbns = isbn13Values(record.data);
-      const matchingIsbnSources = new Map();
+      let passesIsbn = false;
       for (const isbn of isbns.values) {
-        const matchingSources = isbnTargets.get(isbn);
-        if (matchingSources?.length) {
-          matchingIsbnSources.set(isbn, matchingSources);
+        if (isbnTargets.has(isbn)) {
+          passesIsbn = true;
+          break;
         }
       }
-      const passesIsbn = matchingIsbnSources.size > 0;
 
       if (passesTitle) statistics.rowsPassingTitlePrefilter += 1;
       if (passesIsbn) statistics.rowsPassingIsbnPrefilter += 1;
@@ -341,18 +370,127 @@ export async function buildTargetedOpenLibraryArtifact({
         continue;
       }
 
+      insertPendingEdition.run(record.key, record.lineNumber, JSON.stringify(record.data), passesTitle ? 1 : 0);
+      statistics.pendingEditions += 1;
+
       const authorKeys = Array.isArray(record.data.authors)
         ? [...new Set(record.data.authors.map(item => (typeof item?.key === 'string' && item.key.trim() ? item.key.trim() : null)).filter(Boolean))]
         : [];
-
-      let resolvedAuthors = null;
-      if (authorKeys.length > 0) {
-        statistics.authorLookupsPerformed += 1;
-        resolvedAuthors = await authorNames(activeLookup, authorKeys);
+      for (const authorKey of authorKeys) {
+        insertPendingAuthorKey.run(authorKey, shardFor(authorKey));
       }
 
+      pendingOperations += 1;
+      if (pendingOperations >= batchSize) {
+        database.exec('COMMIT; BEGIN IMMEDIATE;');
+        pendingOperations = 0;
+      }
+
+      if (typeof onProgress === 'function' && statistics.rowsScanned % 100_000 === 0) {
+        onProgress(statistics);
+      }
+    }
+
+    database.exec('COMMIT;');
+    transactionOpen = false;
+
+    // ==========================================
+    // PHASE 2 — Targeted author resolution
+    // ==========================================
+    const neededKeyRows = database.prepare('SELECT author_key, shard FROM pending_author_keys ORDER BY shard').all();
+    statistics.distinctAuthorKeysNeeded = neededKeyRows.length;
+
+    const resolvedAuthorsMap = new Map();
+    const conflictMarker = Symbol('author_conflict');
+
+    const distinctShardRows = database.prepare('SELECT DISTINCT shard FROM pending_author_keys ORDER BY shard').all();
+    for (const { shard } of distinctShardRows) {
+      const keysForShard = database.prepare('SELECT author_key FROM pending_author_keys WHERE shard = ?').all(shard);
+      const wantedKeys = new Set(keysForShard.map(r => r.author_key));
+      const shardFile = join(resolvedAuthorIndexPath, 'authors', shardName(shard));
+      statistics.authorShardsScanned += 1;
+
+      try {
+        for await (const row of readNdjson(shardFile)) {
+          statistics.authorRowsScanned += 1;
+          const key = typeof row?.key === 'string' ? row.key : null;
+          if (!key || !wantedKeys.has(key)) {
+            continue;
+          }
+          const name = text(row?.name);
+          if (!name) continue;
+
+          const existing = resolvedAuthorsMap.get(key);
+          if (existing === undefined) {
+            resolvedAuthorsMap.set(key, name);
+          } else if (existing !== name) {
+            resolvedAuthorsMap.set(key, conflictMarker);
+          }
+        }
+      } catch (err) {
+        if (err.code !== 'ENOENT') throw err;
+      }
+    }
+
+    for (const { author_key } of neededKeyRows) {
+      const val = resolvedAuthorsMap.get(author_key);
+      if (val === conflictMarker) {
+        statistics.authorKeysConflicted += 1;
+      } else if (typeof val === 'string') {
+        statistics.authorKeysResolved += 1;
+      } else {
+        statistics.authorKeysMissing += 1;
+      }
+    }
+
+    const targetedAuthorLookup = {
+      async getNames(keys) {
+        const result = new Map();
+        for (const key of keys) {
+          const name = resolvedAuthorsMap.get(key);
+          if (typeof name === 'string') {
+            result.set(key, name);
+          }
+        }
+        return result;
+      },
+    };
+
+    // ==========================================
+    // PHASE 3 — Finalize targeted candidates
+    // ==========================================
+    database.exec('BEGIN IMMEDIATE;');
+    transactionOpen = true;
+
+    const insertCandidate = database.prepare(
+      'INSERT OR IGNORE INTO candidates (source_key, candidate_record_key, canonical_json) VALUES (?, ?, ?)'
+    );
+
+    const pendingEditions = database.prepare(
+      'SELECT id, edition_key, line_number, payload_json, passes_title FROM pending_editions ORDER BY id'
+    ).all();
+
+    pendingOperations = 0;
+
+    for (const pendingRow of pendingEditions) {
+      const data = JSON.parse(pendingRow.payload_json);
+      const record = {
+        type: '/type/edition',
+        key: pendingRow.edition_key,
+        lineNumber: pendingRow.line_number,
+        data,
+      };
+      const passesTitle = pendingRow.passes_title === 1;
+
+      const authorKeys = Array.isArray(data.authors)
+        ? [...new Set(data.authors.map(item => (typeof item?.key === 'string' && item.key.trim() ? item.key.trim() : null)).filter(Boolean))]
+        : [];
+      const resolvedAuthors = await authorNames(targetedAuthorLookup, authorKeys);
+
+      const rawTitle = typeof data.title === 'string' ? data.title.trim() : null;
+      const normalizedTitle = rawTitle ? normalizeTitle(rawTitle) : null;
       const matchingTitleSources = [];
-      if (passesTitle && resolvedAuthors?.length > 0) {
+      if (passesTitle && resolvedAuthors?.length > 0 && normalizedTitle) {
         const candidatePrimaryAuthor = normalizeAuthorName(resolvedAuthors[0]);
         const candidatesForTitle = titleTargets.get(normalizedTitle) ?? [];
         for (const source of candidatesForTitle) {
@@ -362,6 +500,16 @@ export async function buildTargetedOpenLibraryArtifact({
         }
       }
 
+      const isbns = isbn13Values(data);
+      const matchingIsbnSources = new Map();
+      for (const isbn of isbns.values) {
+        const matchingSources = isbnTargets.get(isbn);
+        if (matchingSources?.length) {
+          matchingIsbnSources.set(isbn, matchingSources);
+        }
+      }
+      const passesIsbn = matchingIsbnSources.size > 0;
+
       if (matchingTitleSources.length === 0 && !passesIsbn) {
         continue;
       }
@@ -369,7 +517,11 @@ export async function buildTargetedOpenLibraryArtifact({
       statistics.matchedEditions += 1;
 
       const editionCandidates = [];
-      for await (const item of mapOpenLibraryEditionRecord(record, { snapshotId: cleanSnapshotId, authorLookup: activeLookup, authors: resolvedAuthors })) {
+      for await (const item of mapOpenLibraryEditionRecord(record, {
+        snapshotId: cleanSnapshotId,
+        authorLookup: targetedAuthorLookup,
+        authors: resolvedAuthors,
+      })) {
         if (item instanceof SnapshotRecordError) {
           continue;
         }
@@ -423,14 +575,13 @@ export async function buildTargetedOpenLibraryArtifact({
         database.exec('COMMIT; BEGIN IMMEDIATE;');
         pendingOperations = 0;
       }
-
-      if (typeof onProgress === 'function' && statistics.rowsScanned % 100_000 === 0) {
-        onProgress(statistics);
-      }
     }
 
     database.exec('COMMIT;');
     transactionOpen = false;
+
+    // Drop internal working tables before finalizing artifact
+    database.exec('DROP TABLE pending_editions; DROP TABLE pending_author_keys;');
 
     const worksWithCandidates = database.prepare('SELECT COUNT(DISTINCT source_key) AS count FROM candidates').get().count;
     statistics.requestedWorksWithCandidates = worksWithCandidates;
@@ -440,6 +591,13 @@ export async function buildTargetedOpenLibraryArtifact({
     database.exec('PRAGMA locking_mode = NORMAL; PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; BEGIN IMMEDIATE;');
     transactionOpen = true;
     const generatedAt = new Date().toISOString();
+    const insertMetadata = database.prepare(`
+      INSERT INTO metadata (
+        singleton, artifact_format, artifact_version, source_name, snapshot_id,
+        source_manifest_fingerprint, source_manifest_count, rows_scanned,
+        matched_edition_count, candidate_association_count, generated_at
+      ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
     insertMetadata.run(
       TARGETED_ARTIFACT_FORMAT,
       TARGETED_ARTIFACT_VERSION,
@@ -490,9 +648,6 @@ export async function buildTargetedOpenLibraryArtifact({
     await fs.rm(`${tempPath}-journal`, { force: true }).catch(() => {});
     await fs.rm(`${tempPath}-wal`, { force: true }).catch(() => {});
     await fs.rm(`${tempPath}-shm`, { force: true }).catch(() => {});
-    if (openedLookup && typeof openedLookup.close === 'function') {
-      try { openedLookup.close(); } catch {}
-    }
   }
 }
 

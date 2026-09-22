@@ -9,12 +9,14 @@ import {
   buildTargetedOpenLibraryArtifact,
   createTargetedCanonicalAdapter,
   readTargetedArtifactMetadata,
+  validateBuiltTargetedArtifact,
 } from '../scripts/catalog/open-library-targeted.js';
 import { CatalogContractError } from '../scripts/catalog/contracts.js';
 import { buildSnapshotIndex } from '../scripts/catalog/snapshot-index.js';
 import {
   buildOpenLibraryAuthorIndex,
-  buildOpenLibraryAuthorLookup,
+  shardFor,
+  shardName,
 } from '../scripts/catalog/open-library-bulk.js';
 
 const execFileAsync = promisify(execFile);
@@ -67,34 +69,83 @@ function authorDumpLine({ key, name }) {
   return `/type/author\t${key}\t1\t2026-01-01T00:00:00.000000\t${JSON.stringify({ name })}\n`;
 }
 
-async function createAuthorIndex(directory, authors) {
+async function createAuthorIndex(directory, authors, { snapshotId = SNAPSHOT_ID } = {}) {
   const authorsFile = join(directory, 'authors.txt');
   const authorIndexDir = join(directory, 'authors-index');
   await fs.writeFile(authorsFile, authors.map(authorDumpLine).join(''));
   await buildOpenLibraryAuthorIndex({
     inputPath: authorsFile,
     outputPath: authorIndexDir,
-    snapshotId: SNAPSHOT_ID,
+    snapshotId,
     generatedAt: '2026-09-01T00:00:00.000Z',
   });
-  await buildOpenLibraryAuthorLookup({
-    indexPath: authorIndexDir,
-    snapshotId: SNAPSHOT_ID,
-    batchSize: 10,
-  });
+  // Note: We deliberately do NOT call buildOpenLibraryAuthorLookup here.
+  // No lookup.sqlite is created.
   return authorIndexDir;
 }
 
-test('1. irrelevant edition is skipped before author lookup', async () => {
-  await withTempDir(async ({ dir }) => {
-    let authorLookupsCalled = 0;
-    const mockAuthorLookup = {
-      async getNames(keys) {
-        authorLookupsCalled += 1;
-        return new Map(keys.map(k => [k, 'Some Author']));
+test('1. targeted extraction succeeds with NO lookup.sqlite present', async () => {
+  await withTempDir(async ({ dir, track }) => {
+    const authorIndexDir = await createAuthorIndex(dir, [
+      { key: '/authors/OL1A', name: 'Jane Austen' },
+    ]);
+
+    const lookupExists = await fs.access(join(authorIndexDir, 'lookup.sqlite')).then(() => true).catch(() => false);
+    assert.equal(lookupExists, false, 'lookup.sqlite must not exist in author index');
+
+    const dumpPath = join(dir, 'editions.txt');
+    await fs.writeFile(dumpPath, dumpLine({
+      key: '/books/OL100M',
+      title: 'Pride and Prejudice',
+      isbn13: '9780141439518',
+      authors: [{ key: '/authors/OL1A' }],
+    }));
+
+    const sources = [
+      {
+        key: 'pride-and-prejudice',
+        title: 'Pride and Prejudice',
+        author: 'Jane Austen',
+        preferredIsbn13: '9780141439518',
       },
-      close() {},
-    };
+    ];
+
+    const outputPath = join(dir, 'targeted.sqlite');
+    const result = await buildTargetedOpenLibraryArtifact({
+      sources,
+      inputPath: dumpPath,
+      authorIndexPath: authorIndexDir,
+      outputPath,
+      snapshotId: SNAPSHOT_ID,
+    });
+
+    assert.equal(result.statistics.matchedEditions, 1);
+    assert.equal(result.statistics.canonicalCandidates, 1);
+    assert.equal(result.statistics.distinctAuthorKeysNeeded, 1);
+    assert.equal(result.statistics.authorKeysResolved, 1);
+
+    const adapter = track(await createTargetedCanonicalAdapter({ artifactPath: outputPath, sourceManifest: sources }));
+    const candidates = await adapter.getCandidates(sources[0]);
+    assert.equal(candidates.length, 1);
+    assert.equal(candidates[0].isbn13, '9780141439518');
+  });
+});
+
+test('2. createOpenLibraryAuthorLookup is never needed by the targeted extractor', async () => {
+  const targetedModulePath = join(process.cwd(), 'scripts', 'catalog', 'open-library-targeted.js');
+  const code = await fs.readFile(targetedModulePath, 'utf8');
+  assert.equal(
+    code.includes('createOpenLibraryAuthorLookup'),
+    false,
+    'open-library-targeted.js must not reference or call createOpenLibraryAuthorLookup',
+  );
+});
+
+test('3. irrelevant edition rows do not cause any author shard read', async () => {
+  await withTempDir(async ({ dir }) => {
+    const authorIndexDir = await createAuthorIndex(dir, [
+      { key: '/authors/OL1A', name: 'Jane Austen' },
+    ]);
 
     const dumpPath = join(dir, 'editions.txt');
     await fs.writeFile(dumpPath, dumpLine({
@@ -117,25 +168,160 @@ test('1. irrelevant edition is skipped before author lookup', async () => {
     const result = await buildTargetedOpenLibraryArtifact({
       sources,
       inputPath: dumpPath,
-      authorLookup: mockAuthorLookup,
+      authorIndexPath: authorIndexDir,
       outputPath,
       snapshotId: SNAPSHOT_ID,
     });
 
-    assert.equal(authorLookupsCalled, 0, 'author lookup should not be called for irrelevant rows');
     assert.equal(result.statistics.rowsScanned, 1);
     assert.equal(result.statistics.rowsPassingTitlePrefilter, 0);
     assert.equal(result.statistics.rowsPassingIsbnPrefilter, 0);
-    assert.equal(result.statistics.authorLookupsPerformed, 0);
+    assert.equal(result.statistics.pendingEditions, 0);
+    assert.equal(result.statistics.distinctAuthorKeysNeeded, 0);
+    assert.equal(result.statistics.authorShardsScanned, 0);
+    assert.equal(result.statistics.authorRowsScanned, 0);
     assert.equal(result.statistics.matchedEditions, 0);
-    assert.equal(result.statistics.canonicalCandidates, 0);
-    assert.equal(result.statistics.uniqueCandidateAssociations, 0);
-    assert.equal(result.statistics.requestedWorksWithCandidates, 0);
-    assert.equal(result.statistics.requestedWorksWithoutCandidates, 1);
   });
 });
 
-test('2. exact normalized title + exact normalized primary author retrieves candidates', async () => {
+test('4. only shards containing requested author keys are opened', async () => {
+  await withTempDir(async ({ dir }) => {
+    const key1 = '/authors/OL1A';
+    const shard1 = shardFor(key1);
+    let key2 = null;
+    for (let i = 2; i < 1000; i++) {
+      const candidate = `/authors/OL${i}A`;
+      if (shardFor(candidate) !== shard1) {
+        key2 = candidate;
+        break;
+      }
+    }
+    assert.ok(key2, 'must find key with different shard');
+
+    const authorIndexDir = await createAuthorIndex(dir, [
+      { key: key1, name: 'Jane Austen' },
+      { key: key2, name: 'Charlotte Bronte' },
+    ]);
+
+    const dumpPath = join(dir, 'editions.txt');
+    await fs.writeFile(dumpPath, dumpLine({
+      key: '/books/OL100M',
+      title: 'Pride and Prejudice',
+      isbn13: '9780141439518',
+      authors: [{ key: key1 }],
+    }));
+
+    const sources = [
+      { key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' },
+    ];
+
+    const outputPath = join(dir, 'targeted.sqlite');
+    const result = await buildTargetedOpenLibraryArtifact({
+      sources,
+      inputPath: dumpPath,
+      authorIndexPath: authorIndexDir,
+      outputPath,
+      snapshotId: SNAPSHOT_ID,
+    });
+
+    assert.equal(result.statistics.distinctAuthorKeysNeeded, 1);
+    assert.equal(result.statistics.authorShardsScanned, 1, 'only the shard containing key1 should be scanned');
+    assert.equal(result.statistics.authorKeysResolved, 1);
+  });
+});
+
+test('5. each requested author shard is streamed at most once', async () => {
+  await withTempDir(async ({ dir }) => {
+    const key1 = '/authors/OL1A';
+    const shard1 = shardFor(key1);
+    let key2 = null;
+    for (let i = 2; i < 10000; i++) {
+      const candidate = `/authors/OL${i}A`;
+      if (shardFor(candidate) === shard1) {
+        key2 = candidate;
+        break;
+      }
+    }
+    assert.ok(key2, 'must find second key in same shard');
+
+    const authorIndexDir = await createAuthorIndex(dir, [
+      { key: key1, name: 'Jane Austen' },
+      { key: key2, name: 'Another Author In Same Shard' },
+    ]);
+
+    const dumpPath = join(dir, 'editions.txt');
+    await fs.writeFile(dumpPath, [
+      dumpLine({ key: '/books/OL100M', title: 'Pride and Prejudice', isbn13: '9780141439518', authors: [{ key: key1 }] }),
+      dumpLine({ key: '/books/OL200M', title: 'Second Work', isbn13: '9780141439525', authors: [{ key: key2 }] }),
+    ].join(''));
+
+    const sources = [
+      { key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' },
+      { key: 'second-work', title: 'Second Work', author: 'Another Author In Same Shard' },
+    ];
+
+    const outputPath = join(dir, 'targeted.sqlite');
+    const result = await buildTargetedOpenLibraryArtifact({
+      sources,
+      inputPath: dumpPath,
+      authorIndexPath: authorIndexDir,
+      outputPath,
+      snapshotId: SNAPSHOT_ID,
+    });
+
+    assert.equal(result.statistics.distinctAuthorKeysNeeded, 2);
+    assert.equal(result.statistics.authorShardsScanned, 1, 'shard shared by both keys must be streamed only once');
+    assert.equal(result.statistics.authorKeysResolved, 2);
+  });
+});
+
+test('6. author resolution memory/state contains only requested keys, not complete shard contents', async () => {
+  await withTempDir(async ({ dir }) => {
+    const key1 = '/authors/OL1A';
+    const shard1 = shardFor(key1);
+    const unneededKeys = [];
+    for (let i = 2; unneededKeys.length < 4; i++) {
+      const candidate = `/authors/OL${i}A`;
+      if (shardFor(candidate) === shard1) {
+        unneededKeys.push(candidate);
+      }
+    }
+
+    const allAuthors = [
+      { key: key1, name: 'Jane Austen' },
+      ...unneededKeys.map((k, idx) => ({ key: k, name: `Unneeded Author ${idx + 1}` })),
+    ];
+
+    const authorIndexDir = await createAuthorIndex(dir, allAuthors);
+
+    const dumpPath = join(dir, 'editions.txt');
+    await fs.writeFile(dumpPath, dumpLine({
+      key: '/books/OL100M',
+      title: 'Pride and Prejudice',
+      isbn13: '9780141439518',
+      authors: [{ key: key1 }],
+    }));
+
+    const sources = [
+      { key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' },
+    ];
+
+    const outputPath = join(dir, 'targeted.sqlite');
+    const result = await buildTargetedOpenLibraryArtifact({
+      sources,
+      inputPath: dumpPath,
+      authorIndexPath: authorIndexDir,
+      outputPath,
+      snapshotId: SNAPSHOT_ID,
+    });
+
+    assert.equal(result.statistics.distinctAuthorKeysNeeded, 1);
+    assert.equal(result.statistics.authorRowsScanned, 5, 'all rows in shard are scanned');
+    assert.equal(result.statistics.authorKeysResolved, 1, 'only the single requested key is resolved');
+  });
+});
+
+test('7. exact title + primary-author retrieval still works', async () => {
   await withTempDir(async ({ dir, track }) => {
     const authorIndexDir = await createAuthorIndex(dir, [
       { key: '/authors/OL1A', name: 'Jane Austen' },
@@ -183,7 +369,7 @@ test('2. exact normalized title + exact normalized primary author retrieves cand
   });
 });
 
-test('3. title match with wrong author does not associate candidate through the title path', async () => {
+test('8. wrong author does not associate through title path', async () => {
   await withTempDir(async ({ dir, track }) => {
     const authorIndexDir = await createAuthorIndex(dir, [
       { key: '/authors/OL2A', name: 'Charles Dickens' },
@@ -215,7 +401,6 @@ test('3. title match with wrong author does not associate candidate through the 
     });
 
     assert.equal(result.statistics.rowsPassingTitlePrefilter, 1);
-    assert.equal(result.statistics.authorLookupsPerformed, 1);
     assert.equal(result.statistics.matchedEditions, 0);
     assert.equal(result.statistics.canonicalCandidates, 0);
     assert.equal(result.statistics.uniqueCandidateAssociations, 0);
@@ -226,7 +411,7 @@ test('3. title match with wrong author does not associate candidate through the 
   });
 });
 
-test('4. exact preferred ISBN retrieves its candidate even when title/author does not match', async () => {
+test('9. preferred ISBN still works despite title/author mismatch', async () => {
   await withTempDir(async ({ dir, track }) => {
     const authorIndexDir = await createAuthorIndex(dir, [
       { key: '/authors/OL1A', name: 'Jane Austen' },
@@ -269,7 +454,7 @@ test('4. exact preferred ISBN retrieves its candidate even when title/author doe
   });
 });
 
-test('5. pinned ISBN behaves likewise', async () => {
+test('10. pinned ISBN still works despite title/author mismatch', async () => {
   await withTempDir(async ({ dir, track }) => {
     const authorIndexDir = await createAuthorIndex(dir, [
       { key: '/authors/OL1A', name: 'Jane Austen' },
@@ -311,7 +496,93 @@ test('5. pinned ISBN behaves likewise', async () => {
   });
 });
 
-test('6. an edition reached by both ISBN and title-author paths is deduplicated', async () => {
+test('11. multi-ISBN title match still receives all canonical ISBN candidates', async () => {
+  await withTempDir(async ({ dir, track }) => {
+    const authorIndexDir = await createAuthorIndex(dir, [
+      { key: '/authors/OL1A', name: 'Jane Austen' },
+    ]);
+
+    const dumpPath = join(dir, 'editions.txt');
+    await fs.writeFile(dumpPath, dumpLine({
+      key: '/books/OLMULTI1M',
+      title: 'Pride and Prejudice',
+      isbn13: ['9780141439518', '9780451524935'],
+      authors: [{ key: '/authors/OL1A' }],
+    }));
+
+    const sources = [
+      {
+        key: 'source-title-author',
+        title: 'Pride and Prejudice',
+        author: 'Jane Austen',
+      },
+    ];
+
+    const outputPath = join(dir, 'targeted.sqlite');
+    const result = await buildTargetedOpenLibraryArtifact({
+      sources,
+      inputPath: dumpPath,
+      authorIndexPath: authorIndexDir,
+      outputPath,
+      snapshotId: SNAPSHOT_ID,
+    });
+
+    assert.equal(result.statistics.matchedEditions, 1);
+    assert.equal(result.statistics.canonicalCandidates, 2);
+    assert.equal(result.statistics.uniqueCandidateAssociations, 2);
+
+    const adapter = track(await createTargetedCanonicalAdapter({ artifactPath: outputPath }));
+    const candidates = await adapter.getCandidates(sources[0]);
+    assert.equal(candidates.length, 2);
+    assert.ok(candidates.some(c => c.isbn13 === '9780141439518'));
+    assert.ok(candidates.some(c => c.isbn13 === '9780451524935'));
+  });
+});
+
+test('12. exact-ISBN-only source receives only the exact ISBN candidate', async () => {
+  await withTempDir(async ({ dir, track }) => {
+    const authorIndexDir = await createAuthorIndex(dir, [
+      { key: '/authors/OL1A', name: 'Jane Austen' },
+    ]);
+
+    const dumpPath = join(dir, 'editions.txt');
+    await fs.writeFile(dumpPath, dumpLine({
+      key: '/books/OLMULTI2M',
+      title: 'Pride and Prejudice',
+      isbn13: ['9780141439518', '9780451524935'],
+      authors: [{ key: '/authors/OL1A' }],
+    }));
+
+    const sources = [
+      {
+        key: 'source-exact-isbn-only',
+        title: 'Unrelated Work',
+        author: 'Unrelated Author',
+        preferredIsbn13: '9780141439518',
+      },
+    ];
+
+    const outputPath = join(dir, 'targeted.sqlite');
+    const result = await buildTargetedOpenLibraryArtifact({
+      sources,
+      inputPath: dumpPath,
+      authorIndexPath: authorIndexDir,
+      outputPath,
+      snapshotId: SNAPSHOT_ID,
+    });
+
+    assert.equal(result.statistics.matchedEditions, 1);
+    assert.equal(result.statistics.canonicalCandidates, 2);
+    assert.equal(result.statistics.uniqueCandidateAssociations, 1);
+
+    const adapter = track(await createTargetedCanonicalAdapter({ artifactPath: outputPath }));
+    const candidates = await adapter.getCandidates(sources[0]);
+    assert.equal(candidates.length, 1);
+    assert.equal(candidates[0].isbn13, '9780141439518');
+  });
+});
+
+test('13. duplicate title+ISBN path remains deduplicated', async () => {
   await withTempDir(async ({ dir, track }) => {
     const authorIndexDir = await createAuthorIndex(dir, [
       { key: '/authors/OL1A', name: 'Jane Austen' },
@@ -354,116 +625,19 @@ test('6. an edition reached by both ISBN and title-author paths is deduplicated'
   });
 });
 
-test('7. an edition with multiple valid ISBNs: title-author receives all candidates; exact-ISBN-only receives only exact candidate', async () => {
+test('14. missing author key causes no false title-author match', async () => {
   await withTempDir(async ({ dir, track }) => {
+    // Author index has no OLNONEXISTENT
     const authorIndexDir = await createAuthorIndex(dir, [
       { key: '/authors/OL1A', name: 'Jane Austen' },
     ]);
 
     const dumpPath = join(dir, 'editions.txt');
     await fs.writeFile(dumpPath, dumpLine({
-      key: '/books/OLMULTI1M',
-      title: 'Pride and Prejudice',
-      isbn13: ['9780141439518', '9780451524935'],
-      authors: [{ key: '/authors/OL1A' }],
-    }));
-
-    const sources = [
-      {
-        key: 'source-title-author',
-        title: 'Pride and Prejudice',
-        author: 'Jane Austen',
-      },
-      {
-        key: 'source-exact-isbn-only',
-        title: 'Unrelated Work',
-        author: 'Unrelated Author',
-        preferredIsbn13: '9780141439518',
-      },
-    ];
-
-    const outputPath = join(dir, 'targeted.sqlite');
-    const result = await buildTargetedOpenLibraryArtifact({
-      sources,
-      inputPath: dumpPath,
-      authorIndexPath: authorIndexDir,
-      outputPath,
-      snapshotId: SNAPSHOT_ID,
-    });
-
-    assert.equal(result.statistics.matchedEditions, 1);
-    assert.equal(result.statistics.canonicalCandidates, 2);
-    assert.equal(result.statistics.uniqueCandidateAssociations, 3); // 2 for source-title-author, 1 for source-exact-isbn-only
-
-    const adapter = track(await createTargetedCanonicalAdapter({ artifactPath: outputPath }));
-
-    const candidatesTitleAuthor = await adapter.getCandidates(sources[0]);
-    assert.equal(candidatesTitleAuthor.length, 2, 'title-author source receives all valid candidates');
-    assert.ok(candidatesTitleAuthor.some(c => c.isbn13 === '9780141439518'));
-    assert.ok(candidatesTitleAuthor.some(c => c.isbn13 === '9780451524935'));
-
-    const candidatesExactIsbn = await adapter.getCandidates(sources[1]);
-    assert.equal(candidatesExactIsbn.length, 1, 'exact-ISBN source receives only the matching candidate');
-    assert.equal(candidatesExactIsbn[0].isbn13, '9780141439518');
-  });
-});
-
-test('8. malformed ISBN identifiers preserve existing canonical/error semantics where relevant', async () => {
-  await withTempDir(async ({ dir, track }) => {
-    const authorIndexDir = await createAuthorIndex(dir, [
-      { key: '/authors/OL1A', name: 'Jane Austen' },
-    ]);
-
-    const dumpPath = join(dir, 'editions.txt');
-    await fs.writeFile(dumpPath, dumpLine({
-      key: '/books/OLMALFORMEDISBN1M',
-      title: 'Pride and Prejudice',
-      isbn13: ['not-a-valid-isbn', '9780141439518'],
-      authors: [{ key: '/authors/OL1A' }],
-    }));
-
-    const sources = [
-      {
-        key: 'pride-and-prejudice',
-        title: 'Pride and Prejudice',
-        author: 'Jane Austen',
-      },
-    ];
-
-    const outputPath = join(dir, 'targeted.sqlite');
-    const result = await buildTargetedOpenLibraryArtifact({
-      sources,
-      inputPath: dumpPath,
-      authorIndexPath: authorIndexDir,
-      outputPath,
-      snapshotId: SNAPSHOT_ID,
-    });
-
-    assert.equal(result.statistics.matchedEditions, 1);
-    assert.equal(result.statistics.canonicalCandidates, 1);
-
-    const adapter = track(await createTargetedCanonicalAdapter({ artifactPath: outputPath }));
-    const candidates = await adapter.getCandidates(sources[0]);
-    assert.equal(candidates.length, 1);
-    assert.equal(candidates[0].isbn13, '9780141439518');
-  });
-});
-
-test('9. missing/conflicting author resolution cannot create a false title-author match', async () => {
-  await withTempDir(async ({ dir, track }) => {
-    const mockConflictedLookup = {
-      async getNames() {
-        return null;
-      },
-      close() {},
-    };
-
-    const dumpPath = join(dir, 'editions.txt');
-    await fs.writeFile(dumpPath, dumpLine({
-      key: '/books/OLCONFLICT1M',
+      key: '/books/OLMISSING1M',
       title: 'Pride and Prejudice',
       isbn13: '9780141439518',
-      authors: [{ key: '/authors/OLMISSING' }],
+      authors: [{ key: '/authors/OLNONEXISTENT' }],
     }));
 
     const sources = [
@@ -478,14 +652,15 @@ test('9. missing/conflicting author resolution cannot create a false title-autho
     const result = await buildTargetedOpenLibraryArtifact({
       sources,
       inputPath: dumpPath,
-      authorLookup: mockConflictedLookup,
+      authorIndexPath: authorIndexDir,
       outputPath,
       snapshotId: SNAPSHOT_ID,
     });
 
     assert.equal(result.statistics.rowsPassingTitlePrefilter, 1);
-    assert.equal(result.statistics.authorLookupsPerformed, 1);
-    assert.equal(result.statistics.matchedEditions, 0, 'missing/conflicted author must not match title-author');
+    assert.equal(result.statistics.distinctAuthorKeysNeeded, 1);
+    assert.equal(result.statistics.authorKeysMissing, 1);
+    assert.equal(result.statistics.matchedEditions, 0, 'missing author key must not match title-author');
     assert.equal(result.statistics.uniqueCandidateAssociations, 0);
 
     const adapter = track(await createTargetedCanonicalAdapter({ artifactPath: outputPath }));
@@ -494,7 +669,122 @@ test('9. missing/conflicting author resolution cannot create a false title-autho
   });
 });
 
-test('10. artifact build is atomic and a failed rebuild preserves known-good output', async () => {
+test('15. conflicting author names cause no false title-author match', async () => {
+  await withTempDir(async ({ dir, track }) => {
+    // Author index has conflicting names for /authors/OL1A
+    const authorsFile = join(dir, 'authors.txt');
+    const authorIndexDir = join(dir, 'authors-index');
+    await fs.writeFile(authorsFile, [
+      authorDumpLine({ key: '/authors/OL1A', name: 'Jane Austen' }),
+      authorDumpLine({ key: '/authors/OL1A', name: 'Different Name Person' }),
+    ].join(''));
+    await buildOpenLibraryAuthorIndex({
+      inputPath: authorsFile,
+      outputPath: authorIndexDir,
+      snapshotId: SNAPSHOT_ID,
+      generatedAt: '2026-09-01T00:00:00.000Z',
+    });
+
+    const dumpPath = join(dir, 'editions.txt');
+    await fs.writeFile(dumpPath, dumpLine({
+      key: '/books/OLCONFLICT1M',
+      title: 'Pride and Prejudice',
+      isbn13: '9780141439518',
+      authors: [{ key: '/authors/OL1A' }],
+    }));
+
+    const sources = [
+      {
+        key: 'pride-and-prejudice',
+        title: 'Pride and Prejudice',
+        author: 'Jane Austen',
+      },
+    ];
+
+    const outputPath = join(dir, 'targeted.sqlite');
+    const result = await buildTargetedOpenLibraryArtifact({
+      sources,
+      inputPath: dumpPath,
+      authorIndexPath: authorIndexDir,
+      outputPath,
+      snapshotId: SNAPSHOT_ID,
+    });
+
+    assert.equal(result.statistics.rowsPassingTitlePrefilter, 1);
+    assert.equal(result.statistics.distinctAuthorKeysNeeded, 1);
+    assert.equal(result.statistics.authorKeysConflicted, 1);
+    assert.equal(result.statistics.matchedEditions, 0, 'conflicted author must not match title-author');
+    assert.equal(result.statistics.uniqueCandidateAssociations, 0);
+
+    const adapter = track(await createTargetedCanonicalAdapter({ artifactPath: outputPath }));
+    const candidates = await adapter.getCandidates(sources[0]);
+    assert.equal(candidates.length, 0);
+  });
+});
+
+test('16. author-index snapshot mismatch fails clearly', async () => {
+  await withTempDir(async ({ dir }) => {
+    const authorIndexDir = await createAuthorIndex(dir, [
+      { key: '/authors/OL1A', name: 'Jane Austen' },
+    ], { snapshotId: 'open-library-2025-01-01' });
+
+    const dumpPath = join(dir, 'editions.txt');
+    await fs.writeFile(dumpPath, dumpLine({
+      key: '/books/OL100M',
+      title: 'Pride and Prejudice',
+      isbn13: '9780141439518',
+    }));
+
+    const sources = [
+      { key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' },
+    ];
+
+    const outputPath = join(dir, 'targeted.sqlite');
+    await assert.rejects(
+      () => buildTargetedOpenLibraryArtifact({
+        sources,
+        inputPath: dumpPath,
+        authorIndexPath: authorIndexDir,
+        outputPath,
+        snapshotId: SNAPSHOT_ID,
+      }),
+      (err) => err instanceof CatalogContractError && err.code === 'author_snapshot_mismatch',
+    );
+  });
+});
+
+test('17. corrupt/incompatible author index fails clearly', async () => {
+  await withTempDir(async ({ dir }) => {
+    const corruptAuthorDir = join(dir, 'corrupt-authors');
+    await fs.mkdir(corruptAuthorDir, { recursive: true });
+    await fs.writeFile(join(corruptAuthorDir, 'index.json'), '{ "bad": true }');
+
+    const dumpPath = join(dir, 'editions.txt');
+    await fs.writeFile(dumpPath, dumpLine({
+      key: '/books/OL100M',
+      title: 'Pride and Prejudice',
+      isbn13: '9780141439518',
+    }));
+
+    const sources = [
+      { key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' },
+    ];
+
+    const outputPath = join(dir, 'targeted.sqlite');
+    await assert.rejects(
+      () => buildTargetedOpenLibraryArtifact({
+        sources,
+        inputPath: dumpPath,
+        authorIndexPath: corruptAuthorDir,
+        outputPath,
+        snapshotId: SNAPSHOT_ID,
+      }),
+      (err) => err instanceof CatalogContractError && err.code === 'invalid_author_index',
+    );
+  });
+});
+
+test('18. failed build preserves existing known-good targeted artifact', async () => {
   await withTempDir(async ({ dir }) => {
     const authorIndexDir = await createAuthorIndex(dir, [
       { key: '/authors/OL1A', name: 'Jane Austen' },
@@ -530,22 +820,17 @@ test('10. artifact build is atomic and a failed rebuild preserves known-good out
     assert.equal(candidatesBefore.length, 1);
     adapter1.close();
 
-    const failingAuthorLookup = {
-      async getNames() {
-        throw new Error('Simulated author lookup hardware crash');
-      },
-      close() {},
-    };
+    const nonExistentDump = join(dir, 'does-not-exist.txt');
 
     await assert.rejects(
       () => buildTargetedOpenLibraryArtifact({
         sources,
-        inputPath: dumpPath,
-        authorLookup: failingAuthorLookup,
+        inputPath: nonExistentDump,
+        authorIndexPath: authorIndexDir,
         outputPath,
         snapshotId: SNAPSHOT_ID,
       }),
-      /Simulated author lookup hardware crash/,
+      /ENOENT/,
     );
 
     const adapter2 = await createTargetedCanonicalAdapter({ artifactPath: outputPath });
@@ -558,24 +843,83 @@ test('10. artifact build is atomic and a failed rebuild preserves known-good out
   });
 });
 
-test('11. invalid/corrupt targeted artifact fails clearly', async () => {
+test('19. internal pending tables/data cannot masquerade as a complete artifact', async () => {
   await withTempDir(async ({ dir }) => {
-    const corruptPath = join(dir, 'corrupt.sqlite');
-    await fs.writeFile(corruptPath, 'THIS IS NOT A SQLITE FILE');
+    const authorIndexDir = await createAuthorIndex(dir, [
+      { key: '/authors/OL1A', name: 'Jane Austen' },
+    ]);
+
+    const dumpPath = join(dir, 'editions.txt');
+    await fs.writeFile(dumpPath, dumpLine({
+      key: '/books/OL100M',
+      title: 'Pride and Prejudice',
+      isbn13: '9780141439518',
+      authors: [{ key: '/authors/OL1A' }],
+    }));
+
+    const sources = [
+      { key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' },
+    ];
+
+    const outputPath = join(dir, 'targeted.sqlite');
+    await buildTargetedOpenLibraryArtifact({
+      sources,
+      inputPath: dumpPath,
+      authorIndexPath: authorIndexDir,
+      outputPath,
+      snapshotId: SNAPSHOT_ID,
+    });
+
+    const { DatabaseSync } = await import('node:sqlite');
+    const validDb = new DatabaseSync(outputPath, { readOnly: true });
+    const tableRows = validDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+    const tableNames = tableRows.map(r => r.name);
+    validDb.close();
+
+    assert.ok(!tableNames.includes('pending_editions'), 'pending_editions table must be dropped in finished artifact');
+    assert.ok(!tableNames.includes('pending_author_keys'), 'pending_author_keys table must be dropped in finished artifact');
+
+    // Create an unfinalized DB that still contains pending tables
+    const incompleteDbPath = join(dir, 'incomplete.sqlite');
+    const incompleteDb = new DatabaseSync(incompleteDbPath);
+    incompleteDb.exec(`
+      CREATE TABLE metadata (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        artifact_format TEXT NOT NULL,
+        artifact_version INTEGER NOT NULL,
+        source_name TEXT NOT NULL,
+        snapshot_id TEXT NOT NULL,
+        source_manifest_fingerprint TEXT NOT NULL,
+        source_manifest_count INTEGER NOT NULL,
+        rows_scanned INTEGER NOT NULL,
+        matched_edition_count INTEGER NOT NULL,
+        candidate_association_count INTEGER NOT NULL,
+        generated_at TEXT NOT NULL
+      );
+      CREATE TABLE candidates (
+        source_key TEXT NOT NULL,
+        candidate_record_key TEXT NOT NULL,
+        canonical_json TEXT NOT NULL,
+        PRIMARY KEY (source_key, candidate_record_key)
+      ) WITHOUT ROWID;
+      CREATE TABLE pending_editions (id INTEGER PRIMARY KEY);
+      INSERT INTO metadata VALUES (1, 'bookish-open-library-targeted-candidates', 1, 'open-library-bulk', '${SNAPSHOT_ID}', 'sha256:0000000000000000000000000000000000000000000000000000000000000000', 0, 0, 0, 0, '2026-09-01T00:00:00.000Z');
+    `);
+    incompleteDb.close();
 
     await assert.rejects(
-      () => readTargetedArtifactMetadata(corruptPath),
+      () => readTargetedArtifactMetadata(incompleteDbPath),
       (err) => err instanceof CatalogContractError && err.code === 'invalid_targeted_artifact',
     );
 
     await assert.rejects(
-      () => createTargetedCanonicalAdapter({ artifactPath: corruptPath }),
-      (err) => err instanceof CatalogContractError && err.code === 'invalid_targeted_artifact',
+      () => createTargetedCanonicalAdapter({ artifactPath: incompleteDbPath }),
+      (err) => err instanceof CatalogContractError && (err.code === 'corrupt_targeted_artifact' || err.code === 'invalid_targeted_artifact'),
     );
   });
 });
 
-test('12. source-manifest mismatch fails clearly', async () => {
+test('20. manifest mismatch protection still works', async () => {
   await withTempDir(async ({ dir }) => {
     const authorIndexDir = await createAuthorIndex(dir, [
       { key: '/authors/OL1A', name: 'Jane Austen' },
@@ -615,53 +959,7 @@ test('12. source-manifest mismatch fails clearly', async () => {
   });
 });
 
-test('13. targeted canonical adapter returns only requested source candidates', async () => {
-  await withTempDir(async ({ dir, track }) => {
-    const authorIndexDir = await createAuthorIndex(dir, [
-      { key: '/authors/OL1A', name: 'Jane Austen' },
-      { key: '/authors/OL2A', name: 'Mary Shelley' },
-    ]);
-
-    const dumpPath = join(dir, 'editions.txt');
-    await fs.writeFile(dumpPath, [
-      dumpLine({ key: '/books/OL100M', title: 'Pride and Prejudice', isbn13: '9780141439518', authors: [{ key: '/authors/OL1A' }] }),
-      dumpLine({ key: '/books/OL200M', title: 'Frankenstein', isbn13: '9780141439471', authors: [{ key: '/authors/OL2A' }] }),
-    ].join(''));
-
-    const sources = [
-      { key: 'pride-and-prejudice', title: 'Pride and Prejudice', author: 'Jane Austen' },
-      { key: 'frankenstein', title: 'Frankenstein', author: 'Mary Shelley' },
-    ];
-
-    const outputPath = join(dir, 'targeted.sqlite');
-    await buildTargetedOpenLibraryArtifact({
-      sources,
-      inputPath: dumpPath,
-      authorIndexPath: authorIndexDir,
-      outputPath,
-      snapshotId: SNAPSHOT_ID,
-    });
-
-    const adapter = track(await createTargetedCanonicalAdapter({ artifactPath: outputPath }));
-
-    const prideCandidates = await adapter.getCandidates(sources[0]);
-    assert.equal(prideCandidates.length, 1);
-    assert.equal(prideCandidates[0].isbn13, '9780141439518');
-
-    const frankensteinCandidates = await adapter.getCandidates(sources[1]);
-    assert.equal(frankensteinCandidates.length, 1);
-    assert.equal(frankensteinCandidates[0].isbn13, '9780141439471');
-
-    const unknownCandidates = await adapter.getCandidates({
-      key: 'unknown-book',
-      title: 'Unknown Title',
-      author: 'Unknown Author',
-    });
-    assert.equal(unknownCandidates.length, 0);
-  });
-});
-
-test('14. pilot planner produces valid output using --targeted', async () => {
+test('21. --targeted pilot planner still succeeds', async () => {
   await withTempDir(async ({ dir }) => {
     const authorIndexDir = await createAuthorIndex(dir, [
       { key: '/authors/OL1A', name: 'Jane Austen' },
@@ -711,7 +1009,7 @@ test('14. pilot planner produces valid output using --targeted', async () => {
   });
 });
 
-test('15. existing --index pilot planner path still works unchanged', async () => {
+test('22. --index pilot planner still succeeds unchanged', async () => {
   await withTempDir(async ({ dir }) => {
     const candidate = {
       recordId: 'edition-1',
@@ -772,7 +1070,7 @@ test('15. existing --index pilot planner path still works unchanged', async () =
   });
 });
 
-test('16. no network access is required and CLI tool executes completely offline', async () => {
+test('23. no network access is required and CLI tool executes completely offline', async () => {
   await withTempDir(async ({ dir }) => {
     const authorIndexDir = await createAuthorIndex(dir, [
       { key: '/authors/OL1A', name: 'Jane Austen' },
@@ -810,5 +1108,7 @@ test('16. no network access is required and CLI tool executes completely offline
     assert.equal(parsed.statistics.matchedEditions, 1);
     assert.equal(parsed.statistics.canonicalCandidates, 1);
     assert.equal(parsed.statistics.uniqueCandidateAssociations, 1);
+    assert.equal(parsed.statistics.distinctAuthorKeysNeeded, 1);
+    assert.equal(parsed.statistics.authorKeysResolved, 1);
   });
 });
