@@ -191,10 +191,23 @@ Prioritize focused catalog verification before broader suites:
 
 ## 9. Self-Review Checklist
 
-Before reporting completion, the Catalog Specialist must:
+Before reporting completion, the Catalog Specialist must perform a rigorous self-audit:
 
-1. Run `git diff --check` to catch whitespace or conflict issues.
-2. Review the complete `git diff`.
+1. **Comprehensive Diff Discovery** (inspect the full scope of changes across all git states):
+   - Inspect working tree status: `git status --short`
+   - Inspect current branch: `git branch --show-current`
+   - Inspect committed branch changes relative to upstream:
+     - If `origin/main` may be stale and network access is available, safely run `git fetch origin main --quiet`
+     - Inspect committed summary: `git diff --stat origin/main...HEAD`
+     - Inspect full committed patch: `git diff origin/main...HEAD`
+   - Inspect staged changes: `git diff --cached`
+   - Inspect unstaged working-tree changes: `git diff` (clarify: `git diff` alone reflects only unstaged working-tree changes, never the complete branch diff)
+   - Inspect untracked files: ensure no unexpected files, artifacts, or scratch files are left behind.
+   - **Review the complete union** of committed branch changes, staged changes, unstaged changes, and untracked files before reporting completion. Never assume a clean working tree means no changes were implemented (changes may already be committed on the branch).
+   - Do not hardcode specific branch names; use `origin/main...HEAD` or dynamic branch discovery.
+2. **Whitespace & Conflict Checks**:
+   - Run `git diff --check`
+   - Run `git diff --check origin/main...HEAD`
 3. Check specifically for:
    - ISBN identity mistakes or improper normalization.
    - Work versus edition confusion.
