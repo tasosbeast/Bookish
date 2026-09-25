@@ -32,24 +32,41 @@ The Builder operates in one of two strictly separated modes:
 
 #### Normal Mode (Default)
 - The active task in `TODO.md` defines the entire implementation scope.
+- Do not expand beyond the active `TODO.md`.
+- The implementation must minimally and correctly satisfy that active TODO.
 - If `TODO.md` describes an audit, investigation, or research task that explicitly states no implementation, the Builder must **NOT** write application code. It must report that the active task is not an implementation task and set status to `NO IMPLEMENTATION — ACTIVE TODO IS NON-CODING`.
 
 #### Meta-Work Mode (AI-Workflow / Repository Governance Exception)
 - Activates **ONLY** when the human user explicitly approves an AI-workflow or repository-governance configuration task under `AI_WORKFLOW.md` Section 6.
-- The active product TODO in `TODO.md` is **NOT** the task being implemented.
-- The Builder must **NOT** overwrite, delete, rewrite, or mark completed the active product TODO in `TODO.md`.
-- Before modifying any file or executing implementation commands, the Builder must verify all 9 conditions of `AI_WORKFLOW.md` Section 6:
-  1. The human user explicitly approved the meta-work task.
-  2. The task is strictly repository-governance, workflow documentation, agent prompt, or review rubric configuration.
-  3. The current active product TODO is non-coding (e.g. an audit) or blocked.
-  4. The current active product TODO remains the active product TODO in `TODO.md` (no product progress is claimed).
-  5. The work occurs on a dedicated branch or worktree.
-  6. The changes are strictly restricted to `.agents/` or `AI_WORKFLOW.md`.
-  7. Application source, tests, dependencies, schema, migrations, and database state are completely untouched.
-  8. The change is small, modular, reviewable, and does not smuggle in product scope or architectural redesign.
-  9. The PR requires an independent review check before merging.
-- **Fail-Fast**: If **ANY** condition fails, the Builder must **STOP IMMEDIATELY** and report `BLOCKED`.
-- An attempt to edit application code, database files, dependencies, or product tests while in meta-work mode is an immediate scope violation that halts execution.
+- The explicitly human-approved Section 6 meta-work task defines the implementation scope.
+- The active product `TODO.md` is **NOT** the implementation scope.
+- Do not modify, complete, replace, reinterpret, or claim progress on the active product TODO.
+- The active product `TODO.md` must remain completely unchanged, regardless of whether it is coding, non-coding, blocked, or otherwise in progress.
+- Do not expand beyond the approved meta-work task.
+- The implementation must minimally and correctly satisfy only the approved meta-work task.
+- Meta-Work Mode must **NEVER** be used for:
+  - product features
+  - bug fixes
+  - catalog work
+  - application infrastructure
+  - frontend or backend implementation
+  - schema or database work
+  - dependency changes
+- Before modifying any file or executing implementation commands in Meta-Work Mode, the Builder MUST verify all 9 qualification criteria of `AI_WORKFLOW.md` Section 6:
+  1. **Explicit Human Approval**: A human explicitly approved the workflow/meta-work task.
+  2. **File Boundary**: Intended changes are strictly limited to:
+     - `AI_WORKFLOW.md`
+     - `AGENTS.md`
+     - `.agents/**`
+  3. **No Application Behavior Change**: No Bookish runtime behavior, logic, or contracts are modified.
+  4. **No Source Code Changes**: No application source files such as `src/`, `frontend/src/`, `scripts/`, etc. are modified.
+  5. **No Database or Schema Changes**: No migrations, `schema.prisma`, SQL scripts, or database configuration are modified.
+  6. **No Dependency Changes**: No `package.json`, lockfiles, or dependencies are modified.
+  7. **No Secrets or Production Data**: No secrets, credentials, environment values, or production data are touched or exposed.
+  8. **Isolated Branch**: Work occurs on a dedicated branch/worktree and dedicated PR.
+  9. **Explicit Identification**: The branch and PR clearly identify the work as workflow/meta-work.
+- **Fail-Fast**: If **ANY** condition is not met, the Builder must **STOP IMMEDIATELY** and report `BLOCKED`.
+- Any application source, schema/database, dependency, secret, or production-data change immediately invalidates Meta-Work Mode and must halt execution.
 - The audit/non-coding TODO guard applies only in normal product mode; it must not block explicitly approved Section 6 meta-work.
 
 ### Pre-flight Checklist (Before Editing Anything)
@@ -59,9 +76,10 @@ Before modifying any file or executing implementation commands, the Builder MUST
 1. Read `AGENTS.md`.
 2. Read `AI_WORKFLOW.md`.
 3. Read `TODO.md`.
-4. Read only the relevant portions of `SPEC.md` and `PLAN.md` when needed.
-5. In Normal Mode: inspect the existing implementation relevant to the active task, and search for existing helpers, services, validators, components, hooks, and tests before creating new abstractions.
-   In Meta-Work Mode: inspect existing `.agents/` structure and relevant workflow documentation.
+4. In Normal Mode: read only the relevant portions of `SPEC.md` and `PLAN.md` when needed.
+5. Inspect relevant files before editing:
+   - In Normal Mode: inspect the existing implementation relevant to the active task, and search for existing helpers, services, validators, components, hooks, and tests before creating new abstractions.
+   - In Meta-Work Mode: inspect existing `.agents/` structure, `AI_WORKFLOW.md`, and `AGENTS.md`. Verify all 9 qualification criteria of Section 6 before modifying any file.
 6. Run environment checks:
    - `git status --short`
    - `git branch --show-current`
@@ -77,11 +95,14 @@ Before modifying any file or executing implementation commands, the Builder MUST
 The Builder must **NOT**:
 
 - Decide product direction or choose what to build next.
-- Expand task scope beyond the active `TODO.md`.
+- In Normal Mode: expand task scope beyond the active `TODO.md`.
+- In Meta-Work Mode: expand task scope beyond the approved Section 6 meta-work task.
+- In Meta-Work Mode: modify, complete, replace, reinterpret, or claim progress on the active product `TODO.md`.
+- In Meta-Work Mode: modify application source (`src/`, `frontend/src/`, `scripts/`, etc.), schema/database files, or dependencies.
 - Implement roadmap follow-ups or secondary features.
 - Silently add adjacent features or unsolicited UX improvements.
 - Perform unrelated refactors or drive-by formatting.
-- Upgrade or add dependencies unless explicitly required by the task.
+- Upgrade or add dependencies unless explicitly required by the task (strictly forbidden in Meta-Work Mode).
 - Redesign stable architecture or existing abstractions for style.
 - Change authentication, session, or security architecture unless explicitly required.
 - Weaken, delete, skip, or rewrite tests simply to make them pass.
@@ -96,16 +117,21 @@ The Builder must **NOT**:
 
 ## 2. Implementation Behavior
 
-When writing or modifying code:
+When writing or modifying files:
 
-- **Smallest Correct Change**: Make the minimal, correct change that fully satisfies the active task in `TODO.md`.
+- **Smallest Correct Change**:
+  - In Normal Mode: Make the minimal, correct change that fully satisfies the active task in `TODO.md`.
+  - In Meta-Work Mode: Make the minimal, correct change that fully satisfies only the approved meta-work task under `AI_WORKFLOW.md` Section 6.
+- **Scope Discipline**:
+  - In Normal Mode: Do not expand beyond the active task in `TODO.md`.
+  - In Meta-Work Mode: Do not expand beyond the approved meta-work task. The active product `TODO.md` is NOT the implementation scope and must remain completely untouched. Any application source, schema/database, dependency, secret, or production-data change immediately invalidates Meta-Work Mode and must halt execution.
 - **Preserve API Contracts**: Preserve existing API behavior, parameters, and response structures unless the task explicitly changes them.
 - **Preserve Guarantees**: Preserve existing authentication, authorization, session, user-isolation, concurrency, and data-integrity guarantees.
 - **Reuse Existing Patterns**: Prefer existing project patterns, utilities, validators, hooks, and components over inventing new abstractions.
 - **Keep Unrelated Files Untouched**: Restrict changes strictly to files directly required for the task.
-- **Tests**: Add or update automated tests whenever behavior is added or modified.
+- **Tests**: Add or update automated tests whenever behavior is added or modified. (In Meta-Work Mode, changes are restricted to governance/agent files and do not touch product tests).
 - **Documentation**: Update documentation only when setup, behavior, contracts, or verification instructions actually change.
-- **Blocker Reporting**: If implementation reveals that the approved task cannot be completed safely within its scope, **STOP IMMEDIATELY** and report the blocker. Do not invent a larger scope or proceed with speculative workarounds.
+- **Blocker Reporting**: If implementation reveals that the approved task (the active `TODO.md` in Normal Mode, or the approved meta-work task in Meta-Work Mode) cannot be completed safely within its scope, **STOP IMMEDIATELY** and report the blocker. Do not invent a larger scope or proceed with speculative workarounds.
 
 ---
 
@@ -164,7 +190,8 @@ Before reporting completion, the Builder must perform a rigorous self-audit:
    - Request cancellation or out-of-order response bugs.
    - Accidental breaking API changes.
    - Unnecessary complexity or premature abstractions.
-   - Scope creep beyond the approved task scope.
+   - Scope creep beyond the approved task scope (the active task in `TODO.md` for Normal Mode, or the approved meta-work task for Meta-Work Mode).
+   - In Meta-Work Mode: confirm zero modifications to application source, tests, schema/database files, dependencies, secrets, or the active product `TODO.md`.
 4. Fix any issues introduced by this implementation.
 5. Do **NOT** fix unrelated pre-existing issues discovered during review.
 
@@ -205,4 +232,4 @@ Use exactly one:
 - NO IMPLEMENTATION — ACTIVE TODO IS NON-CODING
 ```
 
-**Never merge, deploy, or begin another TODO.**
+**Never merge, deploy, or begin another task or TODO.**
