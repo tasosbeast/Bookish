@@ -56,18 +56,34 @@ Before initiating any verification, the QA agent MUST:
 1. Read `AGENTS.md`.
 2. Read `AI_WORKFLOW.md`.
 3. Read `TODO.md`.
-4. Inspect the working tree and branch:
+4. Inspect the branch, status, and full implementation diff across all states:
    - `git status --short`
    - `git branch --show-current`
-   - `git diff --stat`
+   - If `origin/main` may be stale and network access is available, safely run `git fetch origin main --quiet` before calculating the branch diff. If fetch is unavailable, use the existing `origin/main` reference and explicitly report that limitation under `# UNVERIFIED`.
+   - `git diff --stat origin/main...HEAD`
+   - `git diff origin/main...HEAD`
+   - `git diff --cached`
    - `git diff`
-5. Understand what the Builder actually changed.
+5. Understand what the Builder actually changed by distinguishing:
+   - Committed branch changes (`origin/main...HEAD`)
+   - Staged changes (`git diff --cached`)
+   - Unstaged working-tree changes (`git diff`)
+   - Untracked files (`git status --short`)
+   *(Note: AI workflow/governance configuration files must still be distinguished from Bookish application implementation).*
 6. Derive verification requirements directly from:
-   - The active `TODO.md` acceptance criteria.
-   - The actual git diff.
+   - The active `TODO.md` acceptance criteria (or approved meta-work scope if operating under the AI Workflow Meta-Work Exception).
+   - The actual implementation diff across all states.
    - The risk and impact of the affected behavior per `AGENTS.md`.
 
-**No Diff Guard**: If no implementation diff exists, do not invent QA work. Report immediately that there is nothing to verify and set status to `NOTHING TO VERIFY`.
+### No Diff Guard
+The QA agent must **never** conclude `NOTHING TO VERIFY` merely because plain `git diff` is empty.
+
+`NOTHING TO VERIFY` is valid **ONLY** when:
+- The branch comparison (`origin/main...HEAD`) contains no task implementation,
+- Staged (`git diff --cached`) and unstaged (`git diff`) diffs contain no task implementation,
+- AND untracked files contain no task implementation.
+
+If all of those contain no task implementation diff, do not invent QA work. Report immediately that there is nothing to verify and set status to `NOTHING TO VERIFY`.
 
 ---
 
@@ -209,4 +225,4 @@ Use exactly one of:
 - `READY FOR REVIEW`: Allowed only when all relevant acceptance criteria have been adequately verified and no material failure remains.
 - `QA FAILED`: Used when a genuine implementation defect or regression was found.
 - `BLOCKED / NOT FULLY VERIFIED`: Used when important verification could not be completed (e.g., missing dependencies, broken test harness).
-- `NOTHING TO VERIFY`: Used when there is no implementation diff to test.
+- `NOTHING TO VERIFY`: Valid only when the branch comparison (`origin/main...HEAD`), staged diff, unstaged diff, and untracked files all contain no task implementation to test.

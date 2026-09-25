@@ -5,7 +5,7 @@ This document governs the controlled AI development lifecycle for the Bookish re
 ## 1. Core Principles
 
 - **Repository state is the source of truth**: All plans, tasks, code, and documentation live in and derive from the GitHub repository. Uncommitted external assumptions or hidden agent state do not count.
-- **Single active task**: Exactly one task may be active in `TODO.md` at any time. A task must be fully completed, verified, and integrated before the next task begins.
+- **Single active task**: Exactly one task may be active in `TODO.md` at any time. A task must be fully completed, verified, and integrated before the next task begins (see Section 6 for the narrow AI Workflow Meta-Work Exception).
 - **Scope before code**: Product ideas, bug reports, and features must be explicitly analyzed and scoped before any implementation starts.
 - **Isolated execution**: Implementation happens exclusively on a dedicated git branch or worktree, never directly on `main`.
 - **Separation of implementation and review**: The Builder (implementer) and Reviewer must normally be distinct agents or models to ensure an unbiased audit.
@@ -116,3 +116,28 @@ The following actions strictly require explicit human confirmation:
 5. **Destructive database operations**: Any operation that truncates, drops, or alters production data.
 6. **Secrets & credentials**: Introducing, updating, or rotating API keys, JWT secrets, or environment credentials.
 7. **Architectural deviations**: Proposing framework replacements, major dependency additions, or fundamental redesigns.
+
+## 6. AI Workflow Meta-Work Exception
+
+To allow necessary repository governance and AI workflow infrastructure to evolve without disrupting in-flight product roadmaps, a narrow exception to the single-active-TODO rule is permitted for workflow configuration.
+
+### Qualification Criteria
+Explicitly human-approved repository-governance or AI-workflow configuration work may occur without replacing or modifying the current product `TODO.md` **ONLY** when all of the following conditions are met:
+
+1. **Explicit Human Approval**: A human operator explicitly approved the workflow/meta-work task.
+2. **File Boundary**: Changes are strictly confined to AI workflow and governance files:
+   - `AI_WORKFLOW.md`
+   - `AGENTS.md`
+   - `.agents/**`
+3. **No Application Behavior Change**: No Bookish application runtime behavior, logic, or contracts are modified.
+4. **No Source Code Changes**: No application source code files (under `src/`, `frontend/src/`, `scripts/`, etc.) are modified.
+5. **No Database or Schema Changes**: No database migrations, `schema.prisma`, SQL scripts, or database configurations are modified.
+6. **No Dependency Changes**: No packages, dependencies, or lockfiles (`package.json`, `package-lock.json`, etc.) are added, updated, or modified.
+7. **No Secrets or Production Data**: No environment variables, secrets, credentials, or production data are touched or exposed.
+8. **Isolated Branch**: The work is conducted on a dedicated branch or worktree and submitted as a dedicated pull request.
+9. **Explicit Identification**: The pull request and branch clearly identify themselves as workflow/meta-work.
+
+### Invariants Preserved
+- This exception must **NOT** weaken the normal one-active-TODO rule for product, feature, bug-fix, catalog, infrastructure, or application work.
+- The active product `TODO.md` remains completely unchanged while approved meta-work is performed.
+- Any change touching application code, database schema, or dependencies automatically voids qualification for this exception and must be rejected as an unapproved scope violation.

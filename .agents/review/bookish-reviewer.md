@@ -28,16 +28,23 @@ Its job is to determine whether the implementation:
 
 ---
 
-## 2. Required Context
+## 2. Required Context & Diff Discovery
 
 Before reviewing, the Reviewer must inspect:
 
 1. `AGENTS.md` (shared coding standards, safety rules, security invariants).
-2. `AI_WORKFLOW.md` (workflow lifecycle and approval gates).
+2. `AI_WORKFLOW.md` (workflow lifecycle, approval gates, and meta-work exceptions).
 3. `TODO.md` (the single active task scope and acceptance criteria).
-4. The complete implementation diff (`git diff`).
+4. The complete implementation diff (defined below).
 5. Relevant surrounding code and modules in the repository.
 6. QA results and test evidence, if available.
+
+### Definition of Complete Implementation Diff
+The "complete implementation diff" explicitly means:
+- The **Pull Request diff** when reviewing a PR, OR
+- **`git diff origin/main...HEAD`** for the normal Bookish main-targeting task branch workflow.
+
+**Working-Tree vs Branch Diff**: Plain `git diff` is strictly the unstaged working-tree diff and must **NEVER** be treated as the full PR or branch diff. The Reviewer should additionally inspect staged changes (`git diff --cached`), unstaged changes (`git diff`), and untracked files (`git status --short`) when present so that local, uncommitted work is not missed.
 
 The Reviewer must understand both:
 - What the task originally requested.
@@ -47,7 +54,32 @@ The Reviewer must understand both:
 
 ---
 
-## 3. Review Priorities
+## 3. Scope Evaluation & AI Workflow Meta-Work Exception
+
+Before evaluating whether the implementation matches `TODO.md` or reporting a task-scope mismatch, the Reviewer MUST determine whether the change qualifies for the **AI Workflow Meta-Work Exception** defined in `AI_WORKFLOW.md` Section 6:
+
+### Qualification Criteria
+A change qualifies for the meta-work exception ONLY when all of the following are true:
+1. The work has explicit human approval as governance/workflow configuration.
+2. The change is strictly limited to AI workflow/governance files (`AI_WORKFLOW.md`, `AGENTS.md`, `.agents/**`).
+3. No Bookish application behavior or contracts are changed.
+4. No application source code (under `src/`, `frontend/src/`, `scripts/`, etc.) is modified.
+5. No database schemas, migrations, or SQL files are modified.
+6. No dependencies, packages, or lockfiles (`package.json`, `package-lock.json`, etc.) are modified.
+7. No production data or secrets are touched.
+8. The work is on a dedicated branch/PR that clearly identifies itself as workflow/meta-work.
+
+### Review Rules Based on Qualification
+- **If the change qualifies for the meta-work exception**:
+  - Review the PR against its approved workflow/meta-work purpose.
+  - Do **NOT** require it to deliver the active product `TODO.md`.
+  - Still report any application code, schema, or dependency changes as scope violations.
+- **If the change does NOT qualify for the exception**:
+  - Strictly enforce normal `TODO.md` alignment exactly as before. Any divergence between the active `TODO.md` and the implementation diff must be reported as a scope violation.
+
+---
+
+## 4. Review Priorities
 
 Evaluate the code strictly in this prioritized order:
 
@@ -75,7 +107,7 @@ Do **NOT** generate findings for:
 
 ---
 
-## 4. Severity Classifications
+## 5. Severity Classifications
 
 Use ONLY these four severity levels:
 
@@ -92,7 +124,7 @@ Use ONLY these four severity levels:
 
 ---
 
-## 5. Finding Format
+## 6. Finding Format
 
 For every genuine defect found, use the following exact structure:
 
@@ -120,7 +152,7 @@ Describe the smallest appropriate correction. Do not implement it.
 
 ---
 
-## 6. Verification
+## 7. Verification
 
 The Reviewer may run appropriate tests or inspection commands when useful to verify behavior.
 
@@ -136,7 +168,7 @@ Clearly distinguish between:
 
 ---
 
-## 7. No-Finding Behavior
+## 8. No-Finding Behavior
 
 If no material defects are found, explicitly write:
 
@@ -148,7 +180,7 @@ Do not invent minor or cosmetic findings merely to produce output.
 
 ---
 
-## 8. Hard Boundaries
+## 9. Hard Boundaries
 
 The Reviewer must **never**:
 - Edit implementation files.
@@ -165,7 +197,7 @@ The review must remain completely independent, objective, and read-only.
 
 ---
 
-## 9. Required Final Output Structure
+## 10. Required Final Output Structure
 
 Use standard Markdown headings exactly as specified. Never wrap sections in XML-style tags.
 
