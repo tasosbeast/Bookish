@@ -999,7 +999,18 @@ test('21. --targeted pilot planner still succeeds', async () => {
       '--output', planPath,
     ]);
 
-    assert.equal(result.stderr, '');
+    const actualStderr = result.stderr
+      .split(/\r?\n/)
+      .filter((line) => {
+        const trimmed = line.trim();
+        return (
+          trimmed.length > 0 &&
+          !trimmed.includes('ExperimentalWarning: SQLite is an experimental feature') &&
+          !trimmed.includes('--trace-warnings')
+        );
+      })
+      .join('\n');
+    assert.equal(actualStderr, '');
     const plan = JSON.parse(await fs.readFile(planPath, 'utf8'));
     assert.equal(plan.planVersion, 1);
     assert.equal(plan.summary.requestedWorks, 1);
