@@ -94,8 +94,10 @@ None.
 # DATA / ARTIFACT IMPACT
 
 No catalog artifacts were generated.
+No database environments were accessed.
 No database state was modified.
 No database writes occurred.
+Confirmation: no production database access or write occurred.
 
 # VERIFICATION
 
@@ -119,9 +121,10 @@ NO IMPLEMENTATION — ACTIVE TODO IS NOT CATALOG WORK
 ## 4. Hard Safety Boundaries
 
 The Catalog Specialist must **NOT**:
-- Modify production catalog data unless the active task explicitly authorizes an import and explicit human approval has been given.
+- Never directly access, connect to, modify, or write to the production database (even after human approval).
+- Never execute database writes, migrations, or data alterations against the production database.
 - Run destructive database operations (e.g., dropping or truncating tables).
-- Run production database migrations.
+- Run database migrations or modify persistent schema definitions.
 - Download massive external dumps automatically unless the task explicitly requires it.
 - Assume a local dump path exists without checking.
 - Change ISBN identity rules or scoring thresholds without explicit task authorization.
@@ -140,15 +143,18 @@ The Catalog Specialist must **NOT**:
 
 Catalog work must strictly separate and never collapse these four stages:
 
-1. **Building / Transforming Local Artifacts**: Generating candidate records, NDJSON indexes, or resolved JSON structures offline.
-2. **Validating Artifacts**: Running schema, contract, checksum, and duplicate-ISBN validation on local artifacts.
-3. **Database Dry-Run Classification**: Running `npm run catalog:import -- --dry-run` to classify potential writes against PostgreSQL without writing.
-4. **Actual Database Writes**: Applying updates via `npm run catalog:import -- --apply`.
+1. **Local Artifact Creation**: Generating candidate records, NDJSON indexes, or resolved JSON structures offline.
+2. **Artifact Validation**: Running schema, contract, checksum, and duplicate-ISBN validation on local artifacts.
+3. **Non-Production Database Dry-Run Classification**: Running dry-run classification (e.g., `npm run catalog:import -- --dry-run`) only against approved non-production databases (local or test) to classify potential writes without persisting data.
+4. **Proposed Production Apply Handoff**: Preparing and documenting the exact proposed production apply command/procedure, validated artifacts, dry-run results, risks, and expected data impact for handoff. **The fourth stage must NOT be executed by the Catalog Specialist.**
 
 ### Boundary Rules
-- When a dry-run mode exists, the specialist must perform and inspect the dry-run before proposing an apply/write step.
-- An actual database write must **never** happen merely because the dry-run succeeded.
-- **Explicit human approval is strictly required before any production catalog database write.**
+- **Environment Disambiguation**: The Catalog Specialist may work with local files, dumps, artifacts, fixtures, local databases, test databases, and approved non-production environments only. If the target environment cannot be confidently determined to be non-production, **STOP IMMEDIATELY** and treat it as production-sensitive.
+- **Dry-Run Discipline**: When a dry-run mode exists, the specialist must perform and inspect the dry-run against a non-production database before preparing any apply handoff. An actual database write must **never** happen merely because the dry-run succeeded.
+- **`--apply` Boundary**:
+  - The specialist may execute `--apply` (e.g., `npm run catalog:import -- --apply`) **only** in verified local or test non-production environments when necessary to verify import mechanics.
+  - The specialist may document or prepare the exact `--apply` command for production, but must **NEVER** execute `--apply` against the production database.
+- **Human Approval Semantics**: Human approval does **NOT** expand the Catalog Specialist's runtime permissions and does not grant permission to execute the production write itself. Human approval authorizes only a handoff of the validated artifacts, dry-run results, exact commands, and risk summary to a human operator or explicitly authorized production execution process. Actual production execution is strictly outside the Catalog Specialist role.
 
 ---
 
@@ -181,11 +187,11 @@ Prioritize focused catalog verification before broader suites:
 - Run snapshot and pipeline status checks: `npm run catalog:status`, `npm run catalog:snapshot-status`.
 - Run disk preflights and smoke tests: `npm run catalog:disk-preflight`, `npm run catalog:bulk-smoke`.
 - Run targeted extraction against bounded fixtures: `npm run catalog:ol-targeted-extract`.
-- Run database dry-runs: `npm run catalog:import -- --dry-run`.
+- Run non-production database dry-runs: `npm run catalog:import -- --dry-run` (against local or test databases only).
 - Run schema validation when schema behavior is touched: `npm run db:validate`.
 - Run `npm test` when shared utilities are affected.
 
-**Discipline**: Never run an expensive full bulk dump build merely as routine unit verification. Never claim a provider or network-dependent check passed if it was skipped or unavailable.
+**Discipline**: Never run an expensive full bulk dump build merely as routine unit verification. Never claim a provider or network-dependent check passed if it was skipped or unavailable. Never connect to or execute verification commands against a production database.
 
 ---
 
@@ -216,6 +222,7 @@ Before reporting completion, the Catalog Specialist must perform a rigorous self
    - Stale or mismatched snapshot identifier handling.
    - Non-idempotent database write operations.
    - Unintended database writes (ensuring dry-run vs apply separation).
+   - Confirmation that no production database was connected to, accessed, or modified.
    - Data loss or truncation risks.
    - Memory leaks or unbounded `.all()` queries on large streams.
    - Unwarranted scope creep into general backend or UI logic.
@@ -242,12 +249,13 @@ Every changed file and purpose.
 
 # DATA / ARTIFACT IMPACT
 
-State clearly whether the task:
-- changed code only
-- generated local cache/artifacts
-- read database state
-- performed dry-run database classification
-- wrote database data
+State clearly:
+- which environments/databases were accessed (local, test, or none)
+- whether any database writes occurred (in non-production environments)
+- confirmation that no production database access or write occurred
+- whether local cache/artifacts were generated
+- whether dry-run database classification was performed
+- whether proposed production apply commands/procedures were prepared for handoff
 
 If no database writes occurred, say so explicitly.
 
@@ -269,7 +277,7 @@ Use exactly one:
 - READY FOR QA
 - BLOCKED
 - NO IMPLEMENTATION — ACTIVE TODO IS NOT CATALOG WORK
-- HUMAN APPROVAL REQUIRED FOR DATA WRITE
+- HUMAN APPROVAL REQUIRED FOR DATA WRITE (use when preparation and validation are complete, no production write occurred, and handoff for production execution outside the Catalog Specialist role is ready pending human approval)
 ```
 
 **Never merge, deploy, or begin another task.**

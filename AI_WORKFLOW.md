@@ -102,8 +102,8 @@ These roles define specific responsibilities across the workflow. (Agent definit
 - **Constraints**: Must be an independent agent/model invocation from the Builder. Focuses strictly on introduced risks.
 
 ### Bookish Catalog Specialist
-- **Responsibility**: Handles domain-specific catalog data tasks: Open Library bulk dumps, targeted extraction, ISBN matching, publisher evidence verification, and offline index maintenance.
-- **Constraints**: Operates offline without production database access; strictly enforces data integrity and format safety rules.
+- **Responsibility**: Handles domain-specific catalog data tasks: Open Library bulk dumps, targeted extraction, ISBN matching, publisher evidence verification, offline index maintenance, and preparing/validating production-ready catalog artifacts. May work with local files, dumps, artifacts, fixtures, local databases, test databases, and approved non-production environments.
+- **Constraints**: Must never connect to, modify, migrate, or write to the production database. May perform dry-run classification only against non-production databases unless a future workflow explicitly introduces a separate production read-only mechanism. Human approval of a production catalog write means the specialist stops and hands off the validated artifacts, dry-run results, exact proposed command/procedure, risks, and expected data impact to the human operator or an explicitly authorized production execution process; actual production execution is strictly outside the Catalog Specialist role.
 
 ## 5. Explicit Human Approval Gates
 
