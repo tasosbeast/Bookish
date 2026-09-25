@@ -124,6 +124,7 @@ test('Date finished frontend: visibility, defaulting, editing, future constraint
   assert.equal(apiCalls[0].bookId, 'b-read');
   assert.equal(apiCalls[0].status, 'read');
   assert.equal(apiCalls[0].finishedOn, '2026-08-20', 'Edited date is sent in save request');
+  assert.equal(apiCalls[0].userRating, undefined, 'Date-only save with unchanged rating omits userRating');
 
   // Case 29: Changing date does not disturb rating/review forms
   let reviewText = 'Initial thoughts';

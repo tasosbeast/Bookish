@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
 import { ErrorNotice, Icon, statuses } from './shared.jsx';
 import { useDraftValue } from '../hooks/useDraftValue.js';
@@ -17,8 +17,17 @@ export function ShelfForm({ personal, onSaved }) {
   const [status, setStatus] = useDraftValue(personal.shelf?.status ?? 'want_to_read');
   const today = getLocalDateString();
   const [finishedOn, setFinishedOn] = useDraftValue(personal.shelf?.finishedOn ?? today);
-  const initialRating = personal.shelf?.userRating != null ? Number(personal.shelf.userRating) : null;
-  const [rating, setRating] = useDraftValue(initialRating != null ? String(initialRating) : '');
+  const propRating = personal.shelf?.userRating != null ? Number(personal.shelf.userRating) : null;
+  const [savedRating, setSavedRating] = useState({ source: propRating, value: propRating });
+  let confirmedRating = savedRating.value;
+  if (savedRating.source !== propRating) {
+    confirmedRating = propRating;
+    setSavedRating({ source: propRating, value: propRating });
+  }
+  const confirmedRatingRef = useRef(confirmedRating);
+  confirmedRatingRef.current = confirmedRating;
+
+  const [rating, setRating] = useDraftValue(propRating != null ? String(propRating) : '');
   const hasReview = Boolean(personal.review);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -27,7 +36,7 @@ export function ShelfForm({ personal, onSaved }) {
     const previousStatus = personal.shelf?.status;
     const isTransitionToRead = previousStatus !== 'read' && status === 'read';
     const currentRating = rating ? Number(rating) : null;
-    const ratingChanged = currentRating !== initialRating;
+    const ratingChanged = currentRating !== confirmedRatingRef.current;
     try {
       const body = { bookId: personal.bookId, status };
       if (status === 'read') {
@@ -40,7 +49,15 @@ export function ShelfForm({ personal, onSaved }) {
           body.userRating = null;
         }
       }
-      await api('/user-books', { method: 'POST', auth: 'required', body });
+      if (hasReview && body.userRating === null) {
+        delete body.userRating;
+      }
+      const result = await api('/user-books', { method: 'POST', auth: 'required', body });
+      const persistedRating = result?.data?.userRating !== undefined
+        ? result.data.userRating
+        : (body.userRating !== undefined ? body.userRating : confirmedRatingRef.current);
+      confirmedRatingRef.current = persistedRating;
+      setSavedRating(prev => ({ ...prev, value: persistedRating }));
       onSaved('Your bookshelf has been updated.', { scrollToReview: isTransitionToRead });
     } catch (error) { setError(error); } finally { setBusy(false); }
   }
