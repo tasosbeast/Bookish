@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
 import { ErrorNotice, Icon, statuses } from './shared.jsx';
 import { useDraftValue } from '../hooks/useDraftValue.js';
@@ -17,18 +17,47 @@ export function ShelfForm({ personal, onSaved }) {
   const [status, setStatus] = useDraftValue(personal.shelf?.status ?? 'want_to_read');
   const today = getLocalDateString();
   const [finishedOn, setFinishedOn] = useDraftValue(personal.shelf?.finishedOn ?? today);
+  const propRating = personal.shelf?.userRating != null ? Number(personal.shelf.userRating) : null;
+  const [savedRating, setSavedRating] = useState({ source: propRating, value: propRating });
+  let confirmedRating = savedRating.value;
+  if (savedRating.source !== propRating) {
+    confirmedRating = propRating;
+    setSavedRating({ source: propRating, value: propRating });
+  }
+  const confirmedRatingRef = useRef(confirmedRating);
+  confirmedRatingRef.current = confirmedRating;
+
+  const [rating, setRating] = useDraftValue(propRating != null ? String(propRating) : '');
+  const hasReview = Boolean(personal.review);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   async function save(event) {
     event.preventDefault(); setBusy(true); setError(null);
     const previousStatus = personal.shelf?.status;
     const isTransitionToRead = previousStatus !== 'read' && status === 'read';
+    const currentRating = rating ? Number(rating) : null;
+    const ratingChanged = currentRating !== confirmedRatingRef.current;
     try {
       const body = { bookId: personal.bookId, status };
       if (status === 'read') {
         body.finishedOn = finishedOn || today;
       }
-      await api('/user-books', { method: 'POST', auth: 'required', body });
+      if (ratingChanged) {
+        if (currentRating !== null) {
+          body.userRating = currentRating;
+        } else if (!hasReview) {
+          body.userRating = null;
+        }
+      }
+      if (hasReview && body.userRating === null) {
+        delete body.userRating;
+      }
+      const result = await api('/user-books', { method: 'POST', auth: 'required', body });
+      const persistedRating = result?.data?.userRating !== undefined
+        ? result.data.userRating
+        : (body.userRating !== undefined ? body.userRating : confirmedRatingRef.current);
+      confirmedRatingRef.current = persistedRating;
+      setSavedRating(prev => ({ ...prev, value: persistedRating }));
       onSaved('Your bookshelf has been updated.', { scrollToReview: isTransitionToRead });
     } catch (error) { setError(error); } finally { setBusy(false); }
   }
@@ -50,6 +79,25 @@ export function ShelfForm({ personal, onSaved }) {
             <select id={`${id}-status`} value={status} onChange={event => setStatus(event.target.value)}>
               {statuses.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
+          </div>
+          <div>
+            <label htmlFor={`${id}-rating`}>Rating</label>
+            <select
+              id={`${id}-rating`}
+              className="shelf-rating"
+              value={rating}
+              onChange={event => setRating(event.target.value)}
+            >
+              <option value="" disabled={hasReview}>No rating</option>
+              {[1, 2, 3, 4, 5].map(value => (
+                <option key={value} value={value}>
+                  {value} {value === 1 ? 'star' : 'stars'}
+                </option>
+              ))}
+            </select>
+            {hasReview && (
+              <p className="field-help">Your rating cannot be removed while a review exists.</p>
+            )}
           </div>
           {status === 'read' && (
             <div>

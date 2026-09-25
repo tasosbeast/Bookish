@@ -70,7 +70,12 @@ test('reading flow shelf management and rating/review separation', { timeout: 60
       writes.push(body);
       personal = {
         ...personal,
-        shelf: { ...personal.shelf, status: body.status, updatedAt: 'updated' }
+        shelf: {
+          ...personal.shelf,
+          status: body.status !== undefined ? body.status : personal.shelf?.status,
+          userRating: body.userRating !== undefined ? body.userRating : personal.shelf?.userRating,
+          updatedAt: 'updated'
+        }
       };
       return response({ data: personal.shelf });
     }
@@ -162,9 +167,14 @@ test('reading flow shelf management and rating/review separation', { timeout: 60
     selectElement.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
   });
 
-  // 1. Reading Journey no longer renders "Your rating"
-  const shelfFormText = document.querySelector('.reading-form').textContent;
-  assert.equal(shelfFormText.includes('Your rating'), false, 'ShelfForm must not render Your rating');
+  // 1. ShelfForm renders the current personal rating and enables No rating when no review exists
+  const shelfRatingSelect = document.querySelector('.reading-form select.shelf-rating');
+  assert.ok(shelfRatingSelect, 'ShelfForm renders personal rating select');
+  assert.equal(shelfRatingSelect.value, '4', 'ShelfForm rating initializes from personal.shelf.userRating');
+  const initialNoRatingOpt = [...shelfRatingSelect.options].find(o => o.value === '');
+  assert.ok(initialNoRatingOpt, 'ShelfForm includes No rating option');
+  assert.equal(initialNoRatingOpt.disabled, false, 'No rating option is enabled when no review exists');
+  assert.equal(document.querySelector('.reading-form .field-help'), null, 'No review-requirement guidance when no review exists');
 
   // 2. ReviewForm initializes rating from personal.shelf.userRating when review is null
   const reviewRatingSelect = document.querySelector('.review-form select');
@@ -179,12 +189,36 @@ test('reading flow shelf management and rating/review separation', { timeout: 60
   
   assert.equal(writes.length, 1);
   assert.deepEqual(writes[0], { bookId, status: 'want_to_read' });
-  assert.equal(writes[0].userRating, undefined, 'shelf save must not send userRating');
+  assert.equal(writes[0].userRating, undefined, 'shelf save must not send userRating when rating is unchanged');
   assert.equal(personal.shelf.userRating, 4, 'userRating preserved in personal shelf');
   assert.equal(scrolledElements.length, 0, 'want_to_read should not scroll to #review');
   // Check global page-level notice for shelf save
   const globalNotice = document.querySelector('.detail-copy .success-notice');
   assert.ok(globalNotice && globalNotice.textContent.includes('Your bookshelf has been updated.'));
+
+  // 3b. changing an existing rating sends userRating: Number(rating)
+  writes = [];
+  await changeSelect(shelfRatingSelect, '5');
+  await click('Save changes');
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].userRating, 5, 'changing rating sends userRating: 5');
+  assert.equal(personal.shelf.userRating, 5, 'shelf rating updated in personal state');
+
+  // 3c. clearing rating sends userRating: null when no review exists
+  writes = [];
+  await changeSelect(shelfRatingSelect, '');
+  await click('Save changes');
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].userRating, null, 'clearing rating sends userRating: null when no review exists');
+  assert.equal(personal.shelf.userRating, null, 'shelf rating cleared in personal state');
+
+  // 3d. an unrated book can receive a 1–5 rating
+  writes = [];
+  await changeSelect(shelfRatingSelect, '4');
+  await click('Save changes');
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].userRating, 4, 'unrated book can receive a 1–5 rating');
+  assert.equal(personal.shelf.userRating, 4, 'shelf rating set in personal state');
 
   // 4. transitioning currently_reading / want_to_read -> read with successful API save: smooth-scrolls to #review
   scrolledElements = [];
@@ -194,9 +228,27 @@ test('reading flow shelf management and rating/review separation', { timeout: 60
 
   assert.equal(writes.length, 1);
   assert.equal(writes[0].status, 'read');
+  assert.equal(writes[0].userRating, undefined, 'transitioning to read without changing rating does not send userRating');
   assert.equal(scrolledElements.length, 1, 'transitioning to read must scroll to #review');
   assert.equal(scrolledElements[0].id, 'review');
   assert.deepEqual(scrolledElements[0].options, { behavior: 'smooth' });
+
+  // 4b. date-only save with unchanged rating omits userRating
+  scrolledElements = [];
+  writes = [];
+  const dateInput = document.querySelector('.reading-form input[type="date"]');
+  assert.ok(dateInput, 'Date finished input is visible for read status');
+  const changeInput = async (inputElement, value) => act(async () => {
+    const prototype = dom.window.HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(prototype, 'value').set.call(inputElement, value);
+    inputElement.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  });
+  await changeInput(dateInput, '2026-09-01');
+  await click('Save changes');
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].status, 'read');
+  assert.equal(writes[0].finishedOn, '2026-09-01');
+  assert.equal(writes[0].userRating, undefined, 'date-only save with unchanged rating omits userRating');
 
   // 5. saving read -> read again: does NOT scroll to #review
   scrolledElements = [];
@@ -223,6 +275,21 @@ test('reading flow shelf management and rating/review separation', { timeout: 60
   const globalNoticeAfterReviewSave = document.querySelector('.detail-copy .success-notice');
   assert.equal(globalNoticeAfterReviewSave, null, 'Global notice is NOT rendered for review save');
 
+  // 7b. Clearing is unavailable when a review exists: UI restriction and save-path guard
+  const shelfRatingWithReview = document.querySelector('.reading-form select.shelf-rating');
+  const disabledNoRating = [...shelfRatingWithReview.options].find(o => o.value === '');
+  assert.equal(disabledNoRating.disabled, true, 'No rating option must be disabled when a review exists');
+  const guidance = document.querySelector('.reading-form .field-help');
+  assert.ok(guidance && guidance.textContent.includes('cannot be removed while a review exists'), 'Guidance indicates rating cannot be removed while review exists');
+
+  // Programmatic manipulation guard: even if select value is forced to '', save cannot submit userRating: null
+  writes = [];
+  await changeSelect(shelfRatingWithReview, '');
+  await click('Save changes');
+  assert.equal(writes.length, 1);
+  assert.notEqual(writes[0].userRating, null, 'save-path guard ensures userRating: null cannot be submitted while review exists');
+  assert.equal(writes[0].userRating, undefined, 'userRating is omitted when attempting to clear while review exists');
+
   // 8. Starting another action (save/delete) clears previous local success notice
   failPost = true;
   await click('Save review'); // will fail
@@ -240,6 +307,12 @@ test('reading flow shelf management and rating/review separation', { timeout: 60
   assert.ok(localDeleteNotice && localDeleteNotice.textContent.includes('Your review has been deleted. Your rating remains.'), 'ReviewForm renders local delete notice');
   const globalNoticeAfterDelete = document.querySelector('.detail-copy .success-notice');
   assert.equal(globalNoticeAfterDelete, null, 'Global notice is NOT rendered for review delete');
+
+  // 9b. After review is deleted, clearing rating is available again and guidance is removed
+  const shelfRatingAfterReviewDelete = document.querySelector('.reading-form select.shelf-rating');
+  const reenabledNoRating = [...shelfRatingAfterReviewDelete.options].find(o => o.value === '');
+  assert.equal(reenabledNoRating.disabled, false, 'No rating option is re-enabled once review is deleted');
+  assert.equal(document.querySelector('.reading-form .field-help'), null, 'Guidance is removed once review is deleted');
 
   // 10. Deep link scrolling is one-shot and cleans URL
   scrolledElements = [];
@@ -287,4 +360,105 @@ test('reading flow shelf management and rating/review separation', { timeout: 60
   ));
   assert.ok(scrolledElements.some(e => e.id === 'review'), 'Scrolls to review editor #review');
   assert.equal(document.getElementById('location-display').textContent, `/books/${bookId}`, 'Editor deep link URL cleans hash to /books/:id');
+});
+
+test('ShelfForm baseline reconciliation: second save before prop reload does not resend userRating', { timeout: 60000 }, async t => {
+  const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost:5173' });
+  const original = new Map();
+  for (const [key, value] of Object.entries({
+    window: dom.window, document: dom.window.document,
+    navigator: dom.window.navigator, BroadcastChannel: undefined, IS_REACT_ACT_ENVIRONMENT: true
+  })) {
+    original.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  }
+  Object.defineProperty(navigator, 'locks', { value: { request: (_key, _options, run) => run() } });
+
+  const nativeFetch = globalThis.fetch;
+  let server, root, session;
+  const { createElement: h, act } = await import('react');
+
+  t.after(async () => {
+    if (root) await act(async () => root.unmount());
+    session?.destroy();
+    await server?.close();
+    dom.window.close();
+    globalThis.fetch = nativeFetch;
+    for (const [key, descriptor] of original) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete globalThis[key];
+    }
+  });
+
+  server = await createServer({
+    root: fileURLToPath(new URL('..', import.meta.url)),
+    server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] }
+  });
+
+  let postedBodies = [];
+  globalThis.fetch = async (input, options = {}) => {
+    const url = new URL(input);
+    if (url.pathname === '/api/auth/login') {
+      return new Response(JSON.stringify({ user: { id: 'u1' }, accessToken: `h.${btoa(JSON.stringify({ exp: Date.now() / 1000 + 900 }))}.s`, expiresIn: 900 }));
+    }
+    if (url.pathname === '/api/user-books' && options.method === 'POST') {
+      const body = JSON.parse(options.body);
+      postedBodies.push(body);
+      return new Response(JSON.stringify({
+        data: {
+          bookId: body.bookId,
+          status: body.status,
+          userRating: body.userRating !== undefined ? body.userRating : 3,
+          finishedOn: body.finishedOn || null
+        }
+      }), { status: 200 });
+    }
+    return new Response(JSON.stringify({}), { status: 200 });
+  };
+
+  const { ShelfForm } = await server.ssrLoadModule('/src/components/ReadingForms.jsx');
+  ({ session } = await server.ssrLoadModule('/src/lib/api.js'));
+  const { createRoot } = await import('react-dom/client');
+  await session.authenticate('login', {});
+
+  root = createRoot(document.getElementById('root'));
+  const stalePersonal = {
+    bookId: 'b-reconcile',
+    shelf: { status: 'want_to_read', userRating: 3 },
+    review: null
+  };
+
+  await act(async () => root.render(h(ShelfForm, { personal: stalePersonal, onSaved: () => {} })));
+
+  const changeSelect = async (selectElement, value) => act(async () => {
+    const prototype = dom.window.HTMLSelectElement.prototype;
+    Object.getOwnPropertyDescriptor(prototype, 'value').set.call(selectElement, value);
+    selectElement.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  });
+  const click = async buttonText => act(async () => {
+    const button = [...document.querySelectorAll('button')].find(b => b.textContent.trim().startsWith(buttonText));
+    assert.ok(button, `button ${buttonText} exists`);
+    button.click();
+  });
+
+  const ratingSelect = document.querySelector('.shelf-rating');
+  const statusSelect = document.querySelector('.reading-form select');
+
+  // 1. Change rating from 3 to 5 and save
+  postedBodies = [];
+  await changeSelect(ratingSelect, '5');
+  await click('Save changes');
+
+  assert.equal(postedBodies.length, 1);
+  assert.equal(postedBodies[0].userRating, 5, 'first save sends userRating: 5');
+
+  // 2. Without re-rendering ShelfForm with updated prop (simulating stale parent prop before reload reconciliation):
+  // User changes status to 'currently_reading' and saves
+  postedBodies = [];
+  await changeSelect(statusSelect, 'currently_reading');
+  await click('Save changes');
+
+  assert.equal(postedBodies.length, 1);
+  assert.equal(postedBodies[0].status, 'currently_reading');
+  assert.equal(postedBodies[0].userRating, undefined, 'second status-only save before reload reconciliation must NOT resend userRating');
 });
