@@ -17,16 +17,28 @@ export function ShelfForm({ personal, onSaved }) {
   const [status, setStatus] = useDraftValue(personal.shelf?.status ?? 'want_to_read');
   const today = getLocalDateString();
   const [finishedOn, setFinishedOn] = useDraftValue(personal.shelf?.finishedOn ?? today);
+  const initialRating = personal.shelf?.userRating != null ? Number(personal.shelf.userRating) : null;
+  const [rating, setRating] = useDraftValue(initialRating != null ? String(initialRating) : '');
+  const hasReview = Boolean(personal.review);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   async function save(event) {
     event.preventDefault(); setBusy(true); setError(null);
     const previousStatus = personal.shelf?.status;
     const isTransitionToRead = previousStatus !== 'read' && status === 'read';
+    const currentRating = rating ? Number(rating) : null;
+    const ratingChanged = currentRating !== initialRating;
     try {
       const body = { bookId: personal.bookId, status };
       if (status === 'read') {
         body.finishedOn = finishedOn || today;
+      }
+      if (ratingChanged) {
+        if (currentRating !== null) {
+          body.userRating = currentRating;
+        } else if (!hasReview) {
+          body.userRating = null;
+        }
       }
       await api('/user-books', { method: 'POST', auth: 'required', body });
       onSaved('Your bookshelf has been updated.', { scrollToReview: isTransitionToRead });
@@ -50,6 +62,25 @@ export function ShelfForm({ personal, onSaved }) {
             <select id={`${id}-status`} value={status} onChange={event => setStatus(event.target.value)}>
               {statuses.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
+          </div>
+          <div>
+            <label htmlFor={`${id}-rating`}>Rating</label>
+            <select
+              id={`${id}-rating`}
+              className="shelf-rating"
+              value={rating}
+              onChange={event => setRating(event.target.value)}
+            >
+              <option value="" disabled={hasReview}>No rating</option>
+              {[1, 2, 3, 4, 5].map(value => (
+                <option key={value} value={value}>
+                  {value} {value === 1 ? 'star' : 'stars'}
+                </option>
+              ))}
+            </select>
+            {hasReview && (
+              <p className="field-help">Your rating cannot be removed while a review exists.</p>
+            )}
           </div>
           {status === 'read' && (
             <div>
