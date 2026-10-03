@@ -16,9 +16,10 @@ test('Bookish logo accessible name is Bookish', { timeout: 60000 }, async t => {
   }
   globalThis.window.scrollTo = () => {};
 
-  let server, root;
+  let server, root, session;
   t.after(async () => {
     if (root) { const { act } = await import('react'); await act(async () => root.unmount()); }
+    session?.destroy();
     await server?.close();
     dom.window.close();
     for (const [key, descriptor] of original) descriptor ? Object.defineProperty(globalThis, key, descriptor) : delete globalThis[key];
@@ -31,6 +32,7 @@ test('Bookish logo accessible name is Bookish', { timeout: 60000 }, async t => {
     optimizeDeps: { noDiscovery: true, include: [] },
   });
   const { default: Layout } = await server.ssrLoadModule('/src/components/Layout.jsx');
+  ({ session } = await server.ssrLoadModule('/src/lib/api.js'));
   const { createElement: h, act } = await import('react');
   const { createRoot } = await import('react-dom/client');
   const { MemoryRouter, Routes, Route } = await import('react-router-dom');

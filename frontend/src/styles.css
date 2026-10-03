@@ -37,7 +37,7 @@
   .header-inner { width: min(1280px, calc(100% - 80px)); min-height: 90px; margin: auto; display: flex; align-items: center; gap: 64px; }
   .brand { display: flex; align-items: center; font: 600 35px/1 var(--font-serif); letter-spacing: -1.5px; color: var(--color-leaf); }
   .wordmark { white-space: nowrap; line-height: 1; }
-  .wordmark-book { display: inline-block; width: 1.15em; height: 0.78em; vertical-align: -0.06em; margin-inline: -0.02em 0.01em; }
+  .wordmark-book { display: inline-block; width: 1.18em; height: 1em; vertical-align: -0.16em; margin-inline: -0.07em; }
   .brand-dot { color: var(--color-leaf); }
   .main-nav { display: flex; gap: 32px; align-self: stretch; }
   .main-nav a { display: flex; align-items: center; border-bottom: 2px solid transparent; font-size: 14px; color: #62695f; }
