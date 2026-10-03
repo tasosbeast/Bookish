@@ -2,7 +2,7 @@ import { ApiError, readResponse } from './http.js';
 
 export function createApi({ baseUrl, session, fetcher = fetch }) {
   return async function request(path, { auth = 'optional', method = 'GET', body, signal } = {}) {
-    const context = auth === 'none' ? { token: null } : await session.credentials();
+    const context = auth === 'none' ? { token: null } : await session.credentials({ signal });
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     if (auth === 'required' && !context.token) throw new ApiError(401, 'AUTH_REQUIRED', 'Please sign in to continue.');
     const send = token => fetcher(baseUrl + path, {

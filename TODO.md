@@ -2,113 +2,61 @@
 
 ## Task
 
-Add personal rating controls to `ShelfForm` so users can set, change, or safely clear their rating from Book Details and My Books.
+Remove the current user's Web Push subscription on logout, so the next person on a shared browser does not keep receiving the previous user's notifications.
 
 ## Scope
 
-Implement the smallest safe frontend-only vertical slice.
+Explicit sign-out (`session.logout()`, including the header control in `Layout.jsx`) removes the subscription in the browser (`PushManager.unsubscribe`) and on the server (`DELETE /api/push/subscriptions`).
 
-### Rating control
-
-In `frontend/src/components/ReadingForms.jsx`:
-
-- Add a 1–5 rating select to `ShelfForm`.
-- Initialize it from `personal.shelf?.userRating`.
-- Use the same simple select-style interaction already used by `ReviewForm`.
-- Do not introduce a custom star-picker widget.
-
-### Rating updates
-
-When the user changes the rating to 1–5 and saves:
-
-- send `userRating: Number(rating)` to the existing `POST /api/user-books` endpoint
-- rely on the existing backend contract to update the canonical `UserBook.userRating`
-- rely on existing backend behavior to synchronize an existing review rating and refresh rating aggregates
-
-IMPORTANT:
-
-If the rating has NOT changed, do not include `userRating` in the request payload.
-
-Status/date-only shelf saves must preserve the existing behavior and must not trigger unnecessary rating writes.
-
-### Rating clearing
-
-When no review exists:
-
-- show a `No rating` option
-- if the user changes from an existing rating to `No rating`, send `userRating: null`
-
-When a review exists:
-
-- do not allow selecting `No rating`
-- show short explanatory guidance that the rating cannot be removed while a review exists
-- never submit `userRating: null`
-
-The existing backend `REVIEW_REQUIRES_RATING` protection remains authoritative.
-
-## Backend
-
-No backend, validator, schema, migration, or database changes.
-
-Use the existing:
-
-- `shelfSchema`
-- `POST /api/user-books`
-- `saveShelf()`
-
-contracts exactly as they exist.
+- Perform the server delete while the user is still authenticated, before the session is cleared or revoked.
+- Bound that cleanup to about three seconds. Abort the in-flight delete and any token refresh it started so sign-out still finishes.
+- Become a guest before waiting on the auth lock, so a refresh already in flight cannot keep the reader signed in. Server revocation still runs when the lock is free.
+- Logout must still finish if unsubscribing fails, there is no subscription, push is unsupported, or notification permission is not granted.
+- Forced sign-out (`refresh` 401, including while restoring a reopened page, and `invalidate`) has no access token left for the server delete. Best-effort: drop only the browser subscription. Network and 5xx refresh errors do not.
+- Keep the Account page enable/disable toggle behavior unchanged.
+- The delete endpoint already exists. No backend contract, schema, or deployment changes.
 
 ## Tests
 
-Update the focused frontend reading-flow tests to verify:
-
-- ShelfForm renders the current personal rating
-- an unrated book can receive a 1–5 rating
-- an existing rating can be changed
-- clearing sends `userRating: null` when no review exists
-- clearing is unavailable when a review exists
-- status-only/date-only saves do NOT send `userRating` when the rating was unchanged
-- existing read-transition scrolling and shelf behavior remain intact
-
-Do not weaken existing test assertions merely to make the new behavior pass.
+- Logout with an active push subscription deletes it on the server and unsubscribes in the browser, then signs out.
+- Logout with no subscription (including unsupported push and denied permission) still signs out.
+- Logout still signs out when server delete and browser unsubscribe fail.
+- Logout still reaches guest and calls `/auth/logout` when cleanup never resolves.
+- An expired access token is refreshed before the server delete. An in-flight refresh is not aborted before that cleanup.
+- `getRegistration()` rejecting still signs out.
+- A refresh that already holds the auth lock still yields guest status immediately. Logout also returns if another request keeps the lock, and the server revocation still runs when the lock is free.
+- Aborting the request that started a shared refresh does not cancel it: a joiner with no signal still receives the new token, and only one `/auth/refresh` is sent. A 5xx refresh while authenticated does not drop the browser subscription. Another tab's sign-out drops it once. `SESSION_CHANGED` during the delete still signs out.
+- A new subscription waits up to about five seconds for an in-flight unsubscribe. An unconfigured push client reads as off and warns once.
+- Existing Account push toggle coverage stays in place.
 
 ## Out of Scope
 
-- backend changes
-- database/schema changes
-- ReviewForm redesign
-- custom graphical star widgets
-- rating controls on Discover cards
-- quick shelf actions
-- review deletion controls inside ShelfForm
-- any other UX audit findings
+- Notification preference redesign
+- Push payload, service worker, or database changes
+- Production deploys or Render configuration
+- Server-side delete after the session is already gone
 
 ## Acceptance Criteria
 
-1. ShelfForm on Book Details and My Books displays the current personal rating.
-2. Users can set or change a rating from ShelfForm.
-3. Rating changes are sent through the existing `/api/user-books` contract.
-4. Existing reviews remain rating-consistent through the existing backend synchronization behavior.
-5. Users without a review can clear an existing rating.
-6. Users with a review cannot select or submit a cleared/null rating and see explanatory guidance.
-7. Saving shelf status or finished date without changing the rating does not send `userRating`.
-8. Existing shelf status, finished-date, removal, and read-transition scrolling behavior does not regress.
-9. No backend or database changes are made.
+1. Explicit logout removes the push subscription both in the browser (PushManager unsubscribe) and on the server (existing push-subscription delete endpoint).
+2. Logout always completes, even if unsubscribing fails, hangs, there is no subscription, push isn't supported, or permission isn't granted. Cleanup cannot block sign-out past its deadline. The reader becomes a guest without waiting for an in-flight refresh to release the auth lock. The server-side delete happens while the user is still authenticated.
+3. Forced sign-out drops the browser subscription without calling the authenticated delete.
+4. The existing Account.jsx push toggle keeps working as before.
+5. Tests cover logout with an active subscription, without one, when unsubscribe fails, when cleanup never resolves, when the access token must be refreshed, and when `getRegistration()` rejects.
+6. All existing backend and frontend tests and CI pass.
 
 ## Verification
 
-Run focused frontend verification first, then appropriate broader checks:
-
-- focused `frontend/tests/reading-flow.test.js`
+- focused `frontend/tests/logout-push.test.js` and `frontend/tests/auth.test.js`
 - full frontend test suite
 - frontend production build
-
-Run backend tests only if needed to verify an existing backend contract; no backend code is expected to change.
+- backend unit tests (no backend code changes are expected)
 
 ## Done When
 
 - acceptance criteria are satisfied
-- focused and relevant frontend tests pass
-- frontend build passes
+- focused tests, the frontend suite, and the frontend build pass
 - only task-required files changed
-- implementation is ready for QA
+- implementation is ready for review
+
+Personal rating controls on ShelfForm are done (PR #19).
