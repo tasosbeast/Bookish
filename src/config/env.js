@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { z } from 'zod';
-import { parseAvatarHosts } from '../lib/avatarUrl.js';
+import { parseAvatarHosts } from '../../frontend/src/lib/avatarUrl.js';
 
 export function parseEnv(source) {
   const config = z.object({
@@ -22,8 +22,9 @@ export function parseEnv(source) {
     if (!source.CLIENT_ORIGIN) throw new Error('CLIENT_ORIGIN is required in production');
     if (new URL(config.CLIENT_ORIGIN).protocol !== 'https:') throw new Error('CLIENT_ORIGIN must use HTTPS in production');
   }
-  // Unset or blank keeps Gravatar and Google user-content hosts. A comma-separated
-  // list replaces that default. Each host includes its subdomains.
+  // Unset or blank keeps the exact Gravatar and lh3–lh6.googleusercontent.com hosts.
+  // A comma-separated list replaces that default. Only a "*.example.com" entry
+  // matches subdomains.
   return { ...config, AVATAR_ALLOWED_HOSTS: parseAvatarHosts(config.AVATAR_ALLOWED_HOSTS) };
 }
 

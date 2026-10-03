@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { signupSchema, shelfSchema, booksSchema, shelvesQuerySchema, maxAllowedFinishedOn, updateProfileSchema } from '../src/validators/index.js';
 import { env, parseEnv } from '../src/config/env.js';
-import { DEFAULT_AVATAR_HOSTS, isAllowedAvatarUrl } from '../src/lib/avatarUrl.js';
+import { DEFAULT_AVATAR_HOSTS, isAllowedAvatarUrl } from '../frontend/src/lib/avatarUrl.js';
 
 test('production configuration requires an explicit HTTPS frontend origin', () => {
   const source = {
@@ -24,14 +24,14 @@ test('avatar host allowlist defaults to Gravatar and Google user content', () =>
     JWT_REFRESH_SECRET: 'refresh-secret-'.repeat(5),
     CLIENT_ORIGIN: 'https://app.example.com',
   };
-  assert.deepEqual(parseEnv(source).AVATAR_ALLOWED_HOSTS, ['gravatar.com', 'googleusercontent.com']);
+  assert.deepEqual(parseEnv(source).AVATAR_ALLOWED_HOSTS, DEFAULT_AVATAR_HOSTS);
   assert.deepEqual(parseEnv({ ...source, AVATAR_ALLOWED_HOSTS: '   ' }).AVATAR_ALLOWED_HOSTS, DEFAULT_AVATAR_HOSTS);
   assert.deepEqual(
-    parseEnv({ ...source, AVATAR_ALLOWED_HOSTS: ' CDN.Example.com, lh3.googleusercontent.com ' }).AVATAR_ALLOWED_HOSTS,
-    ['cdn.example.com', 'lh3.googleusercontent.com'],
+    parseEnv({ ...source, AVATAR_ALLOWED_HOSTS: ' CDN.Example.com, *.images.example, lh3.googleusercontent.com ' }).AVATAR_ALLOWED_HOSTS,
+    ['cdn.example.com', '*.images.example', 'lh3.googleusercontent.com'],
   );
-  for (const invalid of ['com', '*.gravatar.com', 'https://gravatar.com', 'gravatar.com/avatar', '-bad.com']) {
-    assert.throws(() => parseEnv({ ...source, AVATAR_ALLOWED_HOSTS: invalid }), /AVATAR_ALLOWED_HOSTS/);
+  for (const invalid of ['com', 'https://gravatar.com', 'gravatar.com/avatar', '-bad.com', 'co.uk', '*.co.uk', '1.2.3.4', '127.0.0.1', '::1', '[::1]']) {
+    assert.throws(() => parseEnv({ ...source, AVATAR_ALLOWED_HOSTS: invalid }), /AVATAR_ALLOWED_HOSTS/, invalid);
   }
 });
 
@@ -41,8 +41,12 @@ test('profile pictures accept only https URLs on allowlisted hosts', () => {
     'https://secure.gravatar.com/avatar/abc?s=200&d=identicon',
     'https://gravatar.com/avatar/abc?default=mp',
     'https://s.gravatar.com/avatar/abc?d=retro',
+    'https://0.gravatar.com/avatar/abc?d=initials',
+    'https://2.gravatar.com/avatar/abc?d=color',
     'https://lh3.googleusercontent.com/a-/photo',
     'https://lh4.googleusercontent.com/a/photo=s96-c',
+    'https://lh5.googleusercontent.com/a/photo',
+    'https://lh6.googleusercontent.com/a/photo',
     'HTTPS://WWW.GRAVATAR.COM/avatar/abc',
   ];
   for (const profilePicture of accepted) {
@@ -73,6 +77,16 @@ test('profile pictures accept only https URLs on allowlisted hosts', () => {
     'https://www.gravatar.com/avatar/abc?d=https://evil.example/pixel.png',
     'https://www.gravatar.com/avatar/abc?default=//evil.example/pixel.png',
     'https://www.gravatar.com/avatar/abc?d=identicon&d=https://evil.example/pixel.png',
+    'https://www.gravatar.com/avatar/abc?%64=https://evil.example/pixel.png',
+    'https://www.gravatar.com./avatar/abc',
+    'https://[::1]/avatar.png',
+    'https://www.gravatar.com\\@evil.com/avatar/x',
+    'https://www.gravatar.com/photo/abc',
+    'https://www.gravatar.com/avatar',
+    'https://x.bc.googleusercontent.com/a',
+    'https://abc-colab.googleusercontent.com/a',
+    'https://3.gravatar.com/avatar/abc',
+    'https://lh7.googleusercontent.com/a/photo',
     `https://www.gravatar.com/${'a'.repeat(2100)}`,
   ];
   for (const profilePicture of rejected) {
@@ -80,9 +94,18 @@ test('profile pictures accept only https URLs on allowlisted hosts', () => {
   }
 
   assert.equal(isAllowedAvatarUrl('https://cdn.example/a.png', ['cdn.example']), true);
-  assert.equal(isAllowedAvatarUrl('https://images.cdn.example/a.png', ['cdn.example']), true);
+  assert.equal(isAllowedAvatarUrl('https://images.cdn.example/a.png', ['cdn.example']), false);
+  assert.equal(isAllowedAvatarUrl('https://images.cdn.example/a.png', ['*.cdn.example']), true);
+  assert.equal(isAllowedAvatarUrl('https://cdn.example/a.png', ['*.cdn.example']), false);
   assert.equal(isAllowedAvatarUrl('https://www.gravatar.com/avatar/abc', ['cdn.example']), false);
   assert.equal(isAllowedAvatarUrl('https://notcdn.example/a.png', ['cdn.example']), false);
+  assert.equal(isAllowedAvatarUrl('https://x.bc.googleusercontent.com/a', DEFAULT_AVATAR_HOSTS), false);
+  assert.equal(isAllowedAvatarUrl('https://abc-colab.googleusercontent.com/a', DEFAULT_AVATAR_HOSTS), false);
+
+  const rejectedMessage = updateProfileSchema.safeParse({ body: { profilePicture: 'https://example.com/a.png' } });
+  assert.equal(rejectedMessage.success, false);
+  assert.match(rejectedMessage.error.issues.map(issue => issue.message).join(' '), /www\.gravatar\.com/);
+  assert.match(rejectedMessage.error.issues.map(issue => issue.message).join(' '), /lh3\.googleusercontent\.com/);
 
   const original = env.AVATAR_ALLOWED_HOSTS;
   env.AVATAR_ALLOWED_HOSTS = ['cdn.example'];

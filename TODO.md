@@ -9,7 +9,7 @@ Restrict new profile picture URLs to HTTPS on an allowlisted set of hosts, and r
 Users set a profile picture by pasting a URL on the account page (`PATCH /api/auth/me`). There is no upload or identity-provider avatar sync. Those URLs are rendered as images to other readers.
 
 - Accept only `https` URLs. Reject `http` and every other scheme.
-- Accept only allowlisted hosts, configured with `AVATAR_ALLOWED_HOSTS` in `src/config/env.js`. When unset, allow `gravatar.com` and `googleusercontent.com`, including their subdomains.
+- Accept only allowlisted hosts, configured with `AVATAR_ALLOWED_HOSTS` in `src/config/env.js`. When unset, allow exact Gravatar hosts (`gravatar.com`, `www.gravatar.com`, `secure.gravatar.com`, `s.gravatar.com`, `0.gravatar.com`, `1.gravatar.com`, `2.gravatar.com`) and `lh3.googleusercontent.com` through `lh6.googleusercontent.com`. An entry matches that host only. A `*.example.com` entry is what allows subdomains. The web build's `VITE_AVATAR_ALLOWED_HOSTS` must match.
 - Reject Gravatar `d` / `default` values that are not a built-in keyword, because Gravatar would redirect the image request to an arbitrary URL.
 - Do not migrate or delete stored pictures that fail the new rules. The frontend `Avatar` component renders the initial placeholder instead, with `referrerpolicy="no-referrer"` and `loading="lazy"` on real images.
 - Use that component for the account page, the feed, and every friends avatar.

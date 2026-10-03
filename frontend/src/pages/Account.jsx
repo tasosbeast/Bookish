@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth.js';
 import { api, session } from '../lib/api.js';
 import { Avatar } from '../components/Avatar.jsx';
+import { allowedAvatarHosts } from '../lib/avatarHosts.js';
 import { ErrorNotice } from '../components/shared.jsx';
 import {
   isPushSupported,
@@ -218,7 +219,7 @@ export default function Account() {
                 onChange={e => setProfilePicture(e.target.value)}
                 maxLength={2048}
               />
-              <p className="muted small">HTTPS only. Gravatar and Google profile photos are accepted.</p>
+              <p className="muted small">HTTPS only. Allowed hosts: {allowedAvatarHosts.join(', ')}.</p>
 
               <ErrorNotice error={error} />
 

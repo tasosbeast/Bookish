@@ -59,6 +59,10 @@ test('Avatar renders allowlisted https pictures and falls back otherwise', { tim
     'https://evil.example/pixel.png',
     'https://www.gravatar.com/avatar/abc?d=https://evil.example/pixel.png',
     'https://gravatar.com.evil.example/avatar/abc',
+    'https://x.bc.googleusercontent.com/a',
+    'https://abc-colab.googleusercontent.com/a',
+    'https://www.gravatar.com/photo/abc',
+    'https://www.gravatar.com./avatar/abc',
   ]) {
     await render({ username: 'alex', profilePicture });
     assert.equal(document.querySelector('img'), null, `no image for ${profilePicture}`);
