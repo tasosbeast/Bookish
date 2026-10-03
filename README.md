@@ -165,6 +165,27 @@ Attach those fields with `catalog:enrich`. The command reads a discover artifact
 npm run catalog:enrich -- --input scripts/catalog-cache/catalog-discover.json --editions path/to/ol_dump_editions_2026-08-31.txt.gz --authors-index scripts/catalog-cache/open-library-authors --output scripts/catalog-cache/catalog-enriched.json
 ```
 
+Import dedup rows with status `new` after that report exists. `catalog:import` joins the dedup-check JSONL to the enriched artifact by `workKey` and requires that pair to be the same snapshot: every report work key and title must belong to the enriched `snapshotId`. `existing` and `ambiguous` rows are counted and skipped. A candidate with no usable title or no `primaryAuthor` is counted and skipped. Inserted books store `title`, `author` from `primaryAuthor`, the lowest valid ISBN-13 or null (the value has to satisfy `books_isbn_format_check`), `openLibraryWorkKey`, and `https://covers.openlibrary.org/b/id/<cover>-L.jpg?default=false` from the first Open Library cover id. Current enriched candidates have no publication year, so `publicationYear` stays null unless the candidate already includes a year from 1 through 9999.
+
+Dry-run is the default. It opens PostgreSQL with the dedup-check read-only client (`book.findMany` and `$disconnect` only, plus `default_transaction_read_only=on`), re-checks work keys and ISBNs, prints a summary, and writes a plan. `--apply` is the only switch that inserts. `--limit` defaults to 500 and accepts 1 through 10000. `--batch-size` defaults to 100 and uses the same bounds. The limit caps both the plan and `--apply`. Each batch is its own transaction. The batch reads `openLibraryWorkKey` and ISBN again, then inserts with `createMany` and `skipDuplicates`, so a rerun or a concurrent insert does not add a duplicate. A failed batch rolls back. Batches that already committed stay committed. The process exits non-zero when any batch fails.
+
+The JSONL report and the sibling `.summary.json` are replaced atomically and checked before the replace. The summary lists inserted rows, skips by reason, and failures with errors.
+
+```powershell
+npm run catalog:import -- --report scripts/catalog-cache/catalog-dedup-report.jsonl --enriched scripts/catalog-cache/catalog-enriched.json --output scripts/catalog-cache/catalog-import.jsonl
+```
+
+Production apply, only after a backup you can restore:
+
+1. Back up the target database and confirm that backup before any `--apply`.
+2. Dry-run the command above on that database and read the printed counts plus `catalog-import.jsonl` and `catalog-import.summary.json`.
+3. Apply a small batch: add `--apply --limit 50` to the same command.
+4. Verify those rows: title, author, ISBN-13 or null, unique `open_library_work_key`, cover URL, and unchanged pre-existing books.
+5. Run that same `--apply --limit 50` again and confirm the summary inserts 0.
+6. Raise `--limit` only after that check. A non-zero exit means a batch failed and was rolled back; earlier batches from that run remain.
+
+`--apply` connects with the `DATABASE_URL` writer. The dry-run session flag is a backstop; a read-only PostgreSQL role is the guarantee for a plan you do not intend to apply. Review the backup and the dry-run plan before running `--apply` on production.
+
 Before a large local bulk build, check the target volume. The preflight uses an intentionally conservative 8× input-size temporary-space estimate plus a reserve; it refuses the check with a non-zero exit status when that requirement exceeds free space. Override the amplification only with measurements from a comparable local build.
 
 ```powershell
@@ -183,7 +204,7 @@ For a controlled source sample without downloading an entire archive, `catalog:o
 npm run catalog:ol-range-sample -- --url https://openlibrary.org/data/ol_dump_authors_latest.txt.gz --bytes 33554432 --rows 50000 --output $env:TEMP/authors-sample.txt
 ```
 
-`catalog:import` reads only the validated Catalog Pipeline v2 artifact at `scripts/catalog-resolved.json`; it never contacts Open Library or Google Books. Use `--artifact <path>` to inspect or import another resolved artifact. Provider resolution is a separate step and production database writes never depend on live metadata services.
+The resolved-artifact importer is the `catalog:import` mode without `--report`. It reads only the validated Catalog Pipeline v2 artifact at `scripts/catalog-resolved.json`; it never contacts Open Library or Google Books. Use `--artifact <path>` to inspect or import another resolved artifact. Provider resolution is a separate step and production database writes never depend on live metadata services. The works import above is the mode that takes `--report` and `--enriched`.
 
 Run a no-write database classification first:
 

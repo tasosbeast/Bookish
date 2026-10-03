@@ -1,33 +1,81 @@
 import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { importResolvedCatalog, validateImportArtifact } from './catalog/import.js';
+import {
+  createImportPrismaClient,
+  importCatalogWorks,
+  importResolvedCatalog,
+  loadWorksImportSources,
+  parseCatalogWorksImportArgs,
+  validateImportArtifact,
+} from './catalog/import.js';
 
-let db;
-try {
-  const args = process.argv.slice(2);
+function worksImportRequested(args) {
+  return args.some(argument => (
+    argument === '--report'
+    || argument === '--enriched'
+    || argument === '--output'
+    || argument === '--limit'
+    || argument === '--batch-size'
+  ));
+}
+
+async function runWorksImport(args) {
+  const options = parseCatalogWorksImportArgs(args);
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) throw new Error('DATABASE_URL is required');
+  const sources = await loadWorksImportSources(options.report, options.enriched);
+  const db = createImportPrismaClient(databaseUrl, { apply: options.apply });
+  try {
+    const { summary } = await importCatalogWorks({
+      db,
+      reportRows: sources.reportRows,
+      artifact: sources.artifact,
+      apply: options.apply,
+      limit: options.limit,
+      batchSize: options.batchSize,
+      outputPath: options.output,
+    });
+    console.log(JSON.stringify(summary));
+    if (summary.failed) process.exitCode = 1;
+  } finally {
+    await db.$disconnect();
+  }
+}
+
+async function runResolvedImport(args) {
   const options = { artifact: resolve('scripts/catalog-resolved.json'), apply: null };
-  for (let index = 0; index < args.length; index++) {
+  for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === '--apply' || argument === '--dry-run') {
       if (options.apply !== null) throw new Error('Choose exactly one mode: --dry-run or --apply');
       options.apply = argument === '--apply';
     } else if (argument === '--artifact') {
-      const value = args[++index];
+      const value = args[index + 1];
       if (!value) throw new Error('--artifact requires a path');
       options.artifact = resolve(value);
+      index += 1;
     } else throw new Error(`Unknown argument ${argument}`);
   }
   if (options.apply === null) throw new Error('Choose exactly one mode: --dry-run or --apply');
 
   const artifact = validateImportArtifact(JSON.parse(await readFile(options.artifact, 'utf8')));
-  db = (await import('../src/lib/prisma.js')).prisma;
-  const summary = await importResolvedCatalog(db, artifact, { apply: options.apply, report: console.error });
-  console.log(`${options.apply ? 'Applied' : 'Dry run (would change)'}: ${JSON.stringify(summary)}`);
-  if (summary.failed) process.exitCode = 1;
+  const db = (await import('../src/lib/prisma.js')).prisma;
+  try {
+    const summary = await importResolvedCatalog(db, artifact, { apply: options.apply, report: console.error });
+    console.log(`${options.apply ? 'Applied' : 'Dry run (would change)'}: ${JSON.stringify(summary)}`);
+    if (summary.failed) process.exitCode = 1;
+  } finally {
+    await db.$disconnect();
+  }
+}
+
+const args = process.argv.slice(2);
+try {
+  if (worksImportRequested(args)) await runWorksImport(args);
+  else await runResolvedImport(args);
 } catch (error) {
-  console.error(`Catalog import could not complete: ${error?.message ?? String(error)}`);
+  const message = error?.message ?? String(error);
+  console.error(worksImportRequested(args) ? message : `Catalog import could not complete: ${message}`);
   process.exitCode = 1;
-} finally {
-  await db?.$disconnect();
 }

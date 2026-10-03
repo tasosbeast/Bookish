@@ -23,7 +23,7 @@ export function checkPublicationYearConsistency(publicationDate, publicationYear
 }
 
 export function serializeBook(book) {
-  // openLibraryWorkKey is schema-only until a later import task accepts it.
+  // Catalog import stores openLibraryWorkKey. API responses still omit it.
   const { bookGenres, openLibraryWorkKey, ...fields } = book;
   return {
     ...fields,
