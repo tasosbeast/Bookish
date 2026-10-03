@@ -1,10 +1,10 @@
 # Current Task
 
-Read-only dedup check of discover output against the Bookish database (`catalog:dedup-check`).
+Offline enrich of discover candidates (`catalog:enrich`).
 
-The command reads a discover artifact JSON file and writes one JSONL report line per candidate: `{workKey, title, status, matchedBookIds, matchedBy}`. `status` is `new`, `existing`, or `ambiguous`. Matching priority is `openLibraryWorkKey` (validated as `/works/OL\d+W`, empty strings rejected), then any normalized ISBN-10 or ISBN-13, then normalized title plus `primaryAuthor` when present on the candidate. `ambiguous` means more than one book matched on the chosen path, or a lower-priority match disagrees with a higher-priority one. The command prints summary counts per status.
+The command reads a discover artifact, streams one local Open Library editions dump, and writes the same artifact shape with `isbns` and `primaryAuthor` on each candidate. Candidates stay in a work-key map. The dump is not loaded into memory, and the command does not access PostgreSQL. ISBN-10 values convert to ISBN-13, invalid checksums are dropped, and ISBNs are deduplicated and capped at 50 per work. `primaryAuthor` is the author-index name for the candidate's first author key, or null when that key is absent. The author index snapshotId must match the input artifact. The command reports matched editions, works with ISBNs, works without ISBNs, and works with an author. `catalog:dedup-check` accepts the enriched file.
 
-Acceptance: `npm run lint` with 0 warnings, `npm test`, integration tests, and `npm test --prefix frontend` green. The command uses read-only Prisma access only (`book.findMany`, `$disconnect`) with a PostgreSQL read-only transaction backstop. No writes, migrations, or schema changes.
+Acceptance: `npm run lint` with 0 warnings, `npm test`, integration tests, and `npm test --prefix frontend` green. No database access, migrations, or schema changes.
 
 ## Recorded for later
 
@@ -22,9 +22,10 @@ Existing rules still apply: non-books rejected via `pilotDisqualificationReason`
 
 1. Candidate scoring and selection (`catalog:discover --limit N`)
 2. Read-only dedup against the database
-3. A resolved-artifact bridge
+3. Offline enrich from discover to dedup-check (`catalog:enrich`)
 4. A batched, idempotent `--dry-run`/`--apply` import
 
+catalog:dedup-check is done (#34, merged as 3e86b39).
 catalog:discover is done (#33, merged as 563cdba).
 Book.openLibraryWorkKey is done (PR #32, merged as e1d281d).
 #31 catalog:ol-work-index-build is done (merged as 7fbf1ee).

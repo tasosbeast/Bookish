@@ -153,10 +153,16 @@ npm run catalog:discover -- --works-index scripts/catalog-cache/open-library-wor
 
 Classify discover candidates against the Bookish database with `catalog:dedup-check`. The command requires `DATABASE_URL`, reads a discover artifact JSON file, performs read-only Prisma lookups, and writes one JSONL report line per candidate: `{workKey, title, status, matchedBookIds, matchedBy}`. `status` is `new`, `existing`, or `ambiguous`. Matching priority is `openLibraryWorkKey` (validated as `/works/OL\d+W`, empty strings rejected), then any normalized ISBN-10 or ISBN-13, then normalized title plus `primaryAuthor` when present on the candidate. `ambiguous` means more than one book matched on the chosen path, or a lower-priority match disagrees with a higher-priority one. The command prints summary counts per status and never writes to PostgreSQL.
 
-The CLI exposes only `book.findMany` and `$disconnect`, and connects with `default_transaction_read_only=on` appended to `DATABASE_URL`. That session flag is a backstop only: raw SQL such as `$queryRaw` can override it. For production or shared databases, point `DATABASE_URL` at a read-only PostgreSQL role instead of the application writer role; the role grant is the real guarantee.
+The CLI exposes only `book.findMany` and `$disconnect`, and connects with `default_transaction_read_only=on` appended to `DATABASE_URL`. That session flag is a backstop only: raw SQL such as `$queryRaw` can override it. For production or shared databases, point `DATABASE_URL` at a read-only PostgreSQL role instead of the application writer role; the role grant is the real guarantee. Run `catalog:enrich` first when candidates should carry edition ISBNs and `primaryAuthor`.
 
 ```powershell
-npm run catalog:dedup-check -- --input scripts/catalog-cache/catalog-discover.json --output scripts/catalog-cache/catalog-dedup-report.jsonl
+npm run catalog:dedup-check -- --input scripts/catalog-cache/catalog-enriched.json --output scripts/catalog-cache/catalog-dedup-report.jsonl
+```
+
+Attach those fields with `catalog:enrich`. The command reads a discover artifact, streams a local Open Library editions dump once, and looks up each candidate's first author key in the local author index. It writes the same artifact shape with `isbns` and `primaryAuthor` on each candidate. ISBN-10 values convert to ISBN-13, invalid checksums are dropped, and the ISBN list is deduplicated and capped at 50 per work. `primaryAuthor` is null when that author key is missing. The author index `snapshotId` must match the discover artifact. Candidates stay in a work-key map, so the dump itself is not loaded. The command prints matched editions, works with ISBNs, works without ISBNs, and works with an author. It does not download dumps or access PostgreSQL. `catalog:dedup-check` accepts the enriched file.
+
+```powershell
+npm run catalog:enrich -- --input scripts/catalog-cache/catalog-discover.json --editions path/to/ol_dump_editions_2026-08-31.txt.gz --authors-index scripts/catalog-cache/open-library-authors --output scripts/catalog-cache/catalog-enriched.json
 ```
 
 Before a large local bulk build, check the target volume. The preflight uses an intentionally conservative 8× input-size temporary-space estimate plus a reserve; it refuses the check with a non-zero exit status when that requirement exceeds free space. Override the amplification only with measurements from a comparable local build.
