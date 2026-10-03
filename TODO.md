@@ -2,7 +2,7 @@
 
 Candidate scoring and selection (`catalog:discover --limit N`).
 
-The command reads a local Open Library works index and writes the top N works by a documented popularity score. Hard filters require a cover, a non-empty title, a `/works/OL<digits>W` key, and the configured minimum rating and reader counts. English is not decided from works; the artifact records `languageCheck` as `pending`. The command does not access PostgreSQL, Prisma, or the network.
+The command reads a local Open Library works index and writes the top N works by the documented popularity score: a 0–1 Bayesian rating times the log of ratings plus weighted shelf counts. Works with no ratings and no shelf counts are rejected as `no_signal`. `--min-readers` defaults to 10 raw shelf counts and `--min-ratings` defaults to 0. Hard filters also require a cover, a non-empty title, and a `/works/OL<digits>W` key. English is not decided from works; the artifact records `languageCheck` as `pending`. The command does not access PostgreSQL, Prisma, or the network. `--limit` is at most 10000.
 
 ## Recorded for later
 

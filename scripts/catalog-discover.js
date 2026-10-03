@@ -1,9 +1,10 @@
 import { resolve } from 'node:path';
-import { discoverCatalogCandidates } from './catalog/discover.js';
+import { CATALOG_DISCOVER_MAX_LIMIT, discoverCatalogCandidates } from './catalog/discover.js';
 
 function positiveInteger(value, name) {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`${name} must be a positive integer`);
+  if (name === '--limit' && parsed > CATALOG_DISCOVER_MAX_LIMIT) throw new Error(`--limit must be at most ${CATALOG_DISCOVER_MAX_LIMIT}`);
   return parsed;
 }
 

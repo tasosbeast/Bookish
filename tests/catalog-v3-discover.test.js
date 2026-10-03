@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import {
+  CATALOG_DISCOVER_SCORING,
   discoverCatalogCandidates,
   popularityScore,
 } from '../scripts/catalog/discover.js';
@@ -35,6 +36,26 @@ function repeat(line, count) {
 
 async function temporaryDirectory() {
   return fs.mkdtemp(join(tmpdir(), 'bookish-discover-'));
+}
+
+function readingLog(counts = {}) {
+  return {
+    'Want to Read': counts['Want to Read'] ?? 0,
+    'Currently Reading': counts['Currently Reading'] ?? 0,
+    'Already Read': counts['Already Read'] ?? 0,
+  };
+}
+
+async function writeCopies(handle, line, count) {
+  let buffer = '';
+  for (let index = 0; index < count; index += 1) {
+    buffer += line;
+    if (buffer.length >= 1024 * 1024) {
+      await handle.writeFile(buffer);
+      buffer = '';
+    }
+  }
+  if (buffer) await handle.writeFile(buffer);
 }
 
 async function mutateWorks(indexPath, statements) {
@@ -154,7 +175,8 @@ test('discovery ranks by popularity, breaks ties by work key, and counts each fi
     missing_title: 2,
     missing_cover: 1,
     excluded: 1,
-    below_min_ratings: 2,
+    no_signal: 1,
+    below_min_ratings: 1,
     below_min_readers: 1,
   });
 
@@ -171,10 +193,18 @@ test('discovery ranks by popularity, breaks ties by work key, and counts each fi
   assert.ok(ranked.candidates[0].score > ranked.candidates[1].score);
   assert.ok(ranked.candidates[2].score > ranked.candidates[3].score);
   assert.ok(ranked.candidates[3].score > ranked.candidates[4].score);
-  const tied = popularityScore({ ratingsCount: 4, ratingsSum: 16, readers: 3 });
+  const tied = popularityScore({
+    ratingsCount: 4,
+    ratingsSum: 16,
+    readingLog: { 'Want to Read': 0, 'Currently Reading': 0, 'Already Read': 3 },
+  });
   assert.equal(ranked.candidates[1].score, tied);
   assert.equal(ranked.candidates[2].score, tied);
-  assert.equal(ranked.candidates[0].score, popularityScore({ ratingsCount: 5, ratingsSum: 25, readers: 40 }));
+  assert.equal(ranked.candidates[0].score, popularityScore({
+    ratingsCount: 5,
+    ratingsSum: 25,
+    readingLog: { 'Want to Read': 0, 'Currently Reading': 0, 'Already Read': 40 },
+  }));
   assert.deepEqual(ranked.candidates[0].authorKeys, ['/authors/OL9A']);
   assert.deepEqual(ranked.candidates[0].coverIds, [11]);
   assert.equal(ranked.candidates[0].title, 'Highest');
@@ -191,7 +221,11 @@ test('discovery ranks by popularity, breaks ties by work key, and counts each fi
   assert.equal(ranked.scoring.minRatings, 1);
   assert.equal(ranked.scoring.minReaders, 1);
   assert.equal(ranked.scoring.priorRatings, 20);
-  assert.equal(ranked.scoring.readerWeight, 1);
+  assert.equal(ranked.scoring.alreadyReadWeight, 1);
+  assert.equal(ranked.scoring.currentlyReadingWeight, 0.75);
+  assert.equal(ranked.scoring.wantToReadWeight, 0.25);
+  assert.equal(CATALOG_DISCOVER_SCORING.minReaders, 10);
+  assert.equal(CATALOG_DISCOVER_SCORING.minRatings, 0);
   for (const key of ['/works/OL500W', '/works/OL600W', '/works/OL700W', '/works/OL800W', '/works/OL900W', '/works/OL1000W']) {
     assert.equal(ranked.candidates.some(candidate => candidate.workKey === key), false);
   }
@@ -207,6 +241,73 @@ test('discovery ranks by popularity, breaks ties by work key, and counts each fi
   assert.equal(artifact.languageCheck, 'pending');
   assert.equal(artifact.generatedAt, GENERATED_AT);
   assert.deepEqual(artifact.candidates, ranked.candidates);
+});
+
+test('a 4.5-star work outranks a huge want-to-read pile, and a no-signal work is filtered', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const worksPath = join(directory, 'works.txt');
+  const ratingsPath = join(directory, 'ratings.txt');
+  const readingLogPath = join(directory, 'reading-log.txt');
+  await fs.writeFile(worksPath, [
+    workLine('/works/OL1W', { title: 'Well Rated', covers: [1] }),
+    workLine('/works/OL2W', { title: 'Want Pile', covers: [2] }),
+    workLine('/works/OL3W', { title: 'No Signal', covers: [3] }),
+  ].join(''));
+  const ratings = await fs.open(ratingsPath, 'w');
+  const shelves = await fs.open(readingLogPath, 'w');
+  try {
+    await writeCopies(ratings, '/works/OL1W\t\\N\t5\t2026-01-01\n', 1000);
+    await writeCopies(ratings, '/works/OL1W\t\\N\t4\t2026-01-01\n', 1000);
+    await writeCopies(ratings, '/works/OL2W\t\\N\t3\t2026-01-01\n', 150);
+    await writeCopies(ratings, '/works/OL2W\t\\N\t2\t2026-01-01\n', 150);
+    await writeCopies(shelves, '/works/OL1W\t\\N\tAlready Read\t2026-01-01\n', 50);
+    await writeCopies(shelves, '/works/OL2W\t\\N\tWant to Read\t2026-01-01\n', 100_000);
+  } finally {
+    await ratings.close();
+    await shelves.close();
+  }
+  const indexPath = join(directory, 'works-index');
+  await buildOpenLibraryWorkIndex({
+    worksPath,
+    ratingsPath,
+    readingLogPath,
+    outputPath: indexPath,
+    snapshotId: SNAPSHOT_ID,
+    generatedAt: GENERATED_AT,
+    batchSize: 5000,
+  });
+  const wellRated = {
+    ratingsCount: 2000,
+    ratingsSum: 9000,
+    readingLog: readingLog({ 'Already Read': 50 }),
+  };
+  const wantPile = {
+    ratingsCount: 300,
+    ratingsSum: 750,
+    readingLog: readingLog({ 'Want to Read': 100_000 }),
+  };
+  assert.equal(popularityScore({ ratingsCount: 0, ratingsSum: 0, readingLog: readingLog() }), 0);
+  assert.ok(popularityScore(wellRated) > popularityScore(wantPile));
+  const result = await discoverCatalogCandidates({
+    worksIndexPath: indexPath,
+    snapshotId: SNAPSHOT_ID,
+    limit: 10,
+    outputPath: join(directory, 'discover.json'),
+    generatedAt: GENERATED_AT,
+  });
+  assert.deepEqual(result.candidates.map(candidate => candidate.title), ['Well Rated', 'Want Pile']);
+  assert.equal(result.candidates[0].signals.ratingsCount, 2000);
+  assert.equal(result.candidates[0].signals.ratingsSum, 9000);
+  assert.equal(result.candidates[0].signals.readingLog['Already Read'], 50);
+  assert.equal(result.candidates[1].signals.ratingsCount, 300);
+  assert.equal(result.candidates[1].signals.readingLog['Want to Read'], 100_000);
+  assert.equal(result.candidates[0].score, popularityScore(wellRated));
+  assert.equal(result.candidates[1].score, popularityScore(wantPile));
+  assert.equal(result.counts.filteredByReason.no_signal, 1);
+  assert.equal(result.counts.eligible, 2);
+  assert.equal(result.scoring.minRatings, 0);
+  assert.equal(result.scoring.minReaders, 10);
 });
 
 test('a snapshot mismatch or invalid exclude file keeps the previous artifact', async (t) => {
@@ -240,13 +341,17 @@ test('a snapshot mismatch or invalid exclude file keeps the previous artifact', 
     discoverCatalogCandidates(discoverOptions(indexPath, directory, { outputPath, limit: 0 })),
     error => error.code === 'invalid_argument',
   );
+  await assert.rejects(
+    discoverCatalogCandidates(discoverOptions(indexPath, directory, { outputPath, limit: 10001 })),
+    error => error.code === 'invalid_argument' && error.message.includes('limit must be at most 10000'),
+  );
   assert.equal(await fs.readFile(outputPath, 'utf8'), before);
   assert.equal((await fs.readdir(directory)).some(name => name.endsWith('.tmp')), false);
   const preserved = JSON.parse(before);
   assert.equal(preserved.candidates[0].workKey, '/works/OL100W');
 });
 
-test('several thousand indexed works keep a bounded candidate list', async (t) => {
+test('several thousand indexed works return the deterministic top limit', async (t) => {
   const directory = await temporaryDirectory();
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const total = 3000;
@@ -301,14 +406,16 @@ test('several thousand indexed works keep a bounded candidate list', async (t) =
     worksIndexPath: indexPath,
     snapshotId: SNAPSHOT_ID,
     limit,
+    minReaders: 0,
     outputPath: join(directory, 'discover.json'),
     generatedAt: GENERATED_AT,
   });
+  const oneAlreadyRead = { 'Want to Read': 0, 'Currently Reading': 0, 'Already Read': 1 };
   const expected = [];
   for (let index = 0; index < total; index += 1) {
     expected.push({
       workKey: `/works/OL${index}W`,
-      score: popularityScore({ ratingsCount: 1, ratingsSum: (index % 5) + 1, readers: 1 }),
+      score: popularityScore({ ratingsCount: 1, ratingsSum: (index % 5) + 1, readingLog: oneAlreadyRead }),
     });
   }
   expected.sort((left, right) => {
@@ -387,6 +494,15 @@ test('discover CLI validates arguments and leaves the previous artifact on failu
       '--limit', '0',
     ]),
     error => error.code === 1 && error.stderr.includes('--limit must be a positive integer'),
+  );
+  await assert.rejects(
+    execFileAsync(process.execPath, [
+      '--experimental-sqlite', script,
+      '--works-index', indexPath,
+      '--snapshot-id', SNAPSHOT_ID,
+      '--limit', '10001',
+    ]),
+    error => error.code === 1 && error.stderr.includes('--limit must be at most 10000'),
   );
   await assert.rejects(
     execFileAsync(process.execPath, [

@@ -671,12 +671,26 @@ export async function createOpenLibraryWorkLookup({ indexPath, snapshotId }) {
       FROM works
      WHERE key = ?
   `);
+  const scan = database.prepare(`
+    SELECT key, title, author_keys, cover_ids, ratings_count, ratings_sum,
+           want_to_read_count, currently_reading_count, already_read_count
+      FROM works
+  `);
   let closed = false;
   return {
     get(workKey) {
       if (closed) fail('invalid_work_index', 'Work lookup is closed');
       const row = query.get(workKey);
       return row ? workRecord(row) : null;
+    },
+    forEachWork(visit) {
+      if (closed) fail('invalid_work_index', 'Work lookup is closed');
+      for (const row of scan.iterate()) {
+        // Keep `scan` referenced for the whole scan. node:sqlite finalizes an iterator
+        // when its statement wrapper is collected.
+        if (!scan) fail('invalid_work_index', 'Work scan lost its SQLite statement');
+        visit(row);
+      }
     },
     close() {
       if (!closed) {

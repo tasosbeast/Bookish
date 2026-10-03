@@ -1,7 +1,7 @@
 import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { createInterface } from 'node:readline';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { CatalogContractError } from './contracts.js';
 import { stableJson } from './external-sort.js';
 import { createOpenLibraryWorkLookup } from './open-library-works.js';
@@ -11,23 +11,30 @@ export const CATALOG_DISCOVER_VERSION = 1;
 
 // Popularity score for one Open Library work. English is not an input.
 //
-//   readers  = want-to-read + currently-reading + already-read
+//   weightedReaders = alreadyReadWeight * alreadyRead
+//                   + currentlyReadingWeight * currentlyReading
+//                   + wantToReadWeight * wantToRead
 //   bayesian = (ratingsSum + priorRatings * priorMean) / (ratingsCount + priorRatings)
-//   score    = ratingWeight * bayesian + readerWeight * ln(1 + readers)
+//   score    = ((bayesian - 1) / 4) * ln(1 + weightedReaders + ratingsCount)
 //
-// The prior pulls sparse averages toward priorMean so a single 5-star rating
-// cannot outrank a well-rated, widely shelved work. ln(1 + readers) grows
-// slowly, so shelf count still matters without drowning the rating.
+// The prior is 20 ratings at 3.5. Already-read counts more than a current
+// read, and a current read counts more than want-to-read. The 0–1 rating
+// term is multiplied by the log of ratings plus weighted shelves, so a huge
+// want-to-read pile does not outrank a well-rated work. A work with no
+// ratings and no shelf counts scores 0.
 // Equal scores break ties by work key ascending.
 //
-// minRatings and minReaders are selection floors. They are not part of the score.
+// minRatings defaults to 0. minReaders defaults to 10 and counts the raw
+// total across all three shelves. There is no minimum Bayesian score.
+export const CATALOG_DISCOVER_MAX_LIMIT = 10_000;
 export const CATALOG_DISCOVER_SCORING = Object.freeze({
   priorRatings: 20,
   priorMean: 3.5,
-  ratingWeight: 1,
-  readerWeight: 1,
+  alreadyReadWeight: 1,
+  currentlyReadingWeight: 0.75,
+  wantToReadWeight: 0.25,
   minRatings: 0,
-  minReaders: 0,
+  minReaders: 10,
 });
 
 // A work is counted under the first matching reason and is not selected.
@@ -36,11 +43,11 @@ export const CATALOG_DISCOVER_FILTER_REASONS = Object.freeze([
   'missing_title',
   'missing_cover',
   'excluded',
+  'no_signal',
   'below_min_ratings',
   'below_min_readers',
 ]);
 
-const WORK_INDEX_FILE = 'works.sqlite';
 const WORK_KEY_PATTERN = /^\/works\/OL[0-9]+W$/;
 const READING_LOG_FIELDS = [
   ['want_to_read_count', 'Want to Read'],
@@ -57,6 +64,12 @@ function fail(code, message) {
 function positiveInteger(value, name) {
   if (!Number.isSafeInteger(value) || value < 1) fail('invalid_argument', `${name} must be a positive integer`);
   return value;
+}
+
+function discoverLimit(value) {
+  const limit = positiveInteger(value, 'limit');
+  if (limit > CATALOG_DISCOVER_MAX_LIMIT) fail('invalid_argument', `limit must be at most ${CATALOG_DISCOVER_MAX_LIMIT}`);
+  return limit;
 }
 
 function nonNegativeInteger(value, name) {
@@ -102,24 +115,42 @@ function emptyReasonCounts() {
     missing_title: 0,
     missing_cover: 0,
     excluded: 0,
+    no_signal: 0,
     below_min_ratings: 0,
     below_min_readers: 0,
   };
 }
 
-export function popularityScore({ ratingsCount, ratingsSum, readers }, scoring = CATALOG_DISCOVER_SCORING) {
+function shelfCount(readingLog, shelf) {
+  if (!readingLog || typeof readingLog !== 'object') fail('invalid_work_index', 'readingLog is malformed');
+  return sqlInteger(readingLog[shelf], shelf);
+}
+
+export function popularityScore({ ratingsCount, ratingsSum, readingLog }, scoring = CATALOG_DISCOVER_SCORING) {
   const ratings = sqlInteger(ratingsCount, 'ratingsCount');
   const sum = sqlInteger(ratingsSum, 'ratingsSum');
-  const shelfCount = sqlInteger(readers, 'readers');
   if (sum < ratings || sum > ratings * 5) fail('invalid_work_index', 'ratingsSum is invalid');
-  const priorRatings = scoring.priorRatings;
-  const priorMean = scoring.priorMean;
-  if (!Number.isSafeInteger(priorRatings) || priorRatings < 1) fail('invalid_argument', 'priorRatings must be a positive integer');
-  if (typeof priorMean !== 'number' || !Number.isFinite(priorMean)) fail('invalid_argument', 'priorMean must be a finite number');
-  if (typeof scoring.ratingWeight !== 'number' || !Number.isFinite(scoring.ratingWeight)) fail('invalid_argument', 'ratingWeight must be a finite number');
-  if (typeof scoring.readerWeight !== 'number' || !Number.isFinite(scoring.readerWeight)) fail('invalid_argument', 'readerWeight must be a finite number');
-  const bayesian = (sum + priorRatings * priorMean) / (ratings + priorRatings);
-  const score = scoring.ratingWeight * bayesian + scoring.readerWeight * Math.log(1 + shelfCount);
+  const wantToRead = shelfCount(readingLog, 'Want to Read');
+  const currentlyReading = shelfCount(readingLog, 'Currently Reading');
+  const alreadyRead = shelfCount(readingLog, 'Already Read');
+  const rawReaders = wantToRead + currentlyReading + alreadyRead;
+  if (!Number.isSafeInteger(rawReaders)) fail('invalid_work_index', 'Work reading-log aggregate is malformed');
+  if (ratings === 0 && rawReaders === 0) return 0;
+  for (const [field, value] of [
+    ['priorRatings', scoring.priorRatings],
+    ['alreadyReadWeight', scoring.alreadyReadWeight],
+    ['currentlyReadingWeight', scoring.currentlyReadingWeight],
+    ['wantToReadWeight', scoring.wantToReadWeight],
+  ]) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) fail('invalid_argument', `${field} must be a finite number`);
+  }
+  if (!Number.isSafeInteger(scoring.priorRatings) || scoring.priorRatings < 1) fail('invalid_argument', 'priorRatings must be a positive integer');
+  if (typeof scoring.priorMean !== 'number' || !Number.isFinite(scoring.priorMean)) fail('invalid_argument', 'priorMean must be a finite number');
+  const weightedReaders = scoring.alreadyReadWeight * alreadyRead
+    + scoring.currentlyReadingWeight * currentlyReading
+    + scoring.wantToReadWeight * wantToRead;
+  const bayesian = (sum + scoring.priorRatings * scoring.priorMean) / (ratings + scoring.priorRatings);
+  const score = ((bayesian - 1) / 4) * Math.log(1 + weightedReaders + ratings);
   if (!Number.isFinite(score)) fail('invalid_work_index', 'Popularity score is not finite');
   return score;
 }
@@ -128,8 +159,9 @@ function scoringConfig(minRatings, minReaders) {
   return {
     priorRatings: CATALOG_DISCOVER_SCORING.priorRatings,
     priorMean: CATALOG_DISCOVER_SCORING.priorMean,
-    ratingWeight: CATALOG_DISCOVER_SCORING.ratingWeight,
-    readerWeight: CATALOG_DISCOVER_SCORING.readerWeight,
+    alreadyReadWeight: CATALOG_DISCOVER_SCORING.alreadyReadWeight,
+    currentlyReadingWeight: CATALOG_DISCOVER_SCORING.currentlyReadingWeight,
+    wantToReadWeight: CATALOG_DISCOVER_SCORING.wantToReadWeight,
     minRatings,
     minReaders,
   };
@@ -206,8 +238,11 @@ function rejectionReason(row, excluded, minRatings, minReaders) {
   if (!coverIds.length) return 'missing_cover';
   if (excluded.has(row.key)) return 'excluded';
   const ratingsCount = sqlInteger(row.ratings_count, 'ratings_count');
+  const readers = readerTotal(row);
+  if (!Number.isSafeInteger(ratingsCount + readers)) fail('invalid_work_index', 'Work popularity signals are malformed');
+  if (ratingsCount + readers === 0) return 'no_signal';
   if (ratingsCount < minRatings) return 'below_min_ratings';
-  if (readerTotal(row) < minReaders) return 'below_min_readers';
+  if (readers < minReaders) return 'below_min_readers';
   return null;
 }
 
@@ -215,41 +250,32 @@ function candidateFromRow(row) {
   const ratingsCount = sqlInteger(row.ratings_count, 'ratings_count');
   const ratingsSum = sqlInteger(row.ratings_sum, 'ratings_sum');
   const readingLog = readingLogSignals(row);
-  const readers = readingLog['Want to Read'] + readingLog['Currently Reading'] + readingLog['Already Read'];
   return {
     workKey: row.key,
     title: row.title,
     authorKeys: parseJsonArray(row.author_keys, 'author_keys', item => typeof item === 'string' && item.length > 0),
     coverIds: parseJsonArray(row.cover_ids, 'cover_ids', item => Number.isSafeInteger(item) && item > 0),
-    score: popularityScore({ ratingsCount, ratingsSum, readers }),
+    score: popularityScore({ ratingsCount, ratingsSum, readingLog }),
     signals: { ratingsCount, ratingsSum, readingLog },
   };
 }
 
-function selectCandidates(database, { limit, excluded, minRatings, minReaders }) {
+function selectCandidates(lookup, { limit, excluded, minRatings, minReaders }) {
   const filteredByReason = emptyReasonCounts();
   let considered = 0;
   let eligible = 0;
   const heap = [];
-  const rows = database.prepare(`
-    SELECT key, title, author_keys, cover_ids, ratings_count, ratings_sum,
-           want_to_read_count, currently_reading_count, already_read_count
-      FROM works
-  `);
-  for (const row of rows.iterate()) {
-    // Keep `rows` referenced for the whole scan. node:sqlite finalizes an iterator
-    // when its statement wrapper is collected.
-    if (!rows) fail('invalid_work_index', 'Work scan lost its SQLite statement');
+  lookup.forEachWork(row => {
     considered += 1;
     if (!Number.isSafeInteger(considered)) fail('invalid_discover_artifact', 'Considered count exceeded a safe integer');
     const reason = rejectionReason(row, excluded, minRatings, minReaders);
     if (reason) {
       filteredByReason[reason] += 1;
-      continue;
+      return;
     }
     eligible += 1;
     considerCandidate(heap, candidateFromRow(row), limit);
-  }
+  });
   const candidates = heap.slice().sort(byRank);
   return { considered, eligible, filteredByReason, candidates };
 }
@@ -282,34 +308,11 @@ async function readExcludeKeys(path) {
   return excluded;
 }
 
-async function openWorksDatabase(indexPath) {
-  let DatabaseSync;
-  try {
-    ({ DatabaseSync } = await import('node:sqlite'));
-  } catch (cause) {
-    throw new CatalogContractError('sqlite_unavailable', `Catalog discovery requires node:sqlite; run this catalog command with --experimental-sqlite (${cause.message})`);
-  }
-  try {
-    return new DatabaseSync(join(indexPath, WORK_INDEX_FILE), { readOnly: true });
-  } catch (cause) {
-    throw new CatalogContractError('invalid_work_index', `Unable to read work index: ${cause.message}`);
-  }
-}
-
 function exactKeys(value, keys, label) {
   const actual = Object.keys(value);
   if (actual.length !== keys.length || keys.some(key => !Object.hasOwn(value, key))) {
     fail('invalid_discover_artifact', `${label} is malformed`);
   }
-}
-
-function signalReaders(readingLog) {
-  let readers = 0;
-  for (const shelf of ['Want to Read', 'Currently Reading', 'Already Read']) {
-    readers += nonNegativeInteger(readingLog[shelf], shelf);
-  }
-  if (!Number.isSafeInteger(readers)) fail('invalid_discover_artifact', 'Candidate reading-log counts are malformed');
-  return readers;
 }
 
 export function validateDiscoverArtifact(value, { snapshotId, limit } = {}) {
@@ -326,8 +329,8 @@ export function validateDiscoverArtifact(value, { snapshotId, limit } = {}) {
   }
   if (value.languageCheck !== 'pending') fail('invalid_discover_artifact', 'Discover artifact languageCheck must stay pending');
   if (!plainObject(value.scoring)) fail('invalid_discover_artifact', 'Discover artifact scoring config is malformed');
-  exactKeys(value.scoring, ['priorRatings', 'priorMean', 'ratingWeight', 'readerWeight', 'minRatings', 'minReaders'], 'Discover scoring');
-  for (const field of ['priorRatings', 'priorMean', 'ratingWeight', 'readerWeight']) {
+  exactKeys(value.scoring, ['priorRatings', 'priorMean', 'alreadyReadWeight', 'currentlyReadingWeight', 'wantToReadWeight', 'minRatings', 'minReaders'], 'Discover scoring');
+  for (const field of ['priorRatings', 'priorMean', 'alreadyReadWeight', 'currentlyReadingWeight', 'wantToReadWeight']) {
     if (value.scoring[field] !== CATALOG_DISCOVER_SCORING[field]) fail('invalid_discover_artifact', `Discover scoring ${field} does not match the catalog config`);
   }
   nonNegativeInteger(value.scoring.minRatings, 'minRatings');
@@ -372,11 +375,10 @@ export function validateDiscoverArtifact(value, { snapshotId, limit } = {}) {
     exactKeys(candidate.signals, ['ratingsCount', 'ratingsSum', 'readingLog'], 'Discover candidate signals');
     if (!plainObject(candidate.signals.readingLog)) fail('invalid_discover_artifact', 'Discover candidate reading log is malformed');
     exactKeys(candidate.signals.readingLog, ['Want to Read', 'Currently Reading', 'Already Read'], 'Discover candidate reading log');
-    const readers = signalReaders(candidate.signals.readingLog);
     const expected = popularityScore({
       ratingsCount: candidate.signals.ratingsCount,
       ratingsSum: candidate.signals.ratingsSum,
-      readers,
+      readingLog: candidate.signals.readingLog,
     });
     if (candidate.score !== expected) fail('invalid_discover_artifact', 'Discover candidate score does not match its signals');
     if (index > 0 && byRank(value.candidates[index - 1], candidate) > 0) {
@@ -432,7 +434,7 @@ export async function discoverCatalogCandidates({
   const settings = {
     worksIndexPath: requiredPath(worksIndexPath, 'worksIndexPath'),
     snapshotId: requiredSnapshotId(snapshotId),
-    limit: positiveInteger(limit, 'limit'),
+    limit: discoverLimit(limit),
     outputPath: requiredPath(outputPath, 'outputPath'),
     minRatings: nonNegativeInteger(minRatings, 'minRatings'),
     minReaders: nonNegativeInteger(minReaders, 'minReaders'),
@@ -440,10 +442,8 @@ export async function discoverCatalogCandidates({
   };
   const excluded = excludeKeysPath ? await readExcludeKeys(requiredPath(excludeKeysPath, 'excludeKeysPath')) : new Set();
   const lookup = await createOpenLibraryWorkLookup({ indexPath: settings.worksIndexPath, snapshotId: settings.snapshotId });
-  let database = null;
   try {
-    database = await openWorksDatabase(settings.worksIndexPath);
-    const selection = selectCandidates(database, { ...settings, excluded });
+    const selection = selectCandidates(lookup, { ...settings, excluded });
     assertMatchesLookup(lookup, selection.candidates);
     const artifact = {
       format: CATALOG_DISCOVER_FORMAT,
@@ -464,9 +464,6 @@ export async function discoverCatalogCandidates({
     await writeArtifactAtomically(settings.outputPath, artifact, settings);
     return { ...artifact, outputPath: settings.outputPath };
   } finally {
-    if (database) {
-      try { database.close(); } catch { /* close is best-effort */ }
-    }
     lookup.close();
   }
 }
