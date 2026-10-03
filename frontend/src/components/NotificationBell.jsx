@@ -11,6 +11,7 @@ export function NotificationBell({ userId }) {
   const navigate = useNavigate();
 
   const userIdRef = useRef(userId);
+  // eslint-disable-next-line react-hooks/refs -- a fetch already in flight must see the latest id
   userIdRef.current = userId;
 
   const fetchSeqRef = useRef(0);

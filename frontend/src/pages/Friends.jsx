@@ -112,15 +112,16 @@ function ReaderSearch({ onRelationshipChange }) {
 
 function SuggestionsTab({ onSentRequest, relationshipRevision }) {
   const suggestions = useResource('/friends/suggestions?limit=12', 'required');
+  const { reload } = suggestions;
   const hasMounted = useRef(false);
   const [busyIds, setBusyIds] = useState(() => new Set());
   const [sentIds, setSentIds] = useState(() => new Set());
   const [errorMap, setErrorMap] = useState({});
 
   useEffect(() => {
-    if (hasMounted.current) suggestions.reload();
+    if (hasMounted.current) reload();
     else hasMounted.current = true;
-  }, [relationshipRevision, suggestions.reload]);
+  }, [relationshipRevision, reload]);
 
   if (suggestions.loading && !suggestions.data) return <Loading />;
   if (suggestions.error) return <ErrorNotice error={suggestions.error} retry={suggestions.reload} />;
@@ -220,14 +221,15 @@ function SuggestionsTab({ onSentRequest, relationshipRevision }) {
 
 function FriendsTab({ onExploreSuggestions, relationshipRevision }) {
   const friends = useResource('/friends', 'required');
+  const { reload } = friends;
   const hasMounted = useRef(false);
   const [busyIds, setBusyIds] = useState(() => new Set());
   const [errorMap, setErrorMap] = useState({});
 
   useEffect(() => {
-    if (hasMounted.current) friends.reload();
+    if (hasMounted.current) reload();
     else hasMounted.current = true;
-  }, [relationshipRevision, friends.reload]);
+  }, [relationshipRevision, reload]);
 
   if (friends.loading && !friends.data) return <Loading />;
   if (friends.error) return <ErrorNotice error={friends.error} retry={friends.reload} />;
@@ -308,14 +310,15 @@ function FriendsTab({ onExploreSuggestions, relationshipRevision }) {
 
 function RequestsTab({ relationshipRevision, onRequestsChanged }) {
   const requests = useResource('/friends/requests', 'required');
+  const { reload } = requests;
   const hasMounted = useRef(false);
   const [busyIds, setBusyIds] = useState(() => new Set());
   const [errorMap, setErrorMap] = useState({});
 
   useEffect(() => {
-    if (hasMounted.current) requests.reload();
+    if (hasMounted.current) reload();
     else hasMounted.current = true;
-  }, [relationshipRevision, requests.reload]);
+  }, [relationshipRevision, reload]);
 
   if (requests.loading && !requests.data) return <Loading />;
   if (requests.error) return <ErrorNotice error={requests.error} retry={requests.reload} />;

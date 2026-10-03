@@ -31,7 +31,7 @@
     "release:readiness": "node scripts/release-data-readiness.js",
     "release:prh-sync": "node scripts/sync-prh-releases.js",
     "test": "node --experimental-sqlite --import ./tests/setup.js --test --test-concurrency=1 tests/*.test.js",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings=0",
     "test:integration": "node --test --test-concurrency=1 tests/integration/*.test.js",
     "build:frontend-only": "node scripts/frontend-only-build.js",
     "db:generate": "prisma generate",
