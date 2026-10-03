@@ -293,6 +293,89 @@ test('aborting one refresh waiter leaves the shared refresh running', async () =
   assert.notEqual(renewed, token);
 });
 
+test('aborting the refresh that started the shared request leaves the joiner with one refresh', async () => {
+  let release;
+  let refreshes = 0;
+  const env = environment();
+  const session = env.make({
+    fetcher: async (url, options) => {
+      if (url.endsWith('/refresh')) {
+        refreshes += 1;
+        await new Promise((resolve, reject) => {
+          release = resolve;
+          const abort = () => reject(new DOMException('The operation was aborted.', 'AbortError'));
+          if (options?.signal?.aborted) abort();
+          else options?.signal?.addEventListener('abort', abort, { once: true });
+        });
+        return json({ accessToken: jwt(Date.now() / 1000 + 900), expiresIn: 900 });
+      }
+      if (url.endsWith('/me')) return json({ user: { id: 'reader', username: 'reader' } });
+      return json({ accessToken: jwt(Date.now() / 1000 + 900), expiresIn: 900, user: { id: 'reader', username: 'reader' } });
+    },
+  });
+  await session.authenticate('login', { email: 'reader@example.com', password: 'fixture' });
+  const token = (await session.credentials()).token;
+  const controller = new AbortController();
+  const origin = session.refresh(token, controller.signal);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  const joined = session.refresh(token);
+  controller.abort();
+  await assert.rejects(origin, { name: 'AbortError' });
+  assert.equal(session.getSnapshot().status, 'authenticated');
+  release();
+  const renewed = await joined;
+  assert.equal(refreshes, 1);
+  assert.equal(session.getSnapshot().status, 'authenticated');
+  assert.ok(renewed);
+  assert.notEqual(renewed, token);
+});
+
+test('logout lets an in-flight refresh finish so cleanup can use the new token', async () => {
+  let nowMs = 10_000;
+  let hang = false;
+  let release;
+  let refreshes = 0;
+  let sawToken = false;
+  const env = environment();
+  const session = env.make({
+    now: () => nowMs,
+    fetcher: async (url, options) => {
+      if (url.endsWith('/refresh')) {
+        refreshes += 1;
+        if (hang) {
+          await new Promise((resolve, reject) => {
+            release = resolve;
+            const abort = () => reject(new DOMException('The operation was aborted.', 'AbortError'));
+            if (options?.signal?.aborted) abort();
+            else options?.signal?.addEventListener('abort', abort, { once: true });
+          });
+        }
+        return json({ accessToken: jwt(nowMs / 1000 + 900), expiresIn: 900 });
+      }
+      if (url.endsWith('/me')) return json({ user: { id: 'reader', username: 'reader' } });
+      if (url.endsWith('/logout')) return new Response(null, { status: 204 });
+      return json({ accessToken: jwt(nowMs / 1000 + 10), expiresIn: 10, user: { id: 'reader', username: 'reader' } });
+    },
+    beforeLogout: async () => {
+      const pending = session.credentials();
+      await new Promise(resolve => setTimeout(resolve, 15));
+      release();
+      sawToken = Boolean((await pending).token);
+    },
+  });
+  await session.authenticate('login', { email: 'reader@example.com', password: 'fixture' });
+  const token = (await session.credentials()).token;
+  hang = true;
+  nowMs += 20_000;
+  const hung = session.refresh(token);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  await session.logout();
+  await hung.catch(() => {});
+  assert.equal(sawToken, true);
+  assert.equal(refreshes, 1);
+  assert.equal(session.getSnapshot().status, 'guest');
+});
+
 test('logout returns while another request still holds the auth lock', { timeout: 2000 }, async () => {
   let holdLogin = false;
   let unblock;

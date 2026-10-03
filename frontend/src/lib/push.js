@@ -1,4 +1,5 @@
 // The API client is injected from api.js so this module does not import it back.
+const UNSUBSCRIBE_WAIT_MS = 5000;
 let pushApi = null;
 let warnedUnconfigured = false;
 let pendingUnsubscribe = Promise.resolve();
@@ -21,6 +22,20 @@ function trackUnsubscribe(promise) {
   const settled = Promise.resolve(promise).then(() => {}, () => {});
   pendingUnsubscribe = pendingUnsubscribe.then(() => settled, () => settled);
   return promise;
+}
+
+async function waitForPendingUnsubscribe() {
+  let timer;
+  let timedOut = false;
+  const timeout = new Promise(resolve => {
+    timer = setTimeout(() => { timedOut = true; resolve(); }, UNSUBSCRIBE_WAIT_MS);
+  });
+  try {
+    await Promise.race([pendingUnsubscribe, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (timedOut) console.warn('[push] Waited too long for an in-flight unsubscribe; continuing.');
 }
 
 export function isPushSupported() {
@@ -73,7 +88,8 @@ export async function subscribeToPush() {
     throw new Error('Browser notifications are not supported on this device.');
   }
   // A logout unsubscribe that outlived its deadline must finish before a new subscription is created.
-  await pendingUnsubscribe;
+  // Cap the wait so a hung PushManager cannot block the Account toggle forever.
+  await waitForPendingUnsubscribe();
   const client = requirePushApi();
   if (!client) {
     throw new Error('Push notifications are currently unavailable.');

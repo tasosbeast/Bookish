@@ -407,6 +407,33 @@ test('logout removes the push subscription without blocking sign-out', { timeout
   await subscribing;
   assert.equal(permissionRequests, 1);
   assert.ok(since(raceStart).some(call => call.path === '/api/push/subscriptions' && call.method === 'POST'));
+
+  // A hung unsubscribe cannot block a new subscription for more than about five seconds.
+  mockSubscription = subscription();
+  let releaseSlowUnsub;
+  mockSubscription.unsubscribe = () => new Promise(resolve => {
+    releaseSlowUnsub = () => {
+      unsubscribeCalled += 1;
+      mockSubscription = null;
+      resolve(true);
+    };
+  });
+  permissionRequests = 0;
+  const slowUnsub = unsubscribeFromPush();
+  for (let attempt = 0; attempt < 50 && !releaseSlowUnsub; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.equal(typeof releaseSlowUnsub, 'function');
+  const waitedFrom = Date.now();
+  const limitedSubscribe = subscribeToPush();
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(permissionRequests, 0, 'subscribe still waits inside the five-second limit');
+  await limitedSubscribe;
+  const waitedMs = Date.now() - waitedFrom;
+  assert.ok(waitedMs >= 4500 && waitedMs < 8000, `subscribe waited ${waitedMs}ms`);
+  assert.equal(permissionRequests, 1);
+  releaseSlowUnsub();
+  await slowUnsub;
   allowRegister = false;
 
   // An unconfigured push client reads as off and says so, without throwing from a status check.

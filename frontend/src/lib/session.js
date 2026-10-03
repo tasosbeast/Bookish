@@ -57,17 +57,12 @@ export function createSession({ baseUrl, fetcher = fetch, locks, storage, channe
     }
   }
   function refresh(rejectedToken, signal) {
-    const bind = controller => {
-      if (!signal || !controller) return;
-      if (signal.aborted) controller.abort();
-      else signal.addEventListener('abort', () => controller.abort(), { once: true });
-    };
-    // A joined caller stops waiting when its own signal aborts. That must not cancel
-    // the shared refresh for anyone else; logout aborts the controller explicitly.
+    // A caller's abort signal only stops that caller waiting. Aborting the shared
+    // request can drop a rotated refresh cookie; the next refresh then looks like reuse.
+    // Logout aborts refreshController itself once push cleanup has had its turn.
     if (refreshPending) return observeAbort(refreshPending, signal);
     const controller = new AbortController();
     refreshController = controller;
-    bind(controller);
     const localSignal = controller.signal;
     refreshPending = exclusive(async () => {
       sync();
@@ -96,7 +91,7 @@ export function createSession({ baseUrl, fetcher = fetch, locks, storage, channe
       refreshPending = null;
       if (refreshController === controller) refreshController = null;
     });
-    return refreshPending;
+    return observeAbort(refreshPending, signal);
   }
   async function initialize(signal) {
     if (initialized) return refreshPending;
@@ -140,8 +135,6 @@ export function createSession({ baseUrl, fetcher = fetch, locks, storage, channe
     // Bound push cleanup so a cold API or a hung PushManager cannot leave the reader signed in.
     explicitLogout = true;
     try {
-      // A refresh already inside the auth lock cannot observe a signal attached after it started.
-      refreshController?.abort();
       if (typeof beforeLogout === 'function') {
         const controller = new AbortController();
         let timer;

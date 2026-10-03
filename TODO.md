@@ -22,11 +22,11 @@ Explicit sign-out (`session.logout()`, including the header control in `Layout.j
 - Logout with no subscription (including unsupported push and denied permission) still signs out.
 - Logout still signs out when server delete and browser unsubscribe fail.
 - Logout still reaches guest and calls `/auth/logout` when cleanup never resolves.
-- An expired access token is refreshed before the server delete.
+- An expired access token is refreshed before the server delete. An in-flight refresh is not aborted before that cleanup.
 - `getRegistration()` rejecting still signs out.
 - A refresh that already holds the auth lock still yields guest status immediately. Logout also returns if another request keeps the lock, and the server revocation still runs when the lock is free.
-- Aborting one refresh waiter does not cancel the shared refresh. Network and 5xx refresh errors do not drop the browser subscription. Another tab's sign-out drops it once. `SESSION_CHANGED` during the delete still signs out.
-- A new subscription waits for an in-flight unsubscribe. An unconfigured push client reads as off and warns once.
+- Aborting the request that started a shared refresh does not cancel it: a joiner with no signal still receives the new token, and only one `/auth/refresh` is sent. A 5xx refresh while authenticated does not drop the browser subscription. Another tab's sign-out drops it once. `SESSION_CHANGED` during the delete still signs out.
+- A new subscription waits up to about five seconds for an in-flight unsubscribe. An unconfigured push client reads as off and warns once.
 - Existing Account push toggle coverage stays in place.
 
 ## Out of Scope
