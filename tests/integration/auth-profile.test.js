@@ -74,3 +74,45 @@ test('PATCH /api/auth/me profile editing flow', { skip: !process.env.TEST_DATABA
   assert.equal(finalMe.body.user.profilePicture, null);
   assert.equal(finalMe.body.user.passwordHash, undefined);
 });
+
+test('PATCH /api/auth/me bio-only update keeps a legacy profile picture', { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async t => {
+  const tag = randomUUID().replaceAll('-', '').slice(0, 12);
+  let userId;
+  t.after(async () => {
+    if (userId) await prisma.user.delete({ where: { id: userId } });
+    await prisma.$disconnect();
+  });
+
+  const signupBody = { username: `legacy_${tag}`, email: `legacy_${tag}@example.com`, password: 'correct horse battery staple' };
+  const authRes = await request(app)
+    .post('/api/auth/signup')
+    .set('X-Bookish-CSRF', '1')
+    .send(signupBody)
+    .expect(201);
+
+  userId = authRes.body.user.id;
+  const token = authRes.body.accessToken;
+  const legacy = 'https://images.example/legacy-avatar.jpg';
+  await prisma.user.update({ where: { id: userId }, data: { profilePicture: legacy } });
+
+  const patch = body => request(app).patch('/api/auth/me').auth(token, { type: 'bearer' }).send(body);
+  const me = () => request(app).get('/api/auth/me').auth(token, { type: 'bearer' });
+
+  const bioRes = await patch({ bio: 'Only the bio' }).expect(200);
+  assert.equal(bioRes.body.user.bio, 'Only the bio');
+  assert.equal(bioRes.body.user.profilePicture, legacy);
+
+  await patch({ profilePicture: legacy }).expect(400);
+  const rejected = await me().expect(200);
+  assert.equal(rejected.body.user.profilePicture, legacy);
+  assert.equal(rejected.body.user.bio, 'Only the bio');
+
+  const replaced = await patch({ profilePicture: 'https://lh3.googleusercontent.com/a/replaced' }).expect(200);
+  assert.equal(replaced.body.user.profilePicture, 'https://lh3.googleusercontent.com/a/replaced');
+  assert.equal(replaced.body.user.bio, 'Only the bio');
+
+  await prisma.user.update({ where: { id: userId }, data: { profilePicture: legacy } });
+  const cleared = await patch({ profilePicture: '' }).expect(200);
+  assert.equal(cleared.body.user.profilePicture, null);
+  assert.equal(cleared.body.user.bio, 'Only the bio');
+});
