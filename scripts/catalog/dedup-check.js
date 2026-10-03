@@ -1,25 +1,60 @@
 import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { createInterface } from 'node:readline';
-import { dirname, resolve } from 'node:path';
-import { validateDiscoverArtifact } from '../../scripts/catalog/discover.js';
-import { normalizeAuthorName, normalizeIsbn10ToIsbn13, normalizeIsbn13, normalizeTitle } from '../../scripts/catalog/normalize.js';
-import { workIdentity } from '../../scripts/catalog/work-identity.js';
+import { resolve } from 'node:path';
+import { PrismaPg } from '@prisma/adapter-pg';
+import generated from '../../src/generated/prisma/index.js';
+import { CatalogContractError } from './contracts.js';
+import { validateDiscoverArtifact } from './discover.js';
+import { normalizeIsbn10ToIsbn13, normalizeIsbn13 } from './normalize.js';
+import { workIdentity } from './work-identity.js';
+import { writeFileAtomic } from './atomic-write.js';
 
 export const OPEN_LIBRARY_WORK_KEY_PATTERN = /^\/works\/OL\d+W$/;
 
-const WRITE_METHODS = new Set([
-  'create',
-  'createMany',
-  'update',
-  'updateMany',
-  'upsert',
-  'delete',
-  'deleteMany',
-]);
-
 export function isValidOpenLibraryWorkKey(value) {
   return typeof value === 'string' && value.length > 0 && OPEN_LIBRARY_WORK_KEY_PATTERN.test(value);
+}
+
+export function readOnlyDatabaseUrl(databaseUrl) {
+  if (!databaseUrl) throw new Error('DATABASE_URL is required');
+  const url = new URL(databaseUrl);
+  const readOnlyFlag = '-c default_transaction_read_only=on';
+  const existing = url.searchParams.get('options');
+  url.searchParams.set('options', existing ? `${existing} ${readOnlyFlag}` : readOnlyFlag);
+  return url.toString();
+}
+
+export function createReadOnlyDbInterface(client) {
+  return {
+    book: {
+      findMany: (...args) => client.book.findMany(...args),
+    },
+    $disconnect: (...args) => client.$disconnect(...args),
+  };
+}
+
+export function createReadOnlyPrismaClient(databaseUrl) {
+  const client = new generated.PrismaClient({
+    adapter: new PrismaPg({ connectionString: readOnlyDatabaseUrl(databaseUrl), max: 10 }),
+  });
+  return {
+    ...createReadOnlyDbInterface(client),
+    _client: client,
+  };
+}
+
+function normalizeStoredIsbn(isbn) {
+  if (!isbn) return null;
+  try {
+    return normalizeIsbn13(isbn);
+  } catch {
+    try {
+      return normalizeIsbn10ToIsbn13(isbn);
+    } catch {
+      return null;
+    }
+  }
 }
 
 export function normalizeCandidateIsbns(candidate) {
@@ -28,17 +63,8 @@ export function normalizeCandidateIsbns(candidate) {
   if (typeof candidate.isbn === 'string') rawValues.push(candidate.isbn);
   const normalized = new Set();
   for (const value of rawValues) {
-    if (typeof value !== 'string' || !value.trim()) continue;
-    try {
-      normalized.add(normalizeIsbn13(value));
-      continue;
-    } catch {
-      try {
-        normalized.add(normalizeIsbn10ToIsbn13(value));
-      } catch {
-        // Invalid identifiers are ignored for matching.
-      }
-    }
+    const stored = normalizeStoredIsbn(value);
+    if (stored) normalized.add(stored);
   }
   return normalized;
 }
@@ -46,7 +72,10 @@ export function normalizeCandidateIsbns(candidate) {
 export function candidateTitleAuthorKey(candidate) {
   if (typeof candidate.primaryAuthor !== 'string' || !candidate.primaryAuthor.trim()) return null;
   if (typeof candidate.title !== 'string' || !candidate.title.trim()) return null;
-  return `${normalizeTitle(candidate.title)}\u0000${normalizeAuthorName(candidate.primaryAuthor)}`;
+  const identity = workIdentity({ title: candidate.title, author: candidate.primaryAuthor });
+  const [titleKey, authorKey] = identity.split('\u0000');
+  if (!titleKey || !authorKey) return null;
+  return identity;
 }
 
 function uniqueSortedIds(ids) {
@@ -135,12 +164,15 @@ export async function buildBookMatchIndexes(db) {
       list.push(book.id);
       byWorkKey.set(book.openLibraryWorkKey, list);
     }
-    if (book.isbn) {
-      const list = byIsbn.get(book.isbn) ?? [];
+    const normalizedIsbn = normalizeStoredIsbn(book.isbn);
+    if (normalizedIsbn) {
+      const list = byIsbn.get(normalizedIsbn) ?? [];
       list.push(book.id);
-      byIsbn.set(book.isbn, list);
+      byIsbn.set(normalizedIsbn, list);
     }
     const identity = workIdentity(book);
+    const [titleKey, authorKey] = identity.split('\u0000');
+    if (!titleKey || !authorKey) continue;
     const list = byTitleAuthor.get(identity) ?? [];
     list.push(book.id);
     byTitleAuthor.set(identity, list);
@@ -170,25 +202,17 @@ export async function loadDiscoverCandidates(inputPath) {
   } catch (cause) {
     throw new Error(`Unable to read discover input ${resolved}: ${cause.message}`);
   }
+  if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
+    throw new CatalogContractError('invalid_discover_artifact', 'Discover input must be an object');
+  }
+  if (!Array.isArray(artifact.candidates)) {
+    throw new CatalogContractError('invalid_discover_artifact', 'Discover artifact candidates must be an array');
+  }
   validateDiscoverArtifact({
     ...artifact,
     candidates: artifact.candidates.map(stripCandidateEnrichment),
   });
   return artifact.candidates;
-}
-
-export async function writeDedupReport(outputPath, results) {
-  const resolved = resolve(outputPath);
-  await fs.mkdir(dirname(resolved), { recursive: true });
-  const temporary = `${resolved}.${process.pid}.${Date.now()}.tmp`;
-  const lines = results.map(result => `${JSON.stringify(result)}\n`).join('');
-  try {
-    await fs.writeFile(temporary, lines, 'utf8');
-    await fs.rename(temporary, resolved);
-  } catch (cause) {
-    await fs.rm(temporary, { force: true });
-    throw cause;
-  }
 }
 
 export async function readDedupReport(inputPath) {
@@ -207,30 +231,29 @@ export async function readDedupReport(inputPath) {
   return results;
 }
 
-export function createReadOnlyDbGuard(db) {
-  const guard = method => {
-    throw new Error(`catalog dedup check is read-only (${method})`);
-  };
-
-  function wrap(target) {
-    if (!target || typeof target !== 'object') return target;
-    return new Proxy(target, {
-      get(source, property, receiver) {
-        if (property === '$transaction') {
-          return async callback => callback(wrap(source));
-        }
-        if (property === '$executeRaw' || property === '$executeRawUnsafe' || property === '$queryRawUnsafe') {
-          return () => guard(property);
-        }
-        if (WRITE_METHODS.has(property)) return () => guard(property);
-        const value = Reflect.get(source, property, receiver);
-        if (value && typeof value === 'object' && property !== '_client') return wrap(value);
-        return typeof value === 'function' ? value.bind(source) : value;
-      },
-    });
+function validateDedupReport(results, expected) {
+  if (results.length !== expected.length) {
+    throw new CatalogContractError('invalid_dedup_report', 'Dedup report line count does not match the result set');
   }
+  for (let index = 0; index < expected.length; index += 1) {
+    const written = results[index];
+    const source = expected[index];
+    for (const field of ['workKey', 'title', 'status', 'matchedBy']) {
+      if (written[field] !== source[field]) {
+        throw new CatalogContractError('invalid_dedup_report', `Dedup report line ${index + 1} does not match the expected ${field}`);
+      }
+    }
+    if (JSON.stringify(written.matchedBookIds) !== JSON.stringify(source.matchedBookIds)) {
+      throw new CatalogContractError('invalid_dedup_report', `Dedup report line ${index + 1} does not match the expected matchedBookIds`);
+    }
+  }
+}
 
-  return wrap(db);
+export async function writeDedupReport(outputPath, results) {
+  const resolved = resolve(outputPath);
+  const lines = results.map(result => `${JSON.stringify(result)}\n`).join('');
+  await writeFileAtomic(resolved, lines);
+  validateDedupReport(await readDedupReport(resolved), results);
 }
 
 export async function runCatalogDedupCheck({ db, inputPath, outputPath }) {

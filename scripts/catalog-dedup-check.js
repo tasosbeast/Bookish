@@ -1,9 +1,9 @@
 import { resolve } from 'node:path';
-import { prisma } from '../src/lib/prisma.js';
+import { env } from '../src/config/env.js';
 import {
-  createReadOnlyDbGuard,
+  createReadOnlyPrismaClient,
   runCatalogDedupCheck,
-} from '../src/services/catalogDedupCheckService.js';
+} from './catalog/dedup-check.js';
 
 function parseArguments(args) {
   const options = {
@@ -27,11 +27,12 @@ function parseArguments(args) {
   return options;
 }
 
+const db = createReadOnlyPrismaClient(env.DATABASE_URL);
+
 try {
   const options = parseArguments(process.argv.slice(2));
-  const guardedDb = createReadOnlyDbGuard(prisma);
   const { summary } = await runCatalogDedupCheck({
-    db: guardedDb,
+    db,
     inputPath: options.input,
     outputPath: options.output,
   });
@@ -40,5 +41,5 @@ try {
   console.error(error.message);
   process.exitCode = 1;
 } finally {
-  await prisma.$disconnect();
+  await db.$disconnect();
 }

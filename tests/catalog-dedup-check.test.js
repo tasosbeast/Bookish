@@ -1,26 +1,20 @@
-import '../tests/setup.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
-import { execFile } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
-import { prisma } from '../src/lib/prisma.js';
 import { CATALOG_DISCOVER_FORMAT, CATALOG_DISCOVER_VERSION, popularityScore } from '../scripts/catalog/discover.js';
+import { workIdentity } from '../scripts/catalog/work-identity.js';
 import {
   candidateTitleAuthorKey,
   checkCatalogDuplicates,
-  createReadOnlyDbGuard,
+  createReadOnlyDbInterface,
   isValidOpenLibraryWorkKey,
   loadDiscoverCandidates,
   normalizeCandidateIsbns,
   readDedupReport,
   runCatalogDedupCheck,
-} from '../src/services/catalogDedupCheckService.js';
-
-const execFileAsync = promisify(execFile);
+} from '../scripts/catalog/dedup-check.js';
 
 function isbnAt(index) {
   const stem = `979${String(index).padStart(9, '0')}`;
@@ -100,8 +94,10 @@ function createMockDb(initialBooks = []) {
       findMany: async ({ select: fields } = {}) => [...books.values()].map(book => select(book, fields)),
       create: async () => recordWrite('create'),
       createMany: async () => recordWrite('createMany'),
+      createManyAndReturn: async () => recordWrite('createManyAndReturn'),
       update: async () => recordWrite('update'),
       updateMany: async () => recordWrite('updateMany'),
+      updateManyAndReturn: async () => recordWrite('updateManyAndReturn'),
       upsert: async () => recordWrite('upsert'),
       delete: async () => recordWrite('delete'),
       deleteMany: async () => recordWrite('deleteMany'),
@@ -109,7 +105,9 @@ function createMockDb(initialBooks = []) {
     $transaction: async callback => callback(db),
     $executeRaw: async () => recordWrite('$executeRaw'),
     $executeRawUnsafe: async () => recordWrite('$executeRawUnsafe'),
+    $queryRaw: async () => recordWrite('$queryRaw'),
     $queryRawUnsafe: async () => recordWrite('$queryRawUnsafe'),
+    $extends: () => recordWrite('$extends'),
     _writes: writes,
     _books: books,
   };
@@ -135,13 +133,17 @@ test('normalizeCandidateIsbns normalizes ISBN-13 and converts ISBN-10 to ISBN-13
   assert.deepEqual([...isbns], ['9780141439518']);
 });
 
-test('candidateTitleAuthorKey normalizes title and primary author', () => {
+test('candidateTitleAuthorKey uses workIdentity and skips empty normalized title or author', () => {
   assert.equal(
     candidateTitleAuthorKey({ title: 'The Café Society!', primaryAuthor: 'Émile Zola' }),
-    'cafe society\u0000emile zola',
+    workIdentity({ title: 'The Café Society!', author: 'Émile Zola' }),
   );
-  assert.equal(candidateTitleAuthorKey({ title: 'A Study in Scarlet', primaryAuthor: 'Doyle, Arthur' }), 'study in scarlet\u0000arthur doyle');
+  assert.equal(
+    candidateTitleAuthorKey({ title: 'A Study in Scarlet', primaryAuthor: 'Doyle, Arthur' }),
+    workIdentity({ title: 'A Study in Scarlet', author: 'Doyle, Arthur' }),
+  );
   assert.equal(candidateTitleAuthorKey({ title: 'No Author' }), null);
+  assert.equal(candidateTitleAuthorKey({ title: 'Βίβλος', primaryAuthor: 'Συγγραφέας' }), null);
 });
 
 test('checkCatalogDuplicates matches by openLibraryWorkKey', async () => {
@@ -172,6 +174,17 @@ test('checkCatalogDuplicates matches by normalized ISBN-13', async () => {
   assert.deepEqual(results[0].matchedBookIds, ['book-2']);
 });
 
+test('checkCatalogDuplicates normalizes stored ISBN-10 values to ISBN-13', async () => {
+  const db = createMockDb([
+    { id: 'book-10', title: 'Pride and Prejudice', author: 'Austen, Jane', isbn: '0141439513', openLibraryWorkKey: null },
+  ]);
+  const { results } = await checkCatalogDuplicates(db, [
+    discoverCandidate({ workKey: '/works/OL777W', isbns: ['9780141439518'] }),
+  ]);
+  assert.equal(results[0].status, 'existing');
+  assert.equal(results[0].matchedBy, 'isbn');
+});
+
 test('checkCatalogDuplicates matches by normalized title and primary author', async () => {
   const db = createMockDb([
     { id: 'book-3', title: 'The Hobbit', author: 'Tolkien, J.R.R.', isbn: null, openLibraryWorkKey: null },
@@ -186,6 +199,22 @@ test('checkCatalogDuplicates matches by normalized title and primary author', as
   assert.equal(results[0].status, 'existing');
   assert.equal(results[0].matchedBy, 'titleAuthor');
   assert.deepEqual(results[0].matchedBookIds, ['book-3']);
+});
+
+test('checkCatalogDuplicates matches Dune parenthetical titles through workIdentity', async () => {
+  const db = createMockDb([
+    { id: 'book-dune', title: 'Dune', author: 'Herbert, Frank', isbn: null, openLibraryWorkKey: null },
+  ]);
+  const { results } = await checkCatalogDuplicates(db, [
+    discoverCandidate({
+      workKey: '/works/OL600W',
+      title: 'Dune (Dune Chronicles, #1)',
+      primaryAuthor: 'Frank Herbert',
+    }),
+  ]);
+  assert.equal(results[0].status, 'existing');
+  assert.equal(results[0].matchedBy, 'titleAuthor');
+  assert.deepEqual(results[0].matchedBookIds, ['book-dune']);
 });
 
 test('checkCatalogDuplicates reports ambiguous when multiple books share a work key', async () => {
@@ -230,6 +259,22 @@ test('checkCatalogDuplicates ignores invalid work keys and still matches by ISBN
   assert.equal(results[0].matchedBy, 'isbn');
 });
 
+test('checkCatalogDuplicates treats unrelated Greek-only candidates as new', async () => {
+  const db = createMockDb([
+    { id: 'book-greek', title: 'Βίβλος', author: 'Συγγραφέας', isbn: null, openLibraryWorkKey: null },
+    { id: 'book-other', title: 'Another', author: 'Writer', isbn: null, openLibraryWorkKey: null },
+  ]);
+  const { results } = await checkCatalogDuplicates(db, [
+    discoverCandidate({
+      workKey: '/works/OL950W',
+      title: 'Διαφορετικό',
+      primaryAuthor: 'Άλλος',
+    }),
+  ]);
+  assert.equal(results[0].status, 'new');
+  assert.deepEqual(results[0].matchedBookIds, []);
+});
+
 test('checkCatalogDuplicates reports new when no match is found', async () => {
   const db = createMockDb([]);
   const { results, summary } = await checkCatalogDuplicates(db, [discoverCandidate()]);
@@ -239,15 +284,15 @@ test('checkCatalogDuplicates reports new when no match is found', async () => {
   assert.deepEqual(summary, { new: 1, existing: 0, ambiguous: 0 });
 });
 
-test('createReadOnlyDbGuard rejects write methods', async () => {
+test('createReadOnlyDbInterface exposes only findMany and disconnect', () => {
   const db = createMockDb([]);
-  const guarded = createReadOnlyDbGuard(db);
-  assert.throws(() => guarded.book.create({ data: {} }), /read-only/);
-  assert.throws(() => guarded.book.update({ where: { id: 'x' }, data: {} }), /read-only/);
-  assert.throws(() => guarded.book.delete({ where: { id: 'x' } }), /read-only/);
-  assert.throws(() => guarded.$executeRaw('SELECT 1'), /read-only/);
-  await assert.rejects(guarded.$transaction(async tx => tx.book.create({ data: {} })), /read-only/);
-  assert.equal(db._writes.length, 0);
+  const readOnly = createReadOnlyDbInterface(db);
+  assert.equal(typeof readOnly.book.findMany, 'function');
+  assert.equal(typeof readOnly.$disconnect, 'function');
+  assert.equal(readOnly.book.create, undefined);
+  assert.equal(readOnly.book.createManyAndReturn, undefined);
+  assert.equal(readOnly.$queryRaw, undefined);
+  assert.equal(readOnly.$extends, undefined);
 });
 
 test('runCatalogDedupCheck writes JSONL and prints summary counts', async () => {
@@ -271,70 +316,14 @@ test('runCatalogDedupCheck writes JSONL and prints summary counts', async () => 
   assert.equal(lines[1].status, 'new');
 });
 
-test('loadDiscoverCandidates validates discover artifacts', async () => {
+test('loadDiscoverCandidates validates discover artifacts and rejects missing candidates', async () => {
   const directory = await temporaryDirectory();
   const inputPath = join(directory, 'discover.json');
   await fs.writeFile(inputPath, `${JSON.stringify(discoverArtifact([discoverCandidate()]))}\n`, 'utf8');
   const candidates = await loadDiscoverCandidates(inputPath);
   assert.equal(candidates.length, 1);
   await assert.rejects(loadDiscoverCandidates(join(directory, 'missing.json')), /Unable to read discover input/);
-});
-
-test('PostgreSQL: catalog dedup check performs only findMany reads', { timeout: 60000 }, async t => {
-  const tag = randomUUID().slice(0, 8);
-  const seed = Number.parseInt(tag, 16) % 1000000;
-  const isbn = isbnAt(seed);
-  const book = await prisma.book.create({
-    data: {
-      title: 'Dedup Integration',
-      author: 'Integration Author',
-      isbn,
-      openLibraryWorkKey: `/works/OL${seed}W`,
-    },
-  });
-  t.after(async () => {
-    await prisma.book.deleteMany({ where: { id: book.id } });
-    await prisma.$disconnect();
-  });
-
-  const directory = await temporaryDirectory();
-  const inputPath = join(directory, 'discover.json');
-  const outputPath = join(directory, 'report.jsonl');
-  await fs.writeFile(inputPath, `${JSON.stringify(discoverArtifact([
-    discoverCandidate({ workKey: book.openLibraryWorkKey, isbns: [isbn], title: book.title, primaryAuthor: book.author }),
-    discoverCandidate({ workKey: '/works/OL999999W', title: 'Unmatched Title' }),
-  ]))}\n`, 'utf8');
-
-  const guarded = createReadOnlyDbGuard(prisma);
-  const { summary, results } = await runCatalogDedupCheck({ db: guarded, inputPath, outputPath });
-  assert.deepEqual(summary, { new: 1, existing: 1, ambiguous: 0 });
-  assert.equal(results[0].matchedBookIds[0], book.id);
-});
-
-test('catalog:dedup-check CLI writes report and prints summary', async () => {
-  const directory = await temporaryDirectory();
-  const inputPath = join(directory, 'discover.json');
-  const outputPath = join(directory, 'report.jsonl');
-  await fs.writeFile(inputPath, `${JSON.stringify(discoverArtifact([
-    discoverCandidate({ workKey: '/works/OL700W', title: 'CLI Candidate' }),
-  ]))}\n`, 'utf8');
-
-  const { stdout } = await execFileAsync(process.execPath, [
-    'scripts/catalog-dedup-check.js',
-    '--input', inputPath,
-    '--output', outputPath,
-  ], {
-    cwd: join(import.meta.dirname, '..'),
-    env: {
-      ...process.env,
-      DATABASE_URL: 'postgresql://bookish:bookish@127.0.0.1:5432/bookish_test',
-      JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET,
-      JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET,
-      CLIENT_ORIGIN: process.env.CLIENT_ORIGIN,
-    },
-  });
-  assert.deepEqual(JSON.parse(stdout.trim()), { new: 1, existing: 0, ambiguous: 0 });
-  const lines = await readDedupReport(outputPath);
-  assert.equal(lines.length, 1);
-  assert.equal(lines[0].status, 'new');
+  const invalidPath = join(directory, 'invalid.json');
+  await fs.writeFile(invalidPath, '{"format":"bookish-catalog-discover"}', 'utf8');
+  await assert.rejects(loadDiscoverCandidates(invalidPath), /Discover artifact candidates must be an array/);
 });

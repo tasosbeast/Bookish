@@ -1,8 +1,10 @@
 # Current Task
 
-Candidate scoring and selection (`catalog:discover --limit N`).
+Read-only dedup check of discover output against the Bookish database (`catalog:dedup-check`).
 
-The command reads a local Open Library works index and writes the top N works by the documented popularity score: a 0–1 Bayesian rating times the log of ratings plus weighted shelf counts. Works with no ratings and no shelf counts are rejected as `no_signal`. `--min-readers` defaults to 10 raw shelf counts and `--min-ratings` defaults to 0. Hard filters also require a cover, a non-empty title, and a `/works/OL<digits>W` key. English is not decided from works; the artifact records `languageCheck` as `pending`. The command does not access PostgreSQL, Prisma, or the network. `--limit` is at most 10000.
+The command reads a discover artifact JSON file and writes one JSONL report line per candidate: `{workKey, title, status, matchedBookIds, matchedBy}`. `status` is `new`, `existing`, or `ambiguous`. Matching priority is `openLibraryWorkKey` (validated as `/works/OL\d+W`, empty strings rejected), then any normalized ISBN-10 or ISBN-13, then normalized title plus `primaryAuthor` when present on the candidate. `ambiguous` means more than one book matched on the chosen path, or a lower-priority match disagrees with a higher-priority one. The command prints summary counts per status.
+
+Acceptance: `npm run lint` with 0 warnings, `npm test`, integration tests, and `npm test --prefix frontend` green. The command uses read-only Prisma access only (`book.findMany`, `$disconnect`) with a PostgreSQL read-only transaction backstop. No writes, migrations, or schema changes.
 
 ## Recorded for later
 
@@ -23,6 +25,7 @@ Existing rules still apply: non-books rejected via `pilotDisqualificationReason`
 3. A resolved-artifact bridge
 4. A batched, idempotent `--dry-run`/`--apply` import
 
+catalog:discover is done (#33, merged as 563cdba).
 Book.openLibraryWorkKey is done (PR #32, merged as e1d281d).
 #31 catalog:ol-work-index-build is done (merged as 7fbf1ee).
 Issue #14 wordmark book icon is done (PR #30, merged as 9ee4596).
