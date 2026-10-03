@@ -409,7 +409,8 @@ test('enrich requires lookup.sqlite instead of reading author shards', async (t)
       authorsIndexPath,
       outputPath,
     }),
-    error => error.code === 'invalid_author_index' && error.message.includes('run catalog:ol-author-lookup-build first'),
+    error => error.code === 'invalid_author_index'
+      && error.message.includes(`npm run catalog:ol-author-lookup-build -- --index ${authorsIndexPath} --snapshot-id ${SNAPSHOT_ID}`),
   );
   assert.equal(await fs.readFile(outputPath, 'utf8'), previous);
   assertNoTempFiles(await fs.readdir(directory));

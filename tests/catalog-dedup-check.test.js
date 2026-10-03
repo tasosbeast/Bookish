@@ -361,12 +361,31 @@ test('writeDedupReport leaves the previous report unchanged when validation fail
 
 test('catalog:dedup-check CLI parses arguments before connecting and does not load env.js', async () => {
   const source = await fs.readFile(new URL('../scripts/catalog-dedup-check.js', import.meta.url), 'utf8');
+  assert.equal(source.startsWith("import 'dotenv/config';\n"), true);
   assert.equal(source.includes('src/config/env.js'), false);
   assert.equal(source.includes('process.env.DATABASE_URL'), true);
   const script = fileURLToPath(new URL('../scripts/catalog-dedup-check.js', import.meta.url));
   await assert.rejects(
     () => execFileAsync(process.execPath, [script], { env: { PATH: process.env.PATH } }),
     error => error.code === 1 && error.stderr.includes('--input and --output are required'),
+  );
+});
+
+test('catalog:dedup-check CLI reads DATABASE_URL from .env', async () => {
+  const directory = await temporaryDirectory();
+  const inputPath = join(directory, 'discover.json');
+  const outputPath = join(directory, 'report.jsonl');
+  await fs.writeFile(inputPath, `${JSON.stringify(discoverArtifact([discoverCandidate()]))}\n`, 'utf8');
+  await fs.writeFile(join(directory, '.env'), 'DATABASE_URL=postgresql://dotenv-test:dotenv-test@127.0.0.1:1/dotenv_test\n');
+  const script = fileURLToPath(new URL('../scripts/catalog-dedup-check.js', import.meta.url));
+  await assert.rejects(
+    () => execFileAsync(process.execPath, [script, '--input', inputPath, '--output', outputPath], {
+      cwd: directory,
+      env: { PATH: process.env.PATH },
+    }),
+    error => error.code === 1
+      && !String(error.stderr).includes('DATABASE_URL is required')
+      && /connect|ECONNREFUSED|authentication|password|Can't reach database server/i.test(`${error.stderr}${error.message}`),
   );
 });
 

@@ -13,6 +13,7 @@ import {
   buildOpenLibraryAuthorIndex,
   buildOpenLibraryAuthorLookup,
   createOpenLibraryAuthorLookup,
+  readOpenLibraryBulkRecords,
   readOpenLibraryEditionCandidates,
 } from '../scripts/catalog/open-library-bulk.js';
 import { buildSnapshotIndex, createLocalCanonicalAdapter } from '../scripts/catalog/snapshot-index.js';
@@ -53,6 +54,38 @@ function dumpLine({ key, title, isbn13 }) {
 function authorDumpLine({ key, name }) {
   return `/type/author\t${key}\t1\t2026-01-01T00:00:00.000000\t${JSON.stringify({ name })}\n`;
 }
+
+test('readOpenLibraryBulkRecords rejects a directory path cleanly', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  await assert.rejects(
+    async () => {
+      for await (const _record of readOpenLibraryBulkRecords(directory)) {
+        // no-op
+      }
+    },
+    error => error.code === 'EISDIR' || /EISDIR|is a directory/i.test(error.message),
+  );
+});
+
+test('readOpenLibraryBulkRecords forwards gunzip source errors on unreadable .gz', async (t) => {
+  const directory = await temporaryDirectory();
+  const gzPath = join(directory, 'unreadable.txt.gz');
+  t.after(async () => {
+    await fs.chmod(gzPath, 0o644).catch(() => {});
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+  await fs.writeFile(gzPath, 'not gzip');
+  await fs.chmod(gzPath, 0o000);
+  await assert.rejects(
+    async () => {
+      for await (const _record of readOpenLibraryBulkRecords(gzPath)) {
+        // no-op
+      }
+    },
+    error => error.code === 'EACCES',
+  );
+});
 
 test('ISBN-10 conversion validates its own checksum and produces canonical ISBN-13', () => {
   assert.equal(normalizeIsbn10ToIsbn13('0141439513'), '9780141439518');

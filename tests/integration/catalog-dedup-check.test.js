@@ -160,10 +160,12 @@ test('PostgreSQL: read-only database URL rejects raw UPDATE statements', { skip:
   });
 
   await assert.rejects(
-    () => readOnly.$executeRaw`UPDATE books SET title = title WHERE id=${book.id}`,
+    () => readOnly.$executeRaw`UPDATE books SET title = 'changed' WHERE id=${book.id}`,
     /read-only|cannot execute/i,
   );
-  assert.deepEqual(await snapshotBook(book.id), before);
+  const after = await snapshotBook(book.id);
+  assert.equal(after.title, before.title);
+  assert.notEqual(after.title, 'changed');
   assert.match(decodeURIComponent(readOnlyDatabaseUrl(process.env.TEST_DATABASE_URL)), /default_transaction_read_only=on/);
 });
 
@@ -185,10 +187,12 @@ test('PostgreSQL: read-only database URL rejects $queryRaw UPDATE and leaves row
   });
 
   await assert.rejects(
-    () => readOnly.$queryRaw`UPDATE books SET title = title WHERE id=${book.id}`,
+    () => readOnly.$queryRaw`UPDATE books SET title = 'changed' WHERE id=${book.id}`,
     /read-only|cannot execute/i,
   );
-  assert.deepEqual(await snapshotBook(book.id), before);
+  const after = await snapshotBook(book.id);
+  assert.equal(after.title, before.title);
+  assert.notEqual(after.title, 'changed');
 });
 
 test('PostgreSQL: read-only database URL rejects updateManyAndReturn and leaves rows unchanged', { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async t => {

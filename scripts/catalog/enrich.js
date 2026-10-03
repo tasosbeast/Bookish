@@ -220,15 +220,20 @@ function addIsbn(entry, isbn, counts) {
   noteTruncation(entry, counts);
 }
 
-async function assertAuthorLookupDatabase(authorsIndex) {
+function authorLookupBuildCommand(authorsIndex, snapshotId) {
+  return `npm run catalog:ol-author-lookup-build -- --index ${authorsIndex} --snapshot-id ${snapshotId}`;
+}
+
+async function assertAuthorLookupDatabase(authorsIndex, snapshotId) {
   const lookupPath = join(authorsIndex, 'lookup.sqlite');
+  const command = authorLookupBuildCommand(authorsIndex, snapshotId);
   try {
     await fs.access(lookupPath, fsConstants.R_OK);
     const stat = await fs.stat(lookupPath);
-    if (!stat.isFile()) fail('invalid_author_index', 'Author lookup database is missing; run catalog:ol-author-lookup-build first');
+    if (!stat.isFile()) fail('invalid_author_index', `Author lookup database is missing; run ${command}`);
   } catch (cause) {
     if (cause instanceof CatalogContractError) throw cause;
-    fail('invalid_author_index', 'Author lookup database is missing; run catalog:ol-author-lookup-build first');
+    fail('invalid_author_index', `Author lookup database is missing; run ${command}`);
   }
 }
 
@@ -319,7 +324,7 @@ export async function enrichCatalogCandidates({
   if (authorMetadata.snapshotId !== snapshotId) {
     fail('author_snapshot_mismatch', 'Author index snapshotId does not match the discover artifact');
   }
-  await assertAuthorLookupDatabase(authorsIndex);
+  await assertAuthorLookupDatabase(authorsIndex, snapshotId);
 
   const entries = candidateEntries(artifact.candidates);
   const counts = {
