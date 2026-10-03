@@ -2,7 +2,7 @@
 
 No active task.
 
-Plain `npm test` and ESLint are done: `npm test` preloads `tests/setup.js` and runs the backend unit files one at a time. `npm run lint` checks the backend and frontend with the ESLint flat config. CI runs lint before the test suites.
+Plain `npm test` and ESLint are done (PR #28): `npm test` preloads `tests/setup.js` and runs the backend unit files one at a time. `npm run lint` checks the backend and frontend with the ESLint flat config. CI runs lint before the test suites.
 
 Avatar URL allowlist is done (PR #26): new profile pictures must be HTTPS on an allowlisted host, and a stored URL that fails those rules renders the default avatar.
 
