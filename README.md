@@ -143,6 +143,14 @@ npm run catalog:ol-work-index-build -- --works path/to/ol_dump_works.txt.gz --ra
 
 The builder reads only those local files. It writes a validated SQLite database and `index.json` under `scripts/catalog-cache/open-library-works` (override with `--output`). It does not download dumps, contact providers, or access PostgreSQL.
 
+Rank candidates from that index with `catalog:discover`. The command reads the local works index only and writes a validated JSON artifact. It records `languageCheck` as `pending` because English editions are decided later from the editions dump. The score is `ratingWeight * bayesianAverage + readerWeight * ln(1 + shelfReaders)`, using the weights in `CATALOG_DISCOVER_SCORING`. Ties break by work key.
+
+```powershell
+npm run catalog:discover -- --works-index scripts/catalog-cache/open-library-works --snapshot-id open-library-2026-08-31 --limit 500 --min-ratings 10 --min-readers 25 --output scripts/catalog-cache/catalog-discover.json
+```
+
+`--output` defaults to `scripts/catalog-cache/catalog-discover.json`. `--exclude-keys` is an optional file of `/works/OL…W` keys, one per line.
+
 Before a large local bulk build, check the target volume. The preflight uses an intentionally conservative 8× input-size temporary-space estimate plus a reserve; it refuses the check with a non-zero exit status when that requirement exceeds free space. Override the amplification only with measurements from a comparable local build.
 
 ```powershell
