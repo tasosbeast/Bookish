@@ -1,0 +1,14 @@
+/works/OL10W	\N	5	2018-06-20
+/works/OL10W	/books/OL10M	4	2018-06-21
+/works/OL10W	\N	1	2018-06-22
+/works/OL12W	/books/OL12M	3	2019-01-02
+/works/OL999W	\N	5	2018-01-01
+/works/OL10W	\N	0	2018-01-01
+/works/OL10W	\N	6	2018-01-01
+/works/OL10W	\N	3.5	2018-01-01
+/works/OL10W	\N	abc	2018-01-01
+/works/OL10W	\N		2018-01-01
+/works/OL10W	\N	5
+not-a-key	\N	5	2018-01-01
+/works/OL10W	/books/BAD	5	2018-01-01
+/works/OL10W	\N	5	2018/01/01

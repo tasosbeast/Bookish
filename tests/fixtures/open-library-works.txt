@@ -1,0 +1,16 @@
+/type/work	/works/OL11W	2	2026-01-01T00:00:00.000000	{"title":"Earlier tie"}
+/type/work	/works/OL11W	2	2026-01-01T00:00:00.000000	{"title":"Later tie"}
+/type/work	/works/OL11W	1	2026-01-01T00:00:00.000000	{"title":"Lower rev"}
+
+/type/work	/works/OL14W	4	2026-01-01T00:00:00.000000	{"title":"High rev"}
+/type/work	/works/OL14W	2	2026-01-01T00:00:00.000000	{"title":"After high"}
+/type/work	/works/OL14W	1	2026-01-01T00:00:00.000000	{"title":"Also low"}
+/type/work	/works/OL10W	4	2026-01-01T00:00:00.000000	{"title":"Pride and Prejudice","subtitle":" A Novel ","authors":[{"author":{"key":"/authors/OL1A"}},{"author":{"key":"/authors/OL1A"}},{"author":{"key":" /authors/OL2A "}},{"author":{"key":""}},{"key":"/authors/OL3A"},{"author":{"key":"/authors/OL2A"}}],"subjects":[" Fiction ","Fiction","","Romance",12],"covers":[123,-1,0,123,1.5,456],"first_publish_date":" 1813 ","description":{"type":"/type/text","value":" A classic. "}}
+/type/work	/works/OL12W	1	2026-01-01T00:00:00.000000	{"title":"Emma","description":"  Plain text.  ","first_publish_date":"January 1813"}
+/type/edition	/books/OL1M	1	2026-01-01T00:00:00.000000	{"title":"Not a work"}
+/type/work	/works/OLMISSINGW	1	2026-01-01T00:00:00.000000	{"title":""}
+/type/work	/works/OLBLANKW	1	2026-01-01T00:00:00.000000	{"title":"   "}
+this is not a dump row
+/type/work	/works/OLBADJSONW	1	2026-01-01T00:00:00.000000	{not-json}
+/type/work	/works/OLARRAYW	1	2026-01-01T00:00:00.000000	[]
+/type/work	/works/OLBADREVW	nope	2026-01-01T00:00:00.000000	{"title":"Bad revision"}
