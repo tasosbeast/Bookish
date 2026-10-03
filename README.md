@@ -103,6 +103,8 @@ Target: Node.js, Express, PostgreSQL, Prisma ORM 7. Prisma field names are camel
 
 The SQL supplement is already included in the committed initial migration. Keep it as a reference; do not run it again after deploying the migration. For later model changes, create forward migrations with `prisma migrate dev` in development and deploy committed migrations with `prisma migrate deploy`.
 
+`npm run db:deploy` runs `prisma migrate deploy`. Render starts `bookish-api` with `npm run db:deploy && npm start` and auto-deploys `main`, so the production migration runs automatically on the Render deploy after merge. The product owner's merge decision is the apply step. `Book.openLibraryWorkKey` is additive only: a nullable column and a unique index, with no backfill. Existing rows stay null, and PostgreSQL still allows multiple nulls.
+
 The Express runtime uses `@prisma/adapter-pg` and `pg`; the generated Prisma client is initialized with the PostgreSQL adapter.
 
 ## Catalog import
