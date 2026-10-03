@@ -63,6 +63,13 @@ test('Avatar renders allowlisted https pictures and falls back otherwise', { tim
     assert.equal(nextImage.getAttribute('src'), nextSrc);
   });
 
+  const failedSrc = 'https://www.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?d=identicon';
+  await act(async () => {
+    root.render(h(Avatar, { username: 'Maria', profilePicture: failedSrc }));
+  });
+  assert.equal(document.querySelector('img'), null, 'returning to a picture that already failed stays on the placeholder');
+  assert.equal(document.querySelector('.reader-avatar-placeholder').textContent, 'M');
+
   for (const profilePicture of [
     null,
     '',

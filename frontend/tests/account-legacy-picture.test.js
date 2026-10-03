@@ -171,16 +171,17 @@ test('legacy profile picture does not block other account edits', { timeout: 600
   assert.equal(document.querySelector('textarea[name="bio"]'), null, 'omitting the untouched picture still saves');
   assert.equal(document.querySelector('img.account-avatar').getAttribute('src'), newerPicture);
 
+  const paddedPicture = `  ${newerPicture} `;
+  currentUser = { ...currentUser, profilePicture: paddedPicture };
+  await act(async () => session.updateUser(currentUser));
   await edit();
-  assert.equal(document.querySelector('input[name="profilePicture"]').value, newerPicture);
   await act(async () => {
     setInputValue(document.querySelector('textarea[name="bio"]'), 'Whitespace picture');
-    setInputValue(document.querySelector('input[name="profilePicture"]'), ` \t${newerPicture}\n `);
+    setInputValue(document.querySelector('input[name="profilePicture"]'), paddedPicture);
   });
   await submit();
 
   assert.equal(requests.length, 6);
   assert.deepEqual(requests[5].body, { bio: 'Whitespace picture' });
-  assert.equal('profilePicture' in requests[5].body, false, 'whitespace-only picture edits count as unchanged');
-  assert.equal(document.querySelector('img.account-avatar').getAttribute('src'), newerPicture);
+  assert.equal('profilePicture' in requests[5].body, false, 'a padded stored picture is unchanged after the URL input strips it');
 });

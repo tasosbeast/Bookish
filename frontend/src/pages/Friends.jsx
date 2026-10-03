@@ -124,7 +124,7 @@ function SuggestionsTab({ onSentRequest, relationshipRevision }) {
   }, [relationshipRevision, reload]);
 
   if (suggestions.loading && !suggestions.data) return <Loading />;
-  if (suggestions.error) return <ErrorNotice error={suggestions.error} retry={suggestions.reload} />;
+  if (suggestions.error) return <ErrorNotice error={suggestions.error} retry={reload} />;
 
   if (suggestions.data?.meta?.personalized === false) {
     return (
@@ -232,7 +232,7 @@ function FriendsTab({ onExploreSuggestions, relationshipRevision }) {
   }, [relationshipRevision, reload]);
 
   if (friends.loading && !friends.data) return <Loading />;
-  if (friends.error) return <ErrorNotice error={friends.error} retry={friends.reload} />;
+  if (friends.error) return <ErrorNotice error={friends.error} retry={reload} />;
 
   const list = friends.data?.data ?? [];
 
@@ -321,7 +321,7 @@ function RequestsTab({ relationshipRevision, onRequestsChanged }) {
   }, [relationshipRevision, reload]);
 
   if (requests.loading && !requests.data) return <Loading />;
-  if (requests.error) return <ErrorNotice error={requests.error} retry={requests.reload} />;
+  if (requests.error) return <ErrorNotice error={requests.error} retry={reload} />;
 
   const incoming = requests.data?.data?.incoming ?? [];
   const sent = requests.data?.data?.sent ?? [];

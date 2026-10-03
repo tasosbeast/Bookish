@@ -133,8 +133,6 @@ export default function Account() {
   }
 
   function cancelEditing() {
-    setBio(user?.bio ?? '');
-    setProfilePicture(user?.profilePicture ?? '');
     setError(null);
     setEditing(false);
   }
@@ -145,7 +143,8 @@ export default function Account() {
     setBusy(true);
     try {
       // Compare with the picture captured when editing started. A session refresh
-      // mid-edit must not resend an untouched or whitespace-only draft.
+      // mid-edit must not resend an untouched draft. The baseline-side trim is
+      // the one that matters: a URL input strips the draft before React stores it.
       const body = { bio };
       if (profilePicture.trim() !== pictureBaseline.current.trim()) body.profilePicture = profilePicture;
       const result = await api('/auth/me', {
