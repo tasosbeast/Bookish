@@ -103,7 +103,7 @@ Target: Node.js, Express, PostgreSQL, Prisma ORM 7. Prisma field names are camel
 
 The SQL supplement is already included in the committed initial migration. Keep it as a reference; do not run it again after deploying the migration. For later model changes, create forward migrations with `prisma migrate dev` in development and deploy committed migrations with `prisma migrate deploy`.
 
-`npm run db:deploy` runs `prisma migrate deploy`. Render starts `bookish-api` with `npm run db:deploy && npm start` and auto-deploys `main`, so the production migration runs automatically on the Render deploy after merge. The product owner's merge decision is the apply step. `Book.openLibraryWorkKey` is additive only: a nullable column and a unique index, with no backfill. Existing rows stay null, and PostgreSQL still allows multiple nulls.
+`npm run db:deploy` runs `prisma migrate deploy`. Render starts `bookish-api` with `npm run db:deploy && npm start` and auto-deploys `main`, so the production migration runs automatically on the Render deploy after merge. The product owner's merge decision is the apply step. `Book.openLibraryWorkKey` is additive only: a nullable column and a unique index, with no backfill. Existing rows stay null, and PostgreSQL still allows multiple nulls. Rolling back this migration requires a manual `DROP COLUMN` on `books.open_library_work_key`.
 
 The Express runtime uses `@prisma/adapter-pg` and `pg`; the generated Prisma client is initialized with the PostgreSQL adapter.
 
@@ -146,19 +146,19 @@ The builder reads only those local files. It writes a validated SQLite database 
 Before a large local bulk build, check the target volume. The preflight uses an intentionally conservative 8× input-size temporary-space estimate plus a reserve; it refuses the check with a non-zero exit status when that requirement exceeds free space. Override the amplification only with measurements from a comparable local build.
 
 ```powershell
-npm run catalog:disk-preflight -- -- --directory scripts/catalog-cache --input path/to/ol_dump_editions.txt.gz
+npm run catalog:disk-preflight -- --directory scripts/catalog-cache --input path/to/ol_dump_editions.txt.gz
 ```
 
 For a bounded local dump sample, `catalog:bulk-smoke` builds disposable author and edition indexes, samples process memory and temporary-directory use, verifies local ISBN/title-author lookups with `fetch` disabled, then removes its generated data:
 
 ```powershell
-npm run catalog:bulk-smoke -- -- --authors path/to/authors-sample.txt.gz --editions path/to/editions-sample.txt.gz --workdir $env:TEMP --snapshot-id sample-2026-08
+npm run catalog:bulk-smoke -- --authors path/to/authors-sample.txt.gz --editions path/to/editions-sample.txt.gz --workdir $env:TEMP --snapshot-id sample-2026-08
 ```
 
 For a controlled source sample without downloading an entire archive, `catalog:ol-range-sample` requires a server-honored HTTP range and writes only complete decompressed rows to the requested local path. It is explicitly separate from the local index builders:
 
 ```powershell
-npm run catalog:ol-range-sample -- -- --url https://openlibrary.org/data/ol_dump_authors_latest.txt.gz --bytes 33554432 --rows 50000 --output $env:TEMP/authors-sample.txt
+npm run catalog:ol-range-sample -- --url https://openlibrary.org/data/ol_dump_authors_latest.txt.gz --bytes 33554432 --rows 50000 --output $env:TEMP/authors-sample.txt
 ```
 
 `catalog:import` reads only the validated Catalog Pipeline v2 artifact at `scripts/catalog-resolved.json`; it never contacts Open Library or Google Books. Use `--artifact <path>` to inspect or import another resolved artifact. Provider resolution is a separate step and production database writes never depend on live metadata services.
