@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { z } from 'zod';
+import { parseAvatarHosts } from '../../frontend/src/lib/avatarUrl.js';
 
 export function parseEnv(source) {
   const config = z.object({
@@ -10,6 +11,7 @@ export function parseEnv(source) {
     JWT_REFRESH_SECRET: z.string().min(48),
     CLIENT_ORIGIN: z.string().url().default('http://localhost:5173'),
     TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
+    AVATAR_ALLOWED_HOSTS: z.string().optional(),
   }).refine(v => v.JWT_ACCESS_SECRET !== v.JWT_REFRESH_SECRET, {
     message: 'Access and refresh secrets must differ', path: ['JWT_REFRESH_SECRET'],
   }).parse(source);
@@ -20,7 +22,10 @@ export function parseEnv(source) {
     if (!source.CLIENT_ORIGIN) throw new Error('CLIENT_ORIGIN is required in production');
     if (new URL(config.CLIENT_ORIGIN).protocol !== 'https:') throw new Error('CLIENT_ORIGIN must use HTTPS in production');
   }
-  return config;
+  // Unset or blank keeps the exact Gravatar and lh3–lh6.googleusercontent.com hosts.
+  // A comma-separated list replaces that default. Only a "*.example.com" entry
+  // matches subdomains.
+  return { ...config, AVATAR_ALLOWED_HOSTS: parseAvatarHosts(config.AVATAR_ALLOWED_HOSTS) };
 }
 
 export const env = parseEnv(process.env);

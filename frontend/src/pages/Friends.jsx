@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useResource } from '../hooks/useResource.js';
 import { api } from '../lib/api.js';
 import { messageFor } from '../lib/http.js';
+import { Avatar } from '../components/Avatar.jsx';
 import { EmptyState, ErrorNotice, Loading } from '../components/shared.jsx';
 
 function ReaderSearchResult({ result, onRelationshipChange }) {
@@ -10,7 +11,6 @@ function ReaderSearchResult({ result, onRelationshipChange }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const { user } = result;
-  const initial = user.username ? user.username.slice(0, 1).toUpperCase() : '?';
 
   useEffect(() => setRelationship(result.relationship), [result.relationship]);
 
@@ -50,7 +50,7 @@ function ReaderSearchResult({ result, onRelationshipChange }) {
 
   return <article className="reader-card reader-search-result">
     <div className="reader-card-header">
-      {user.profilePicture ? <img src={user.profilePicture} alt={`${user.username}'s avatar`} className="reader-avatar" /> : <span className="reader-avatar-placeholder" aria-hidden="true">{initial}</span>}
+      <Avatar username={user.username} profilePicture={user.profilePicture} />
       <div className="reader-info"><h3>{user.username}</h3>{user.bio && <p className="reader-bio">{user.bio}</p>}</div>
     </div>
     <div className="reader-card-actions">{actions}{error && <p className="reader-error small-error" role="alert">{error}</p>}</div>
@@ -175,16 +175,10 @@ function SuggestionsTab({ onSentRequest, relationshipRevision }) {
       {list.map(({ user, reason }) => {
         const isBusy = busyIds.has(user.id);
         const err = errorMap[user.id];
-        const initial = user.username ? user.username.slice(0, 1).toUpperCase() : '?';
-
         return (
           <article className="reader-card" key={user.id}>
             <div className="reader-card-header">
-              {user.profilePicture ? (
-                <img src={user.profilePicture} alt={`${user.username}'s avatar`} className="reader-avatar" />
-              ) : (
-                <span className="reader-avatar-placeholder">{initial}</span>
-              )}
+              <Avatar username={user.username} profilePicture={user.profilePicture} />
               <div className="reader-info">
                 <h3>{user.username}</h3>
                 {user.bio && <p className="reader-bio">{user.bio}</p>}
@@ -282,16 +276,10 @@ function FriendsTab({ onExploreSuggestions, relationshipRevision }) {
       {list.map(({ friendshipId, friend, acceptedAt }) => {
         const isBusy = busyIds.has(friendshipId);
         const err = errorMap[friendshipId];
-        const initial = friend.username ? friend.username.slice(0, 1).toUpperCase() : '?';
-
         return (
           <article className="reader-card" key={friendshipId}>
             <div className="reader-card-header">
-              {friend.profilePicture ? (
-                <img src={friend.profilePicture} alt={`${friend.username}'s avatar`} className="reader-avatar" />
-              ) : (
-                <span className="reader-avatar-placeholder">{initial}</span>
-              )}
+              <Avatar username={friend.username} profilePicture={friend.profilePicture} />
               <div className="reader-info">
                 <h3>{friend.username}</h3>
                 {friend.bio && <p className="reader-bio">{friend.bio}</p>}
@@ -395,16 +383,11 @@ function RequestsTab({ relationshipRevision, onRequestsChanged }) {
               const isBusy = busyIds.has(req.id);
               const err = errorMap[req.id];
               const user = req.user;
-              const initial = user.username ? user.username.slice(0, 1).toUpperCase() : '?';
 
               return (
                 <article className="reader-card" key={req.id}>
                   <div className="reader-card-header">
-                    {user.profilePicture ? (
-                      <img src={user.profilePicture} alt={`${user.username}'s avatar`} className="reader-avatar" />
-                    ) : (
-                      <span className="reader-avatar-placeholder">{initial}</span>
-                    )}
+                    <Avatar username={user.username} profilePicture={user.profilePicture} />
                     <div className="reader-info">
                       <h3>{user.username}</h3>
                       {user.bio && <p className="reader-bio">{user.bio}</p>}
@@ -448,16 +431,11 @@ function RequestsTab({ relationshipRevision, onRequestsChanged }) {
               const isBusy = busyIds.has(req.id);
               const err = errorMap[req.id];
               const user = req.user;
-              const initial = user.username ? user.username.slice(0, 1).toUpperCase() : '?';
 
               return (
                 <article className="reader-card" key={req.id}>
                   <div className="reader-card-header">
-                    {user.profilePicture ? (
-                      <img src={user.profilePicture} alt={`${user.username}'s avatar`} className="reader-avatar" />
-                    ) : (
-                      <span className="reader-avatar-placeholder">{initial}</span>
-                    )}
+                    <Avatar username={user.username} profilePicture={user.profilePicture} />
                     <div className="reader-info">
                       <h3>{user.username}</h3>
                       <span className="status-badge" style={{ marginTop: '4px', display: 'inline-block' }}>Request sent</span>

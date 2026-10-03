@@ -35,9 +35,9 @@ test('PATCH /api/auth/me profile editing flow', { skip: !process.env.TEST_DATABA
   assert.equal(bioRes.body.user.passwordHash, undefined);
   assert.deepEqual(Object.keys(bioRes.body.user).sort(), ['bio', 'email', 'id', 'profilePicture', 'username']);
 
-  // 3. authenticated user can update profilePicture
-  const picRes = await patch({ profilePicture: '  https://example.com/avatar.png  ' }).expect(200);
-  assert.equal(picRes.body.user.profilePicture, 'https://example.com/avatar.png');
+  // 3. authenticated user can update profilePicture to an allowlisted https URL
+  const picRes = await patch({ profilePicture: '  https://www.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?d=identicon  ' }).expect(200);
+  assert.equal(picRes.body.user.profilePicture, 'https://www.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?d=identicon');
   assert.equal(picRes.body.user.bio, 'Love reading sci-fi and fantasy.');
 
   // 4. clearing either value stores null
@@ -45,8 +45,17 @@ test('PATCH /api/auth/me profile editing flow', { skip: !process.env.TEST_DATABA
   assert.equal(clearRes.body.user.bio, null);
   assert.equal(clearRes.body.user.profilePicture, null);
 
-  // 5. invalid/non-http(s) profilePicture URL returns 400
-  for (const badUrl of ['javascript:alert(1)', 'data:image/png;base64,123', 'file:///etc/passwd', 'not-a-url', 'ftp://example.com/pic.png']) {
+  // 5. http, other schemes, and non-allowlisted hosts return 400
+  for (const badUrl of [
+    'javascript:alert(1)',
+    'data:image/png;base64,123',
+    'file:///etc/passwd',
+    'not-a-url',
+    'ftp://example.com/pic.png',
+    'http://www.gravatar.com/avatar/abc',
+    'https://example.com/avatar.png',
+    'https://www.gravatar.com/avatar/abc?d=https://evil.example/pixel.png',
+  ]) {
     await patch({ profilePicture: badUrl }).expect(400);
   }
 

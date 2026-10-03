@@ -16,8 +16,8 @@ test('Friends reader search debounces, ignores stale results, and updates relati
   let server, root, session, resolveStaleSearch, searchCalls = 0;
   const response = (body, status = 200) => Response.json(body, { status });
   const readers = [
-    { user: { id: 'none', username: 'Maria', profilePicture: null, bio: 'Thrillers and mysteries.' }, relationship: { status: 'none' } },
-    { user: { id: 'out', username: 'Mario', profilePicture: null, bio: null }, relationship: { status: 'pending', direction: 'outgoing', requestId: 'request-out' } },
+    { user: { id: 'none', username: 'Maria', profilePicture: 'http://evil.example/track.png', bio: 'Thrillers and mysteries.' }, relationship: { status: 'none' } },
+    { user: { id: 'out', username: 'Mario', profilePicture: 'https://lh3.googleusercontent.com/a/mario', bio: null }, relationship: { status: 'pending', direction: 'outgoing', requestId: 'request-out' } },
     { user: { id: 'in', username: 'Marina', profilePicture: null, bio: null }, relationship: { status: 'pending', direction: 'incoming', requestId: 'request-in' } },
     { user: { id: 'decline', username: 'Maribel', profilePicture: null, bio: null }, relationship: { status: 'pending', direction: 'incoming', requestId: 'request-decline' } },
     { user: { id: 'friend', username: 'Mara', profilePicture: null, bio: null }, relationship: { status: 'accepted', friendshipId: 'friendship-1' } },
@@ -102,6 +102,13 @@ test('Friends reader search debounces, ignores stale results, and updates relati
   await act(async () => { setInputValue(input, 'ma'); await pause(300); });
   await act(async () => { setInputValue(input, 'mar'); await pause(300); });
   assert.ok(document.body.textContent.includes('Maria'));
+  const mariaCard = [...document.querySelectorAll('.reader-search-result')].find(item => item.querySelector('h3')?.textContent === 'Maria');
+  assert.equal(mariaCard.querySelector('img'), null, 'search results do not render an http avatar');
+  assert.equal(mariaCard.querySelector('.reader-avatar-placeholder').textContent, 'M');
+  const marioCard = [...document.querySelectorAll('.reader-search-result')].find(item => item.querySelector('h3')?.textContent === 'Mario');
+  const marioAvatar = marioCard.querySelector('img.reader-avatar');
+  assert.equal(marioAvatar.getAttribute('src'), 'https://lh3.googleusercontent.com/a/mario');
+  assert.equal(marioAvatar.getAttribute('referrerpolicy'), 'no-referrer');
   await act(async () => { resolveStaleSearch(); await pause(0); });
   assert.ok(!document.body.textContent.includes('Old Maria'), 'older slow results cannot replace the latest query');
 

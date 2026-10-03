@@ -69,6 +69,8 @@ Bookish requires Node.js 22.12+ and PostgreSQL with the `pg_trgm` extension avai
 | `CLIENT_ORIGIN` | Exact public HTTPS frontend origin, with no path or trailing slash |
 | `TRUST_PROXY_HOPS` | Exact number of trusted reverse proxies between the client and Express; `0` only when traffic reaches Express directly |
 
+`AVATAR_ALLOWED_HOSTS` is optional. It is a comma-separated list of exact hosts allowed for new profile picture URLs. A `*.example.com` entry allows subdomains of that host and not the host itself. When unset, Bookish allows Gravatar (`gravatar.com`, `www.gravatar.com`, `secure.gravatar.com`, `s.gravatar.com`, `0.gravatar.com`, `1.gravatar.com`, `2.gravatar.com`) and `lh3.googleusercontent.com` through `lh6.googleusercontent.com`. New pictures must use HTTPS. Gravatar URLs must use `/avatar/` plus an MD5 or SHA-256 hex hash, with an optional file extension. The web build reads `VITE_AVATAR_ALLOWED_HOSTS` with the same parser and the same rules. Keep the API value and the web value identical, or the API can store a picture the browser will not show.
+
 Build and release the backend from the repository root. `npm ci` must include dev dependencies for the Prisma CLI during this release phase because the generated client is intentionally not committed:
 
 ```sh

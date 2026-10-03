@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth.js';
 import { api, session } from '../lib/api.js';
+import { Avatar } from '../components/Avatar.jsx';
+import { allowedAvatarHosts } from '../lib/avatarHosts.js';
 import { ErrorNotice } from '../components/shared.jsx';
 import {
   isPushSupported,
@@ -23,7 +25,6 @@ export default function Account() {
   const [profilePicture, setProfilePicture] = useState(user?.profilePicture ?? '');
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [imageFailed, setImageFailed] = useState(false);
 
   // Browser push notification state
   const [pushSupported, setPushSupported] = useState(false);
@@ -54,10 +55,6 @@ export default function Account() {
   useEffect(() => {
     loadTrophies();
   }, [user?.id]);
-
-  useEffect(() => {
-    setImageFailed(false);
-  }, [user?.profilePicture]);
 
   useEffect(() => {
     let active = true;
@@ -125,8 +122,6 @@ export default function Account() {
     }
   }
 
-  const hasPicture = user?.profilePicture && !imageFailed;
-
   function startEditing() {
     setBio(user?.bio ?? '');
     setProfilePicture(user?.profilePicture ?? '');
@@ -152,7 +147,6 @@ export default function Account() {
         auth: 'required',
       });
       session.updateUser(result.user);
-      setImageFailed(false);
       setEditing(false);
     } catch (err) {
       setError(err);
@@ -172,18 +166,13 @@ export default function Account() {
       </div>
       <section className="account-card" aria-labelledby="account-name">
         <div className="account-identity">
-          {hasPicture ? (
-            <img
-              className="account-avatar"
-              src={user.profilePicture}
-              alt={`${user.username}'s profile picture`}
-              onError={() => setImageFailed(true)}
-            />
-          ) : (
-            <span className="account-avatar" aria-hidden="true">
-              {user?.username?.slice(0, 1).toUpperCase()}
-            </span>
-          )}
+          <Avatar
+            className="account-avatar"
+            placeholderClassName="account-avatar"
+            username={user?.username}
+            profilePicture={user?.profilePicture}
+            alt={`${user?.username}'s profile picture`}
+          />
           <div>
             <h2 id="account-name">{user?.username}</h2>
             <p className="muted">{user?.email}</p>
@@ -230,6 +219,7 @@ export default function Account() {
                 onChange={e => setProfilePicture(e.target.value)}
                 maxLength={2048}
               />
+              <p className="muted small">HTTPS only. Allowed hosts: {allowedAvatarHosts.join(', ')}.</p>
 
               <ErrorNotice error={error} />
 

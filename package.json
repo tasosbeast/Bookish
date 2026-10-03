@@ -32,6 +32,7 @@
     "release:prh-sync": "node scripts/sync-prh-releases.js",
     "test": "node --experimental-sqlite --test tests/*.test.js",
     "test:integration": "node --test --test-concurrency=1 tests/integration/*.test.js",
+    "build:frontend-only": "node scripts/frontend-only-build.js",
     "db:generate": "prisma generate",
     "db:validate": "prisma validate",
     "db:deploy": "prisma migrate deploy"

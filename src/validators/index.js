@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { env } from '../config/env.js';
+import { isAllowedAvatarUrl } from '../../frontend/src/lib/avatarUrl.js';
 
 const uuid = z.string().uuid();
 const rating = z.number().int().min(1).max(5);
@@ -69,25 +71,23 @@ const bioSchema = z.union([
   z.null(),
 ]).optional();
 
-const profilePictureSchema = z.union([
-  z.string()
-    .transform(s => s.trim())
-    .pipe(z.string().max(2048))
-    .transform(s => (s === '' ? null : s))
-    .refine(
-      val => {
-        if (val === null) return true;
-        try {
-          const url = new URL(val);
-          return url.protocol === 'http:' || url.protocol === 'https:';
-        } catch {
-          return false;
-        }
-      },
-      { message: 'Must be a valid http:// or https:// URL' }
-    ),
-  z.null(),
-]).optional();
+const profilePictureSchema = z.union([z.string(), z.null()])
+  .transform(value => {
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    return trimmed === '' ? null : trimmed;
+  })
+  .superRefine((val, ctx) => {
+    if (val === null) return;
+    if (val.length > 2048) {
+      ctx.addIssue('Must be at most 2048 characters');
+      return;
+    }
+    if (!isAllowedAvatarUrl(val, env.AVATAR_ALLOWED_HOSTS)) {
+      ctx.addIssue(`Must be an https URL on an allowed host: ${env.AVATAR_ALLOWED_HOSTS.join(', ')}`);
+    }
+  })
+  .optional();
 
 export const updateProfileSchema = z.object({
   body: z.object({
