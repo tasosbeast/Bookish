@@ -160,10 +160,12 @@ test('PostgreSQL: read-only database URL rejects raw UPDATE statements', { skip:
   });
 
   await assert.rejects(
-    () => readOnly.$executeRawUnsafe('UPDATE books SET title = title WHERE false'),
+    () => readOnly.$executeRaw`UPDATE books SET title = 'changed' WHERE id=${book.id}`,
     /read-only|cannot execute/i,
   );
-  assert.deepEqual(await snapshotBook(book.id), before);
+  const after = await snapshotBook(book.id);
+  assert.equal(after.title, before.title);
+  assert.notEqual(after.title, 'changed');
   assert.match(decodeURIComponent(readOnlyDatabaseUrl(process.env.TEST_DATABASE_URL)), /default_transaction_read_only=on/);
 });
 
@@ -185,10 +187,12 @@ test('PostgreSQL: read-only database URL rejects $queryRaw UPDATE and leaves row
   });
 
   await assert.rejects(
-    () => readOnly.$queryRawUnsafe('UPDATE books SET title = title WHERE false'),
+    () => readOnly.$queryRaw`UPDATE books SET title = 'changed' WHERE id=${book.id}`,
     /read-only|cannot execute/i,
   );
-  assert.deepEqual(await snapshotBook(book.id), before);
+  const after = await snapshotBook(book.id);
+  assert.equal(after.title, before.title);
+  assert.notEqual(after.title, 'changed');
 });
 
 test('PostgreSQL: read-only database URL rejects updateManyAndReturn and leaves rows unchanged', { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async t => {
@@ -301,19 +305,17 @@ test('catalog:dedup-check CLI writes report and prints summary', { skip: !proces
     discoverCandidate({ workKey: '/works/OL700W', title: 'CLI Candidate' }),
   ]))}\n`, 'utf8');
 
+  const env = { ...process.env, DATABASE_URL: process.env.TEST_DATABASE_URL };
+  delete env.JWT_ACCESS_SECRET;
+  delete env.JWT_REFRESH_SECRET;
+  delete env.CLIENT_ORIGIN;
   const { stdout } = await execFileAsync(process.execPath, [
     'scripts/catalog-dedup-check.js',
     '--input', inputPath,
     '--output', outputPath,
   ], {
     cwd: join(import.meta.dirname, '../..'),
-    env: {
-      ...process.env,
-      DATABASE_URL: process.env.TEST_DATABASE_URL,
-      JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET,
-      JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET,
-      CLIENT_ORIGIN: process.env.CLIENT_ORIGIN,
-    },
+    env,
   });
   assert.deepEqual(JSON.parse(stdout.trim()), { new: 1, existing: 0, ambiguous: 0 });
 });
