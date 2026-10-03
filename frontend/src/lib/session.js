@@ -1,7 +1,7 @@
 import { ApiError, readResponse } from './http.js';
 
 // Tokens live only in this closure. Storage carries an account-change marker, never credentials.
-export function createSession({ baseUrl, fetcher = fetch, locks, storage, channel, listenStorage = () => () => {}, now = Date.now, makeId = () => crypto.randomUUID() }) {
+export function createSession({ baseUrl, fetcher = fetch, locks, storage, channel, listenStorage = () => () => {}, now = Date.now, makeId = () => crypto.randomUUID(), beforeLogout }) {
   const key = `bookish:session:${baseUrl}`;
   let token = null;
   let expiresAt = 0;
@@ -89,6 +89,13 @@ export function createSession({ baseUrl, fetcher = fetch, locks, storage, channe
     });
   }
   async function logout() {
+    // Cleanup runs before the session is cleared so it can still authenticate,
+    // and outside the auth lock so a token refresh cannot deadlock logout.
+    // Failures must not block sign-out.
+    if (typeof beforeLogout === 'function') {
+      try { await beforeLogout(); }
+      catch (error) { console.warn('[session] Logout cleanup failed:', error); }
+    }
     return exclusive(async () => {
       // Persist local logout even if the network fails, so another tab cannot silently restore it.
       publish(true);

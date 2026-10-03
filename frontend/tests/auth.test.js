@@ -142,6 +142,42 @@ test('account changes discard in-flight results and cancelled requests do not se
   assert.equal(cancelled.counts.calls, 0);
 });
 
+test('logout cleanup runs while authenticated and cannot block sign-out', async () => {
+  const env = environment();
+  let sawToken = false;
+  const session = env.make({
+    beforeLogout: async () => {
+      assert.equal(env.calls.some(call => call.url.endsWith('/logout')), false);
+      const creds = await session.credentials();
+      sawToken = Boolean(creds.token);
+      assert.equal(session.getSnapshot().status, 'authenticated');
+    },
+  });
+  await session.authenticate('login', { email: 'reader@example.com', password: 'fixture' });
+  await session.logout();
+  assert.equal(sawToken, true);
+  assert.equal(session.getSnapshot().status, 'guest');
+  assert.equal((await session.credentials()).token, null);
+  assert.ok(env.calls.some(call => call.url.endsWith('/logout')));
+
+  const failing = env.make({
+    beforeLogout: async () => { throw new Error('unsubscribe failed'); },
+  });
+  await failing.authenticate('login', { email: 'reader@example.com', password: 'fixture' });
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    await failing.logout();
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(failing.getSnapshot().status, 'guest');
+  assert.equal((await failing.credentials()).token, null);
+  assert.ok(warnings.some(line => line.includes('unsubscribe failed')));
+  assert.ok(env.calls.filter(call => call.url.endsWith('/logout')).length >= 2);
+});
+
 test('simulated page reload restores authentication from refresh cookie without persisting tokens', async () => {
   const env = environment();
   const session1 = env.make();

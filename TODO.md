@@ -2,113 +2,39 @@
 
 ## Task
 
-Add personal rating controls to `ShelfForm` so users can set, change, or safely clear their rating from Book Details and My Books.
+Remove the current user's Web Push subscription on every logout path, so the next person on a shared browser does not keep receiving the previous user's notifications.
 
 ## Scope
 
-Implement the smallest safe frontend-only vertical slice.
+`unsubscribeFromPush` currently runs only from the Account page notification toggle. Header sign-out (`Layout.jsx`) and `session.logout()` do not remove the subscription.
 
-### Rating control
-
-In `frontend/src/components/ReadingForms.jsx`:
-
-- Add a 1–5 rating select to `ShelfForm`.
-- Initialize it from `personal.shelf?.userRating`.
-- Use the same simple select-style interaction already used by `ReviewForm`.
-- Do not introduce a custom star-picker widget.
-
-### Rating updates
-
-When the user changes the rating to 1–5 and saves:
-
-- send `userRating: Number(rating)` to the existing `POST /api/user-books` endpoint
-- rely on the existing backend contract to update the canonical `UserBook.userRating`
-- rely on existing backend behavior to synchronize an existing review rating and refresh rating aggregates
-
-IMPORTANT:
-
-If the rating has NOT changed, do not include `userRating` in the request payload.
-
-Status/date-only shelf saves must preserve the existing behavior and must not trigger unnecessary rating writes.
-
-### Rating clearing
-
-When no review exists:
-
-- show a `No rating` option
-- if the user changes from an existing rating to `No rating`, send `userRating: null`
-
-When a review exists:
-
-- do not allow selecting `No rating`
-- show short explanatory guidance that the rating cannot be removed while a review exists
-- never submit `userRating: null`
-
-The existing backend `REVIEW_REQUIRES_RATING` protection remains authoritative.
-
-## Backend
-
-No backend, validator, schema, migration, or database changes.
-
-Use the existing:
-
-- `shelfSchema`
-- `POST /api/user-books`
-- `saveShelf()`
-
-contracts exactly as they exist.
+- On every logout, remove the subscription in the browser (`PushManager.unsubscribe`) and on the server (`DELETE /api/push/subscriptions`).
+- Perform the server delete while the user is still authenticated, before the session is cleared or revoked.
+- Logout must still finish if unsubscribing fails, there is no subscription, push is unsupported, or notification permission is not granted.
+- Keep the Account page enable/disable toggle behavior unchanged.
+- The delete endpoint already exists. No backend contract, schema, or deployment changes.
 
 ## Tests
 
-Update the focused frontend reading-flow tests to verify:
-
-- ShelfForm renders the current personal rating
-- an unrated book can receive a 1–5 rating
-- an existing rating can be changed
-- clearing sends `userRating: null` when no review exists
-- clearing is unavailable when a review exists
-- status-only/date-only saves do NOT send `userRating` when the rating was unchanged
-- existing read-transition scrolling and shelf behavior remain intact
-
-Do not weaken existing test assertions merely to make the new behavior pass.
+- Logout with an active push subscription deletes it on the server and unsubscribes in the browser, then signs out.
+- Logout with no subscription (including unsupported push and denied permission) still signs out.
+- Logout still signs out when server delete and browser unsubscribe fail.
+- Existing Account push toggle coverage stays in place.
 
 ## Out of Scope
 
-- backend changes
-- database/schema changes
-- ReviewForm redesign
-- custom graphical star widgets
-- rating controls on Discover cards
-- quick shelf actions
-- review deletion controls inside ShelfForm
-- any other UX audit findings
+- Notification preference redesign
+- Push payload, service worker, or database changes
+- Production deploys or Render configuration
 
 ## Acceptance Criteria
 
-1. ShelfForm on Book Details and My Books displays the current personal rating.
-2. Users can set or change a rating from ShelfForm.
-3. Rating changes are sent through the existing `/api/user-books` contract.
-4. Existing reviews remain rating-consistent through the existing backend synchronization behavior.
-5. Users without a review can clear an existing rating.
-6. Users with a review cannot select or submit a cleared/null rating and see explanatory guidance.
-7. Saving shelf status or finished date without changing the rating does not send `userRating`.
-8. Existing shelf status, finished-date, removal, and read-transition scrolling behavior does not regress.
-9. No backend or database changes are made.
+1. Every logout path removes the push subscription both in the browser (PushManager unsubscribe) and on the server (existing push-subscription delete endpoint).
+2. Logout always completes, even if unsubscribing fails, there is no subscription, push isn't supported, or permission isn't granted. Unsubscribe must not block or break logout. The server-side delete happens while the user is still authenticated.
+3. The existing Account.jsx push toggle keeps working as before.
+4. Tests cover logout with an active subscription, without one, and when unsubscribe fails.
+5. All existing backend and frontend tests and CI pass.
 
-## Verification
+## Done
 
-Run focused frontend verification first, then appropriate broader checks:
-
-- focused `frontend/tests/reading-flow.test.js`
-- full frontend test suite
-- frontend production build
-
-Run backend tests only if needed to verify an existing backend contract; no backend code is expected to change.
-
-## Done When
-
-- acceptance criteria are satisfied
-- focused and relevant frontend tests pass
-- frontend build passes
-- only task-required files changed
-- implementation is ready for QA
+- Personal rating controls on ShelfForm (merged in PR #19).
