@@ -99,6 +99,8 @@ function gravatarUrlIsSafe(url) {
 
 export function isAllowedAvatarUrl(value, allowedHosts = DEFAULT_AVATAR_HOSTS) {
   if (typeof value !== 'string' || value.length === 0 || value.length > 2048) return false;
+  // Reject ASCII controls and spaces. The null byte in the class is intentional.
+  // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u0020\\]/.test(value)) return false;
   let url;
   try {

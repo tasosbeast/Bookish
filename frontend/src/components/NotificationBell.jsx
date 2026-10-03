@@ -117,6 +117,8 @@ export function NotificationBell({ userId }) {
       navigate('/friends?tab=requests');
     } else {
       navigate(`/books/${item.review.bookId}?reviewId=${item.review.id}#review-${item.review.id}`, {
+        // Captured when the notification is clicked, not while rendering.
+        // eslint-disable-next-line react-hooks/purity
         state: { jump: Date.now() }
       });
     }

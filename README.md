@@ -14,7 +14,7 @@ The committed initial migration creates all tables, including refresh sessions, 
 
 ## Verification
 
-`npm test` runs validation, HTTP security, JWT and retry tests without a database. `npm run test:integration` requires `TEST_DATABASE_URL` pointing at a dedicated, migrated test database whose name ends in `_test`; without it the suite is explicitly skipped, which means integration verification is **incomplete**, not passed. Integration tests create and remove only their own fixtures. Never point tests or test migrations at a development or production database; never reset an existing database for verification.
+`npm test` runs the backend unit suite. It preloads `tests/setup.js` and runs test files one at a time, so no extra Node flags are required. `npm run lint` checks the backend and the frontend. `npm run test:integration` requires `TEST_DATABASE_URL` pointing at a dedicated, migrated test database whose name ends in `_test`; without it the suite is explicitly skipped, which means integration verification is **incomplete**, not passed. Integration tests create and remove only their own fixtures. Never point tests or test migrations at a development or production database; never reset an existing database for verification.
 
 With Docker Desktop running, start the dedicated test server and run in a separate PowerShell session. `compose.test.yaml` uses port 55433 and its own volume, separate from the development database on port 5432:
 

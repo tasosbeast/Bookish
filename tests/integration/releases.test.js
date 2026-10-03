@@ -95,8 +95,8 @@ test('PostgreSQL: GET /api/releases rolling date windows, sorting, limits and da
     // 9. Book with provenance
     const bWithProv = await createTestBook('Book With Provenance', dateProv, { withProvenance: true });
     // 10 & 11: Two books on same day for tie-breaking
-    const bTieA = await createTestBook('Book Tie A', dateMidNew);
-    const bTieB = await createTestBook('Book Tie B', dateMidNew);
+    await createTestBook('Book Tie A', dateMidNew);
+    await createTestBook('Book Tie B', dateMidNew);
 
     // Verify GET /api/releases?asOf=... is rejected with 400
     await request(app)

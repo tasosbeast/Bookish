@@ -36,7 +36,7 @@ export function mapEdition(isbn, edition, authors, work = {}) {
   const date = text(edition.publish_date) ?? '';
   // Accept a single explicit year, not ranges, approximate dates or work first-publication dates.
   const years = date.match(/\b\d{4}\b/g) ?? [];
-  const year = years.length === 1 && !/[?\[\]]|circa|about|before|after|\bc\./i.test(date) ? Number(years[0]) : null;
+  const year = years.length === 1 && !/[?[\]]|circa|about|before|after|\bc\./i.test(date) ? Number(years[0]) : null;
   const cover = (Array.isArray(edition.covers) ? edition.covers : []).find(id => Number.isSafeInteger(id) && id > 0);
   const description = value => text(typeof value === 'object' && value ? value.value : value);
   return { isbn, title, author: [...new Set(authors.map(a => a.trim()))].join(', '),

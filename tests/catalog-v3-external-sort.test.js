@@ -79,7 +79,7 @@ test('external-sort snapshot build stays deterministic with bounded chunks and n
   };
   const total = 20_000;
   const first = await buildSnapshotIndex({ ...options, records: records(total), outputPath: firstPath });
-  const second = await buildSnapshotIndex({ ...options, records: records(total, true), outputPath: secondPath });
+  await buildSnapshotIndex({ ...options, records: records(total, true), outputPath: secondPath });
   assert.equal(first.recordCount, total);
   assert.equal(first.statistics.duplicateRecords, 1);
   assert.equal(first.statistics.duplicateIsbnGroups, 2);

@@ -1,7 +1,7 @@
 import { normalizeIsbn13 } from './normalize.js';
 import { workIdentity, compatibleIdentity } from './work-identity.js';
 import { serializePublicationDate } from '../../src/services/books.js';
-import { PrhClient, PrhApiError } from '../../src/services/prh-api.js';
+import { PrhClient } from '../../src/services/prh-api.js';
 import { mapPrhCategoriesToGenres } from './prh-genre-map.js';
 import {
   importReleaseCatalog,
@@ -268,7 +268,7 @@ export async function syncPrhReleases(db, options = {}) {
     let normalizedRemoteIsbn = null;
     try {
       normalizedRemoteIsbn = normalizeIsbn13(String(remoteTitle.isbn || remoteTitle.isbnHyphenated || ''));
-    } catch {}
+    } catch { /* an invalid ISBN is rejected below */ }
 
     if (!normalizedRemoteIsbn || normalizedRemoteIsbn !== source.sourceIsbn) {
       refresh.identityConflicts++;

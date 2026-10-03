@@ -40,7 +40,7 @@ Choose verification based on the risk of the change.
 
 ### Backend-only UI-independent changes
 
-Run focused tests first. Run `npm test` when the change can affect shared backend behavior.
+Run focused tests first. Run `npm test` when the change can affect shared backend behavior. Run `npm run lint` when JavaScript or JSX changes.
 
 ### Prisma/schema/database changes
 

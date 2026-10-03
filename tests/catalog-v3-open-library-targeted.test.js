@@ -36,7 +36,7 @@ async function withTempDir(fn) {
       try {
         if (typeof resource === 'function') await resource();
         else if (typeof resource?.close === 'function') resource.close();
-      } catch {}
+      } catch { /* cleanup continues if one resource fails */ }
     }
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   }

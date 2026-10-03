@@ -70,7 +70,6 @@ export class PrhClient {
 
     const delimiter = pathAndQuery.includes('?') ? '&' : '?';
     const rawUrl = `${this.baseUrl}${pathAndQuery}${delimiter}api_key=${encodeURIComponent(this.apiKey)}`;
-    const sanitizedTarget = sanitizeUrl(rawUrl);
     const accepted = new Set(acceptedStatuses);
 
     for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
@@ -112,7 +111,6 @@ export class PrhClient {
         }
 
         const isAbortOrTimeout = error?.name === 'AbortError' || error?.name === 'TimeoutError' || error?.code === 'ETIMEDOUT';
-        const retryable = true;
 
         if (attempt < this.maxAttempts) {
           const waitMs = this.backoffMs[attempt - 1] ?? 1000;

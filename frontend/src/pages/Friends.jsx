@@ -131,7 +131,7 @@ function SuggestionsTab({ onSentRequest, relationshipRevision }) {
         title="We need a little more reading history first."
         action={<Link to="/my-books" className="button secondary">My Books</Link>}
       >
-        Add or rate at least 5 books you've actually read and we'll start finding readers with similar taste.
+        Add or rate at least 5 books you&apos;ve actually read and we&apos;ll start finding readers with similar taste.
       </EmptyState>
     );
   }

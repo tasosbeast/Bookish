@@ -4,12 +4,10 @@ import {
   PrhClient,
   PrhApiError,
   sanitizeUrl,
-  formatPrhDate,
 } from '../src/services/prh-api.js';
 import {
   syncPrhReleases,
   PrhSyncError,
-  calculateDefaultDateWindow,
   formatPreferenceRank,
   isEnglishPrhLanguage,
 } from '../scripts/catalog/prh-sync.js';
@@ -113,7 +111,7 @@ function createMockDb({ books = [], genres = [], releaseSources = [] } = {}) {
       },
     },
     genre: {
-      findMany: async ({ where, select } = {}) => {
+      findMany: async ({ where } = {}) => {
         let results = Array.from(genreStore.values());
         if (where?.slug?.in) {
           results = results.filter(g => where.slug.in.includes(g.slug));
@@ -122,7 +120,7 @@ function createMockDb({ books = [], genres = [], releaseSources = [] } = {}) {
       },
     },
     releaseMetadataSource: {
-      findMany: async ({ where, include, select } = {}) => {
+      findMany: async ({ where, include } = {}) => {
         let list = Array.from(sourceStore.values());
         if (where?.provider) {
           list = list.filter(s => s.provider === where.provider);

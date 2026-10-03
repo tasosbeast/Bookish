@@ -246,7 +246,7 @@ export default function Account() {
         {!pushLoading && (
           <>
             {!pushSupported ? (
-              <p className="muted small">Browser notifications aren't supported on this device.</p>
+              <p className="muted small">Browser notifications aren&apos;t supported on this device.</p>
             ) : pushPermission === 'denied' ? (
               <p className="muted small">Notifications are blocked in your browser settings.</p>
             ) : pushSubscribed ? (

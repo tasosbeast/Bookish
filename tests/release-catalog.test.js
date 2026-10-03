@@ -1,13 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  isValidCalendarDate,
-  isValidHttpsUrl,
   parseReleaseCatalogCsv,
   validateReleaseCatalogRecords,
   importReleaseCatalog,
   ReleaseCatalogError,
-  EXPECTED_HEADERS,
   deriveReleaseProvider,
 } from '../scripts/catalog/release-catalog.js';
 
@@ -82,7 +79,7 @@ function createMockDb({ books = [], genres = [], releaseSources = [] } = {}) {
       },
     },
     genre: {
-      findMany: async ({ where, select } = {}) => {
+      findMany: async ({ where } = {}) => {
         let results = Array.from(genreStore.values());
         if (where?.slug?.in) {
           results = results.filter(g => where.slug.in.includes(g.slug));
@@ -93,7 +90,7 @@ function createMockDb({ books = [], genres = [], releaseSources = [] } = {}) {
     releaseMetadataSource: {
       findMany: async () => [...sourceStore.values()],
     },
-    $transaction: async (fn, opts) => {
+    $transaction: async (fn, _opts) => {
       // Snapshot state for rollback
       const snapshotBooks = new Map(Array.from(bookStore.entries()).map(([k, v]) => [k, { ...v }]));
       const snapshotBookGenres = [...bookGenresStore];
@@ -156,7 +153,7 @@ function createMockDb({ books = [], genres = [], releaseSources = [] } = {}) {
           },
         },
         genre: {
-          findMany: async ({ where, select } = {}) => {
+          findMany: async ({ where } = {}) => {
             let results = Array.from(genreStore.values());
             if (where?.slug?.in) {
               results = results.filter(g => where.slug.in.includes(g.slug));

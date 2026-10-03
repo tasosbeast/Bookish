@@ -102,6 +102,8 @@ export default function Calendar() {
   const resource = useResource(`/calendar?from=${from}&to=${to}`, 'required');
   const todayStr = getLocalTodayString();
 
+  // Depend on the events array only. The compiler infers the whole payload.
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const eventsByDate = useMemo(() => {
     const map = new Map();
     if (resource.data?.events) {

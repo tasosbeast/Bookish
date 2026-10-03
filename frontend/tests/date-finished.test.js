@@ -127,8 +127,6 @@ test('Date finished frontend: visibility, defaulting, editing, future constraint
   assert.equal(apiCalls[0].userRating, undefined, 'Date-only save with unchanged rating omits userRating');
 
   // Case 29: Changing date does not disturb rating/review forms
-  let reviewText = 'Initial thoughts';
-  let reviewRating = '4';
   const personalCombined = {
     bookId: 'b-comb',
     shelf: { status: 'read', finishedOn: '2026-09-01', userRating: 4 },

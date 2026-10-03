@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { syncPrhReleases, PrhSyncError } from './catalog/prh-sync.js';
+import { syncPrhReleases } from './catalog/prh-sync.js';
 
 let db;
 

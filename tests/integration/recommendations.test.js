@@ -154,9 +154,9 @@ test('PostgreSQL: Top Picks recommendations service and API endpoints',
     await request(app).post('/api/user-books').auth(userMain.token, { type: 'bearer' })
       .send({ bookId: sciFiRated.id, status: 'read', userRating: 5 }).expect(200);
 
-    const prolific1 = await createBook('Prolific SciFi 1', 'Prolific Author', [sciFiGenre], { ratingsCount: 100 });
-    const prolific2 = await createBook('Prolific SciFi 2', 'Prolific Author', [sciFiGenre], { ratingsCount: 90 });
-    const prolific3 = await createBook('Prolific SciFi 3', 'Prolific Author', [sciFiGenre], { ratingsCount: 80 });
+    await createBook('Prolific SciFi 1', 'Prolific Author', [sciFiGenre], { ratingsCount: 100 });
+    await createBook('Prolific SciFi 2', 'Prolific Author', [sciFiGenre], { ratingsCount: 90 });
+    await createBook('Prolific SciFi 3', 'Prolific Author', [sciFiGenre], { ratingsCount: 80 });
 
     const resDiversity = await request(app).get('/api/recommendations/top-picks?limit=6')
       .auth(userMain.token, { type: 'bearer' }).expect(200);

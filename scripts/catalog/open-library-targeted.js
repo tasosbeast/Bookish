@@ -644,12 +644,12 @@ export async function buildTargetedOpenLibraryArtifact({
     };
   } catch (cause) {
     if (database && transactionOpen) {
-      try { database.exec('ROLLBACK;'); } catch {}
+      try { database.exec('ROLLBACK;'); } catch { /* rollback is best-effort */ }
     }
     throw cause;
   } finally {
     if (database) {
-      try { database.close(); } catch {}
+      try { database.close(); } catch { /* close is best-effort */ }
     }
     await fs.rm(tempPath, { force: true }).catch(() => {});
     await fs.rm(`${tempPath}-journal`, { force: true }).catch(() => {});

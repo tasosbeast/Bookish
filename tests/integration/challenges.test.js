@@ -64,7 +64,7 @@ test('PostgreSQL: Reading Challenges v1 and Trophies API, event counting, month 
     const auth = (reader, method, path) => request(app)[method](path).auth(reader.token, { type: 'bearer' });
 
     const [userA, userB] = await Promise.all(['a', 'b'].map(signup));
-    const [book1, book2, book3, book4, book5, book6] = await Promise.all(
+    const [book1, book2, book3, book4, book5] = await Promise.all(
       ['B1', 'B2', 'B3', 'B4', 'B5', 'B6'].map(createBook)
     );
 
