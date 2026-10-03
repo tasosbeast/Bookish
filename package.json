@@ -30,7 +30,8 @@
     "catalog:ol-targeted-extract": "node --experimental-sqlite scripts/ol-targeted-extract.js",
     "release:readiness": "node scripts/release-data-readiness.js",
     "release:prh-sync": "node scripts/sync-prh-releases.js",
-    "test": "node --experimental-sqlite --test tests/*.test.js",
+    "test": "node --experimental-sqlite --import ./tests/setup.js --test --test-concurrency=1 tests/*.test.js",
+    "lint": "eslint .",
     "test:integration": "node --test --test-concurrency=1 tests/integration/*.test.js",
     "build:frontend-only": "node scripts/frontend-only-build.js",
     "db:generate": "prisma generate",
@@ -58,6 +59,11 @@
     "mysql2": "3.24.3"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.13.0",
     "prisma": "^7.0.0",
     "supertest": "^7.1.4"
   }

@@ -187,7 +187,7 @@ export default function Feed() {
             </Link>
           }
         >
-          When your friends start, finish, rate, or review books, you'll see it here.
+          When your friends start, finish, rate, or review books, you&apos;ll see it here.
         </EmptyState>
       )}
 

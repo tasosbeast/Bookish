@@ -4,7 +4,6 @@ import {
   getUtcMonthBounds,
   calculateChallengeProgress,
   deriveTrophies,
-  CHALLENGE_GOAL,
 } from '../src/services/challenges.js';
 
 test('Challenges unit: getUtcMonthBounds computes exact UTC boundaries and keys', () => {

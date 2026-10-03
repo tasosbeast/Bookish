@@ -135,7 +135,7 @@ export default function Discover() {
             title="Top Picks for You"
             action={<Link to="/my-books" className="button secondary">My Books</Link>}
           >
-            Rate at least 3 books you've read and we'll start learning your taste.
+            Rate at least 3 books you&apos;ve read and we&apos;ll start learning your taste.
           </EmptyState>
         ) : topPicksResource.data?.data?.length > 0 ? (
           <div className="book-grid">

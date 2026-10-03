@@ -6,7 +6,7 @@ import request from 'supertest';
 import { app } from '../../src/app.js';
 import { prisma } from '../../src/lib/prisma.js';
 import { signTokens, digest } from '../../src/services/tokens.js';
-import { saveShelf, removeShelf } from '../../src/services/ratings.js';
+import { saveShelf } from '../../src/services/ratings.js';
 import { getCurrentChallenge, getUserTrophies } from '../../src/services/challenges.js';
 import { listFeed } from '../../src/services/feed.js';
 import { personalBook, listShelves } from '../../src/services/user-books.js';
@@ -160,7 +160,7 @@ test('PostgreSQL: Editable Date finished support for books marked Read',
     // 13. existing migrated finished_reading activities receive date from createdAt
     // 14. non-finished activities keep finishedOn null
     const pastTimestamp = new Date('2026-05-15T14:30:00.000Z');
-    const directFinishedAct = await prisma.activity.create({
+    await prisma.activity.create({
       data: {
         userId: userA.userId,
         bookId: book4.id,
@@ -232,7 +232,7 @@ test('PostgreSQL: Editable Date finished support for books marked Read',
     assert.ok(bobBook5Activity, 'Feed shows activity created after friendship even with backdated finishedOn');
 
     // If an activity was created before friendship acceptedAt, it is excluded from Feed regardless of finishedOn
-    const oldCreatedActivity = await prisma.activity.create({
+    await prisma.activity.create({
       data: {
         userId: userB.userId,
         bookId: book6.id,

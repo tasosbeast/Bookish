@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { prisma } from '../../src/lib/prisma.js';
 import { enrichCatalogGenres } from '../../scripts/catalog/genre-enrichment.js';
 
-test('PostgreSQL: catalog genre enrichment preserves Book.id, user data, replaces stale links, and leaves non-curated links untouched', { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async t => {
+test('PostgreSQL: catalog genre enrichment preserves Book.id, user data, replaces stale links, and leaves non-curated links untouched', { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async () => {
   const tag = randomUUID().slice(0, 8);
   const seed = Number.parseInt(tag, 16) % 800000000 + 200000000;
 
@@ -39,7 +39,7 @@ test('PostgreSQL: catalog genre enrichment preserves Book.id, user data, replace
     [curatedIsbn2, [testSlug1]],
   ]);
 
-  let user, user2, curatedBook1, curatedBook2, nonCuratedBook, staleGenre, nonCuratedGenre, canonGenre1;
+  let user, user2, curatedBook1, curatedBook2, nonCuratedBook, staleGenre, nonCuratedGenre;
 
   try {
     user = await prisma.user.create({
@@ -72,7 +72,7 @@ test('PostgreSQL: catalog genre enrichment preserves Book.id, user data, replace
       },
     });
 
-    canonGenre1 = await prisma.genre.create({
+    await prisma.genre.create({
       data: {
         name: `Canonical Genre 1 ${tag}`,
         slug: testSlug1,
@@ -121,7 +121,7 @@ test('PostgreSQL: catalog genre enrichment preserves Book.id, user data, replace
     });
 
     // Relations on Curated Book 1: UserBook, Review, ReviewLike
-    const userBook = await prisma.userBook.create({
+    await prisma.userBook.create({
       data: {
         userId: user.id,
         bookId: curatedBook1.id,
@@ -140,7 +140,7 @@ test('PostgreSQL: catalog genre enrichment preserves Book.id, user data, replace
       },
     });
 
-    const reviewLike = await prisma.reviewLike.create({
+    await prisma.reviewLike.create({
       data: {
         userId: user2.id,
         reviewId: review.id,

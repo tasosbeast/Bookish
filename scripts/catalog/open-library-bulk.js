@@ -20,7 +20,6 @@ export const AUTHOR_SHARD_COUNT = 64;
 const AUTHOR_LOOKUP_FILE = 'lookup.sqlite';
 const AUTHOR_LOOKUP_BATCH_SIZE = 50_000;
 
-const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 const plainObject = value => value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 
 function fail(code, message) {
@@ -435,12 +434,12 @@ export async function buildOpenLibraryAuthorLookup({ indexPath, snapshotId, batc
     };
   } catch (cause) {
     if (database && transactionOpen) {
-      try { database.exec('ROLLBACK;'); } catch {}
+      try { database.exec('ROLLBACK;'); } catch { /* rollback is best-effort */ }
     }
     throw cause;
   } finally {
     if (database) {
-      try { database.close(); } catch {}
+      try { database.close(); } catch { /* close is best-effort */ }
     }
     await fs.rm(tempPath, { force: true }).catch(() => {});
     await fs.rm(`${tempPath}-journal`, { force: true }).catch(() => {});

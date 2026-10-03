@@ -96,7 +96,7 @@ export async function getFriendSuggestions(userId, { limit = 12 } = {}) {
 
   const scoredCandidates = [];
 
-  for (const [candId, candData] of candidateMap.entries()) {
+  for (const candData of candidateMap.values()) {
     const candEligibleUBs = candData.userBooks.filter(ub => getWeight(ub) > 0);
     if (candEligibleUBs.length < 5) continue;
 

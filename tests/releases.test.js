@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import {
   calculateReleaseWindows,
   getUtcTodayString,
-  getReleases,
 } from '../src/services/releases.js';
 import { releasesSchema } from '../src/validators/index.js';
 import { serializeBook } from '../src/services/books.js';

@@ -120,7 +120,7 @@ export default function Challenges() {
             </div>
           ) : (
             <p className="muted small challenge-hint">
-              {goal - progress} more {goal - progress === 1 ? 'book' : 'books'} to earn this month's trophy!
+              {goal - progress} more {goal - progress === 1 ? 'book' : 'books'} to earn this month&apos;s trophy!
             </p>
           )}
         </div>

@@ -12,10 +12,7 @@ import {
   isExactGregorianDay,
   classifyPublicationDatePrecision,
   pilotDisqualificationReason,
-  adaptCanonicalCandidateForScoring,
   buildIsbnMismatchDiagnostic,
-  evaluateSourceEntry,
-  generatePilotSummary,
   planCatalogPilot,
 } from '../scripts/catalog/pilot-planner.js';
 

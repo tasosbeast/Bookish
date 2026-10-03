@@ -42,7 +42,6 @@ test('My Books prevents transient empty-state CTA flicker when clearing filters 
 
     if (resolvePending) {
       return new Promise(resolve => {
-        const prevResolve = resolvePending;
         resolvePending = (overrideEmpty) => {
           const items = overrideEmpty ? [] : [entry(sampleBook, 'currently_reading')];
           resolve(shelfResponse(items));

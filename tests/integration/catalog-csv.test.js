@@ -68,7 +68,7 @@ test('PostgreSQL: CSV catalog import preserves existing Book IDs, ratings, revie
     },
   });
 
-  const reviewLike = await prisma.reviewLike.create({
+  await prisma.reviewLike.create({
     data: {
       userId: user.id,
       reviewId: review.id,
@@ -90,7 +90,7 @@ test('PostgreSQL: CSV catalog import preserves existing Book IDs, ratings, revie
   });
 
   // Book 3: ISBN conflict candidate (DB has title A, CSV will have title B with same ISBN)
-  const existingBook3 = await prisma.book.create({
+  await prisma.book.create({
     data: {
       isbn: existingIsbn3,
       title: `Conflict Target Title ${tag}`,

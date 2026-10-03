@@ -32,12 +32,13 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm ci --prefix frontend
+      - run: npm run lint
       - run: npm run db:validate
       - run: npm run db:generate
       - run: npm run db:deploy
-      - run: npm test -- --test-concurrency=1
+      - run: npm test
       - run: npm run test:integration
-      - run: npm ci --prefix frontend
       - run: npm test --prefix frontend
       - run: npm run build --prefix frontend
         env:

@@ -1,11 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  parseCSV,
   loadSourceFiles,
   analyzeGenreEnrichment,
   enrichCatalogGenres,
-  GenreEnrichmentError,
 } from '../scripts/catalog/genre-enrichment.js';
 
 function createMockDb(initialState = {}) {
