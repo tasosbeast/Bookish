@@ -1,0 +1,12 @@
+/works/OL10W	\N	Want to Read	2017-11-08
+/works/OL10W	/books/OL10M	Want to Read	2017-11-09
+/works/OL10W	\N	Currently Reading	2017-12-01
+/works/OL10W	\N	Already Read	2018-01-01
+/works/OL10W	\N	Already Read	2018-02-01
+/works/OL12W	\N	Already Read	2018-03-01
+/works/OL888W	\N	Want to Read	2018-01-01
+/works/OL10W	\N	Stopped Reading	2018-04-01
+/works/OL10W	\N	want to read	2018-04-02
+/works/OL10W	\N	Want to Read
+/works/OL10W	NOPE	Want to Read	2018-04-03
+/works/OL10W	\N	Want to Read	not-a-date

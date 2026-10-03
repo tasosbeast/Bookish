@@ -130,6 +130,17 @@ npm run catalog:ol-snapshot-build -- --input path/to/ol_dump_editions.txt.gz --a
 
 The derived `lookup.sqlite` is built beside `index.json` through a validated temporary database and atomic rename; the NDJSON author index remains canonical. The editions parser uses indexed exact-key SQLite lookups when that file exists and rejects an invalid or snapshot-mismatched database instead of falling back. Small fixture indexes without `lookup.sqlite` retain the NDJSON fallback. These commands are entirely local: they do not download files, contact providers, or access PostgreSQL.
 
+### Open Library works index
+
+The works index is a separate local artifact. It streams an Open Library works dump and attaches ratings and reading-log counts for works in that dump. Use works, ratings, and reading-log dumps from the same Open Library dump date as the existing editions and author artifacts. For those artifacts the snapshot id is `open-library-2026-08-31`. Run the disk preflight against the works dump before a full local build:
+
+```powershell
+npm run catalog:disk-preflight -- --directory scripts/catalog-cache --input path/to/ol_dump_works.txt.gz
+npm run catalog:ol-work-index-build -- --works path/to/ol_dump_works.txt.gz --ratings path/to/ol_dump_ratings.txt.gz --reading-log path/to/ol_dump_reading-log.txt.gz --snapshot-id open-library-2026-08-31
+```
+
+The builder reads only those local files. It writes a validated SQLite database and `index.json` under `scripts/catalog-cache/open-library-works` (override with `--output`). It does not download dumps, contact providers, or access PostgreSQL.
+
 Before a large local bulk build, check the target volume. The preflight uses an intentionally conservative 8× input-size temporary-space estimate plus a reserve; it refuses the check with a non-zero exit status when that requirement exceeds free space. Override the amplification only with measurements from a comparable local build.
 
 ```powershell
