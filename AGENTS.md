@@ -78,6 +78,12 @@ Before finishing:
 
 Update documentation only when behavior, setup, contracts, or verification instructions actually changed. Do not rewrite large documentation sections unnecessarily.
 
+## Cursor Cloud
+
+Cloud Agent VMs install dependencies with `npm ci` at the repo root and in `frontend/`, generate the Prisma client, and use the VM's PostgreSQL 17 (not Docker Compose). On boot, PostgreSQL starts, migrations deploy to `bookish` and `bookish_test`, and the dev servers run in tmux sessions `bookish-api` (port 3000) and `bookish-web` (port 5173).
+
+A missing root `.env` is created with local JWT secrets and `DATABASE_URL=postgresql://bookish:bookish@127.0.0.1:5432/bookish`. `frontend/.env` sets `VITE_API_BASE_URL=http://localhost:3000/api`, which must stay aligned with `CLIENT_ORIGIN=http://localhost:5173`. Integration tests use `postgresql://bookish:bookish@127.0.0.1:5432/bookish_test`. Do not point them at the `bookish` development database.
+
 ## Final response
 
 Report only:
