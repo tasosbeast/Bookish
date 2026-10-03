@@ -141,9 +141,12 @@ export default function Account() {
     setError(null);
     setBusy(true);
     try {
+      // An unchanged picture is omitted so a stored legacy URL is not revalidated.
+      const body = { bio };
+      if (profilePicture !== (user?.profilePicture ?? '')) body.profilePicture = profilePicture;
       const result = await api('/auth/me', {
         method: 'PATCH',
-        body: { bio, profilePicture },
+        body,
         auth: 'required',
       });
       session.updateUser(result.user);
