@@ -1,4 +1,11 @@
-import { api } from './api.js';
+// The API client is injected from api.js so this module does not import it back.
+let pushApi = async () => {
+  throw new Error('Push client is not configured.');
+};
+
+export function configurePushClient(client) {
+  pushApi = client;
+}
 
 export function isPushSupported() {
   return (
@@ -32,7 +39,7 @@ export async function getExistingSubscription() {
 export async function checkSubscriptionStatus(endpoint) {
   if (!endpoint || !isPushSupported()) return false;
   try {
-    const result = await api('/push/subscriptions/status', {
+    const result = await pushApi('/push/subscriptions/status', {
       method: 'POST',
       auth: 'required',
       body: { endpoint },
@@ -58,7 +65,7 @@ export async function subscribeToPush() {
     await navigator.serviceWorker.ready;
   }
 
-  const keyResponse = await api('/push/public-key', { auth: 'none' });
+  const keyResponse = await pushApi('/push/public-key', { auth: 'none' });
   const publicKey = keyResponse?.data?.publicKey;
   if (!publicKey) {
     throw new Error('Push notifications are currently unavailable.');
@@ -77,7 +84,7 @@ export async function subscribeToPush() {
   const p256dh = json.keys?.p256dh;
   const authKey = json.keys?.auth;
 
-  await api('/push/subscriptions', {
+  await pushApi('/push/subscriptions', {
     method: 'POST',
     auth: 'required',
     body: {
@@ -92,23 +99,51 @@ export async function subscribeToPush() {
   return subscription;
 }
 
-export async function unsubscribeFromPush() {
+// Browser-only. Used when the session is already unauthenticated, so no server delete is attempted.
+export async function dropBrowserPushSubscription() {
   if (!isPushSupported()) return false;
-  const registration = await navigator.serviceWorker.getRegistration();
-  if (!registration || !registration.pushManager) return false;
-  const subscription = await registration.pushManager.getSubscription();
-  if (!subscription) return false;
-
-  const endpoint = subscription.endpoint;
   try {
-    await api('/push/subscriptions', {
-      method: 'DELETE',
-      auth: 'required',
-      body: { endpoint },
-    });
+    const registration = await navigator.serviceWorker.getRegistration();
+    const subscription = await registration?.pushManager?.getSubscription();
+    if (!subscription) return false;
+    return await subscription.unsubscribe();
   } catch (err) {
-    console.warn('[push] Failed to remove subscription from backend:', err);
+    console.warn('[push] Failed to unsubscribe:', err);
+    return false;
   }
+}
 
-  return subscription.unsubscribe();
+export async function unsubscribeFromPush({ signal } = {}) {
+  if (signal?.aborted || !isPushSupported()) return false;
+  try {
+    const registration = await navigator.serviceWorker.getRegistration();
+    if (!registration?.pushManager) return false;
+    const subscription = await registration.pushManager.getSubscription();
+    if (!subscription) return false;
+
+    try {
+      await pushApi('/push/subscriptions', {
+        method: 'DELETE',
+        auth: 'required',
+        body: { endpoint: subscription.endpoint },
+        signal,
+      });
+    } catch (err) {
+      // Abort is the logout deadline. Any other server failure is logged once here.
+      if (err?.name !== 'AbortError' && !signal?.aborted) {
+        console.warn('[push] Failed to remove subscription from backend:', err);
+      }
+    }
+
+    return await subscription.unsubscribe();
+  } catch (err) {
+    if (err?.name === 'AbortError' || signal?.aborted) return false;
+    // Account calls this without a signal and still needs the rejection.
+    // Logout passes a signal and must not log the same failure again upstream.
+    if (signal) {
+      console.warn('[push] Failed to unsubscribe:', err);
+      return false;
+    }
+    throw err;
+  }
 }

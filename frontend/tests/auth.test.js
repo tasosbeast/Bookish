@@ -174,8 +174,89 @@ test('logout cleanup runs while authenticated and cannot block sign-out', async 
   }
   assert.equal(failing.getSnapshot().status, 'guest');
   assert.equal((await failing.credentials()).token, null);
-  assert.ok(warnings.some(line => line.includes('unsubscribe failed')));
+  assert.equal(warnings.length, 0);
   assert.ok(env.calls.filter(call => call.url.endsWith('/logout')).length >= 2);
+});
+
+test('hung push cleanup still signs out', { timeout: 2000 }, async () => {
+  const env = environment();
+  const session = env.make({
+    logoutCleanupMs: 30,
+    beforeLogout: () => new Promise(() => {}),
+  });
+  await session.authenticate('login', { email: 'reader@example.com', password: 'fixture' });
+  const started = Date.now();
+  await session.logout();
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 1000, `logout waited ${elapsed}ms`);
+  assert.equal(session.getSnapshot().status, 'guest');
+  assert.equal((await session.credentials()).token, null);
+  assert.ok(env.calls.some(call => call.url.endsWith('/logout')));
+});
+
+test('logout aborts a refresh started by cleanup and still signs out', { timeout: 2000 }, async () => {
+  let nowMs = 10_000;
+  let hangRefresh = false;
+  const calls = [];
+  const env = environment();
+  const session = env.make({
+    now: () => nowMs,
+    logoutCleanupMs: 40,
+    fetcher: async (url, options) => {
+      calls.push(url);
+      if (url.endsWith('/logout')) return new Response(null, { status: 204 });
+      if (url.endsWith('/me')) return json({ user: { id: 'reader', username: 'reader' } });
+      if (url.endsWith('/refresh')) {
+        if (!hangRefresh) return failure(401, 'SESSION_EXPIRED');
+        return new Promise((resolve, reject) => {
+          const abort = () => reject(new DOMException('The operation was aborted.', 'AbortError'));
+          if (options?.signal?.aborted) abort();
+          else options?.signal?.addEventListener('abort', abort, { once: true });
+        });
+      }
+      return json({ accessToken: jwt(nowMs / 1000 + 10), expiresIn: 10, user: { id: 'reader', username: 'reader' } });
+    },
+    beforeLogout: ({ signal } = {}) => session.credentials({ signal }),
+  });
+  await session.initialize();
+  await session.authenticate('login', { email: 'reader@example.com', password: 'fixture' });
+  hangRefresh = true;
+  nowMs += 20_000;
+  const started = Date.now();
+  await session.logout();
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 1000, `logout waited ${elapsed}ms`);
+  assert.equal(session.getSnapshot().status, 'guest');
+  assert.equal(session.getSnapshot().error, null);
+  const logoutAt = calls.findIndex(url => url.endsWith('/logout'));
+  const refreshAt = calls.findLastIndex(url => url.endsWith('/refresh'));
+  assert.ok(refreshAt >= 0 && logoutAt > refreshAt);
+});
+
+test('forced sign-out drops local push state without treating explicit logout as forced', async () => {
+  const env = environment();
+  let drops = 0;
+  const session = env.make({
+    onSignedOut: () => { drops += 1; },
+    fetcher: async url => {
+      if (url.endsWith('/refresh')) return failure(401, 'SESSION_EXPIRED');
+      if (url.endsWith('/me')) return json({ user: { id: 'reader', username: 'reader' } });
+      if (url.endsWith('/logout')) return new Response(null, { status: 204 });
+      return json({ accessToken: jwt(Date.now() / 1000 + 900), expiresIn: 900, user: { id: 'reader', username: 'reader' } });
+    },
+  });
+  await session.authenticate('login', { email: 'reader@example.com', password: 'fixture' });
+  assert.equal(await session.refresh((await session.credentials()).token), null);
+  assert.equal(session.getSnapshot().status, 'guest');
+  assert.equal(drops, 1);
+  await session.authenticate('login', { email: 'reader@example.com', password: 'fixture' });
+  session.invalidate((await session.credentials()).token);
+  assert.equal(session.getSnapshot().status, 'guest');
+  assert.equal(drops, 2);
+  await session.authenticate('login', { email: 'reader@example.com', password: 'fixture' });
+  await session.logout();
+  assert.equal(session.getSnapshot().status, 'guest');
+  assert.equal(drops, 2);
 });
 
 test('simulated page reload restores authentication from refresh cookie without persisting tokens', async () => {

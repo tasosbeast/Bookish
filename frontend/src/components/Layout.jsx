@@ -23,7 +23,7 @@ export default function Layout() {
       <div className="account-nav">{auth.status === 'restoring' ? <span className="muted small">Opening your bookshelf…</span> : auth.user ? <>
         <NotificationBell userId={auth.user.id} />
         <Link className="reader-name" to="/account" title="View account"><span className="avatar">{auth.user.username.slice(0, 1).toUpperCase()}</span><span>{auth.user.username}</span></Link>
-        <button className="text-button" disabled={busy} onClick={logout}>Sign out</button>
+        <button className="text-button" disabled={busy} onClick={logout}>{busy ? 'Signing out…' : 'Sign out'}</button>
       </> : <><Link className="login-link" to="/login">Log in</Link><Link className="button compact" to="/signup">Join Bookish</Link></>}</div>
     </div></header>
     {(auth.error || logoutError) && <div className="container pt-4"><ErrorNotice error={logoutError || auth.error} retry={auth.error ? () => session.refresh().catch(() => {}) : undefined} /></div>}

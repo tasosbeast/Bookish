@@ -29,6 +29,14 @@ test('logout removes the push subscription without blocking sign-out', { timeout
   let unsubscribeCalled = 0;
   let unsubscribeError = null;
   let permissionRequests = 0;
+  let subscriptionGate = null;
+  let accessExpiresIn = 900;
+  let loginToken = null;
+  let refreshedToken = null;
+
+  function issueToken(expSeconds) {
+    return `header.${btoa(JSON.stringify({ sub: 'user-logout-push', exp: expSeconds }))}.signature`;
+  }
 
   function subscription() {
     return {
@@ -56,7 +64,14 @@ test('logout removes the push subscription without blocking sign-out', { timeout
     };
     globalThis.Notification = dom.window.Notification;
     dom.window.navigator.serviceWorker = {
-      getRegistration: async () => ({ pushManager: { getSubscription: async () => mockSubscription } }),
+      getRegistration: async () => ({
+        pushManager: {
+          getSubscription: async () => {
+            if (subscriptionGate) await subscriptionGate;
+            return mockSubscription;
+          },
+        },
+      }),
       register: async () => { throw new Error('register should not run during logout'); },
       ready: Promise.resolve({}),
     };
@@ -78,10 +93,10 @@ test('logout removes the push subscription without blocking sign-out', { timeout
     calls.push({ method, path: url.pathname, body, authorization });
 
     if (url.pathname === '/api/auth/login') {
-      const payload = btoa(JSON.stringify({ sub: 'user-logout-push', exp: Math.floor(Date.now() / 1000) + 900 }));
+      loginToken = issueToken(Math.floor(Date.now() / 1000) + accessExpiresIn);
       return Response.json({
         user: { id: 'user-logout-push', username: 'reader', email: 'reader@example.com' },
-        accessToken: `header.${payload}.signature`,
+        accessToken: loginToken,
         expiresIn: 900,
       });
     }
@@ -89,8 +104,8 @@ test('logout removes the push subscription without blocking sign-out', { timeout
       if (!refreshAllowed) {
         return Response.json({ error: { code: 'SESSION_EXPIRED', message: 'Signed out' } }, { status: 401 });
       }
-      const payload = btoa(JSON.stringify({ sub: 'user-logout-push', exp: Math.floor(Date.now() / 1000) + 900 }));
-      return Response.json({ accessToken: `header.${payload}.signature`, expiresIn: 900 });
+      refreshedToken = issueToken(Math.floor(Date.now() / 1000) + 900);
+      return Response.json({ accessToken: refreshedToken, expiresIn: 900 });
     }
     if (url.pathname === '/api/auth/me') {
       return Response.json({ user: { id: 'user-logout-push', username: 'reader', email: 'reader@example.com' } });
@@ -169,14 +184,24 @@ test('logout removes the push subscription without blocking sign-out', { timeout
   assert.ok(signOut, 'Header offers Sign out');
   const activeStart = calls.length;
   unsubscribeCalled = 0;
+  let releaseSubscription;
+  subscriptionGate = new Promise(resolve => { releaseSubscription = resolve; });
+  let sawSigningOut = false;
   await act(async () => {
     signOut.click();
+    for (let attempt = 0; attempt < 20 && !sawSigningOut; attempt += 1) {
+      if (document.body.textContent.includes('Signing out…')) sawSigningOut = true;
+      else await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    releaseSubscription();
+    subscriptionGate = null;
     for (let attempt = 0; attempt < 50; attempt += 1) {
       const slice = calls.slice(activeStart);
       if (slice.some(call => call.path === '/api/auth/logout') && session.getSnapshot().status === 'guest') break;
       await new Promise(resolve => setTimeout(resolve, 20));
     }
   });
+  assert.equal(sawSigningOut, true, 'Disabled sign-out button says Signing out…');
   const activeCalls = since(activeStart);
   const deleted = activeCalls.find(call => call.path === '/api/push/subscriptions' && call.method === 'DELETE');
   const loggedOut = activeCalls.find(call => call.path === '/api/auth/logout');
@@ -242,4 +267,61 @@ test('logout removes the push subscription without blocking sign-out', { timeout
   assert.equal((await session.credentials()).token, null);
   assert.ok(warnings.some(line => line.includes('delete failed')));
   assert.ok(warnings.some(line => line.includes('browser unsubscribe failed')));
+  assert.equal(warnings.filter(line => line.includes('browser unsubscribe failed')).length, 1);
+  assert.equal(warnings.filter(line => line.includes('delete failed')).length, 1);
+
+  await act(async () => root.unmount());
+  root = null;
+
+  // Expired access token is refreshed before the server delete.
+  accessExpiresIn = -60;
+  deleteStatus = 200;
+  unsubscribeError = null;
+  mockSubscription = subscription();
+  await signIn();
+  const staleToken = loginToken;
+  accessExpiresIn = 900;
+  const expiredStart = calls.length;
+  await signOutSession();
+  const expiredCalls = since(expiredStart);
+  const refreshed = expiredCalls.find(call => call.path === '/api/auth/refresh');
+  const deletedAfterRefresh = expiredCalls.find(call => call.path === '/api/push/subscriptions' && call.method === 'DELETE');
+  const loggedOutAfterRefresh = expiredCalls.find(call => call.path === '/api/auth/logout');
+  assert.ok(refreshed, 'Refreshed the expired access token');
+  assert.ok(deletedAfterRefresh, 'Deleted the push subscription after refresh');
+  assert.ok(loggedOutAfterRefresh, 'Signed out after the delete');
+  assert.ok(expiredCalls.indexOf(refreshed) < expiredCalls.indexOf(deletedAfterRefresh));
+  assert.ok(expiredCalls.indexOf(deletedAfterRefresh) < expiredCalls.indexOf(loggedOutAfterRefresh));
+  assert.equal(deletedAfterRefresh.authorization, `Bearer ${refreshedToken}`);
+  assert.notEqual(deletedAfterRefresh.authorization, `Bearer ${staleToken}`);
+  assert.equal(session.getSnapshot().status, 'guest');
+
+  // getRegistration rejection cannot block sign-out.
+  await signIn();
+  dom.window.navigator.serviceWorker.getRegistration = async () => {
+    throw new Error('registration failed');
+  };
+  const registrationStart = calls.length;
+  await signOutSession();
+  assert.equal(since(registrationStart).some(call => call.path === '/api/push/subscriptions'), false);
+  assert.ok(since(registrationStart).some(call => call.path === '/api/auth/logout'));
+  assert.equal(session.getSnapshot().status, 'guest');
+  assert.equal((await session.credentials()).token, null);
+
+  // Forced sign-out can no longer authenticate a server delete. It still drops the browser subscription.
+  installPushSupport();
+  await signIn();
+  mockSubscription = subscription();
+  refreshAllowed = false;
+  unsubscribeCalled = 0;
+  const forcedStart = calls.length;
+  const forcedToken = (await session.credentials()).token;
+  await act(async () => {
+    assert.equal(await session.refresh(forcedToken), null);
+    await new Promise(resolve => setTimeout(resolve, 20));
+  });
+  refreshAllowed = true;
+  assert.equal(session.getSnapshot().status, 'guest');
+  assert.equal(unsubscribeCalled, 1, 'Forced sign-out unsubscribed in the browser');
+  assert.equal(since(forcedStart).some(call => call.path === '/api/push/subscriptions'), false);
 });
