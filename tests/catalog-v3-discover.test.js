@@ -7,9 +7,12 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import {
+  CATALOG_DISCOVER_FORMAT,
   CATALOG_DISCOVER_SCORING,
+  CATALOG_DISCOVER_VERSION,
   discoverCatalogCandidates,
   popularityScore,
+  writeDiscoverArtifactAtomically,
 } from '../scripts/catalog/discover.js';
 import { buildOpenLibraryWorkIndex, createOpenLibraryWorkLookup } from '../scripts/catalog/open-library-works.js';
 
@@ -523,6 +526,67 @@ test('discover CLI validates arguments and leaves the previous artifact on failu
       '--output', outputPath,
     ]),
     error => error.code === 1 && error.stderr.includes('Work index snapshotId does not match the requested snapshot'),
+  );
+  assert.equal(await fs.readFile(outputPath, 'utf8'), before);
+});
+
+test('writeDiscoverArtifactAtomically leaves the previous artifact unchanged when validation fails', async () => {
+  const directory = await temporaryDirectory();
+  const outputPath = join(directory, 'discover.json');
+  const settings = { snapshotId: SNAPSHOT_ID, limit: 1 };
+  const good = {
+    format: CATALOG_DISCOVER_FORMAT,
+    version: CATALOG_DISCOVER_VERSION,
+    snapshotId: SNAPSHOT_ID,
+    generatedAt: GENERATED_AT,
+    languageCheck: 'pending',
+    scoring: {
+      priorRatings: 20,
+      priorMean: 3.5,
+      alreadyReadWeight: 1,
+      currentlyReadingWeight: 0.75,
+      wantToReadWeight: 0.25,
+      minRatings: 0,
+      minReaders: 10,
+    },
+    counts: {
+      considered: 1,
+      filteredByReason: {
+        invalid_work_key: 0,
+        missing_title: 0,
+        missing_cover: 0,
+        excluded: 0,
+        no_signal: 0,
+        below_min_ratings: 0,
+        below_min_readers: 0,
+      },
+      eligible: 1,
+      selected: 1,
+    },
+    candidates: [{
+      workKey: '/works/OL100W',
+      title: 'Fixture',
+      authorKeys: ['/authors/OL1A'],
+      coverIds: [1],
+      score: popularityScore({
+        ratingsCount: 5,
+        ratingsSum: 20,
+        readingLog: { 'Want to Read': 1, 'Currently Reading': 1, 'Already Read': 10 },
+      }),
+      signals: {
+        ratingsCount: 5,
+        ratingsSum: 20,
+        readingLog: { 'Want to Read': 1, 'Currently Reading': 1, 'Already Read': 10 },
+      },
+    }],
+  };
+  await writeDiscoverArtifactAtomically(outputPath, good, settings);
+  const before = await fs.readFile(outputPath, 'utf8');
+  const bad = { ...good, version: 999 };
+
+  await assert.rejects(
+    () => writeDiscoverArtifactAtomically(outputPath, bad, settings),
+    error => error?.code === 'invalid_discover_artifact',
   );
   assert.equal(await fs.readFile(outputPath, 'utf8'), before);
 });

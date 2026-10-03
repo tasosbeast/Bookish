@@ -1,8 +1,9 @@
 import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { createInterface } from 'node:readline';
-import { dirname, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { CatalogContractError } from './contracts.js';
+import { writeFileAtomic } from './atomic-write.js';
 import { stableJson } from './external-sort.js';
 import { createOpenLibraryWorkLookup } from './open-library-works.js';
 
@@ -404,21 +405,18 @@ function assertMatchesLookup(lookup, candidates) {
   }
 }
 
-async function writeArtifactAtomically(outputPath, artifact, settings) {
-  const temporary = `${outputPath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.mkdir(dirname(outputPath), { recursive: true });
-  try {
-    await fs.writeFile(temporary, `${stableJson(artifact)}\n`, 'utf8');
-    let parsed;
-    try { parsed = JSON.parse(await fs.readFile(temporary, 'utf8')); }
-    catch { fail('invalid_discover_artifact', 'Discover artifact is not valid JSON'); }
-    validateDiscoverArtifact(parsed, settings);
-    if (stableJson(parsed) !== stableJson(artifact)) fail('invalid_discover_artifact', 'Discover artifact did not round-trip');
-    await fs.rename(temporary, outputPath);
-  } catch (cause) {
-    await fs.rm(temporary, { force: true });
-    throw cause;
-  }
+export async function writeDiscoverArtifactAtomically(outputPath, artifact, settings) {
+  const serialized = `${stableJson(artifact)}\n`;
+  await writeFileAtomic(outputPath, serialized, {
+    mode: 0o644,
+    validate: async content => {
+      let parsed;
+      try { parsed = JSON.parse(content); }
+      catch { fail('invalid_discover_artifact', 'Discover artifact is not valid JSON'); }
+      validateDiscoverArtifact(parsed, settings);
+      if (stableJson(parsed) !== stableJson(artifact)) fail('invalid_discover_artifact', 'Discover artifact did not round-trip');
+    },
+  });
 }
 
 export async function discoverCatalogCandidates({
@@ -461,7 +459,7 @@ export async function discoverCatalogCandidates({
       candidates: selection.candidates,
     };
     validateDiscoverArtifact(artifact, settings);
-    await writeArtifactAtomically(settings.outputPath, artifact, settings);
+    await writeDiscoverArtifactAtomically(settings.outputPath, artifact, settings);
     return { ...artifact, outputPath: settings.outputPath };
   } finally {
     lookup.close();

@@ -151,6 +151,14 @@ npm run catalog:discover -- --works-index scripts/catalog-cache/open-library-wor
 
 `--output` defaults to `scripts/catalog-cache/catalog-discover.json`. `--min-ratings` defaults to 0 and `--min-readers` defaults to 10 raw shelf counts across all three shelves. There is no minimum Bayesian score. `--limit` must be from 1 through 10000. `--exclude-keys` is an optional file of `/works/OL…W` keys, one per line.
 
+Classify discover candidates against the Bookish database with `catalog:dedup-check`. The command requires `DATABASE_URL`, reads a discover artifact JSON file, performs read-only Prisma lookups, and writes one JSONL report line per candidate: `{workKey, title, status, matchedBookIds, matchedBy}`. `status` is `new`, `existing`, or `ambiguous`. Matching priority is `openLibraryWorkKey` (validated as `/works/OL\d+W`, empty strings rejected), then any normalized ISBN-10 or ISBN-13, then normalized title plus `primaryAuthor` when present on the candidate. `ambiguous` means more than one book matched on the chosen path, or a lower-priority match disagrees with a higher-priority one. The command prints summary counts per status and never writes to PostgreSQL.
+
+The CLI exposes only `book.findMany` and `$disconnect`, and connects with `default_transaction_read_only=on` appended to `DATABASE_URL`. That session flag is a backstop only: raw SQL such as `$queryRaw` can override it. For production or shared databases, point `DATABASE_URL` at a read-only PostgreSQL role instead of the application writer role; the role grant is the real guarantee.
+
+```powershell
+npm run catalog:dedup-check -- --input scripts/catalog-cache/catalog-discover.json --output scripts/catalog-cache/catalog-dedup-report.jsonl
+```
+
 Before a large local bulk build, check the target volume. The preflight uses an intentionally conservative 8× input-size temporary-space estimate plus a reserve; it refuses the check with a non-zero exit status when that requirement exceeds free space. Override the amplification only with measurements from a comparable local build.
 
 ```powershell
