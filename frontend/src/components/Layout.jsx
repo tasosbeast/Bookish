@@ -5,6 +5,10 @@ import { session } from '../lib/api.js';
 import { Icon, ErrorNotice } from './shared.jsx';
 import { NotificationBell } from './NotificationBell.jsx';
 
+function BrandWordmark({ className }) {
+  return <Link to="/" className={className} aria-label="Bookish"><span className="wordmark" aria-hidden="true">B<Icon className="wordmark-book" />kish<span className="brand-dot">.</span></span></Link>;
+}
+
 export default function Layout() {
   const auth = useAuth();
   const location = useLocation();
@@ -18,7 +22,7 @@ export default function Layout() {
   return <div className="app-shell">
     <a href="#main" className="skip-link">Skip to content</a>
     <header className="site-header"><div className="header-inner">
-      <Link to="/" className="brand" aria-label="Bookish home"><Icon size={29} /><span>bookish<span className="brand-dot">.</span></span></Link>
+      <BrandWordmark className="brand" />
       <nav className="main-nav" aria-label="Main navigation"><NavLink to="/" end>Discover</NavLink>{auth.user && <NavLink to="/feed">Feed</NavLink>}<NavLink to="/my-books">My Books</NavLink>{auth.user && <NavLink to="/calendar">Calendar</NavLink>}{auth.user && <NavLink to="/challenges">Challenges</NavLink>}{auth.user && <NavLink to="/friends">Friends</NavLink>}</nav>
       <div className="account-nav">{auth.status === 'restoring' ? <span className="muted small">Opening your bookshelf…</span> : auth.user ? <>
         <NotificationBell userId={auth.user.id} />
@@ -28,6 +32,6 @@ export default function Layout() {
     </div></header>
     {(auth.error || logoutError) && <div className="container pt-4"><ErrorNotice error={logoutError || auth.error} retry={auth.error ? () => session.refresh().catch(() => {}) : undefined} /></div>}
     <main id="main" tabIndex={-1}><Outlet /></main>
-    <footer className="site-footer container"><Link to="/" className="footer-brand"><Icon size={20} /> bookish.</Link><span>A home for your next chapter.</span><span className="footer-note">Book metadata and covers: <a href="https://openlibrary.org/">Open Library</a></span><span className="footer-note"><a href="https://docs.google.com/forms/d/e/1FAIpQLScCd1pH7Spq2p0i5aZo0eIq3NmHzBKfIgaaITJLioO-s2QoEA/viewform?usp=sharing&ouid=106005455597214982303" target="_blank" rel="noopener noreferrer">Send feedback</a></span></footer>
+    <footer className="site-footer container"><BrandWordmark className="footer-brand" /><span>A home for your next chapter.</span><span className="footer-note">Book metadata and covers: <a href="https://openlibrary.org/">Open Library</a></span><span className="footer-note"><a href="https://docs.google.com/forms/d/e/1FAIpQLScCd1pH7Spq2p0i5aZo0eIq3NmHzBKfIgaaITJLioO-s2QoEA/viewform?usp=sharing&ouid=106005455597214982303" target="_blank" rel="noopener noreferrer">Send feedback</a></span></footer>
   </div>;
 }
