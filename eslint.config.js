@@ -62,10 +62,9 @@ export default [
       'react/prop-types': 'off',
       // Pages load server data by setting state in effects. Rewriting that
       // pattern would change loading, cancellation, and draft behavior.
+      // Warning mode still fails `npm run lint` under --max-warnings=0
+      // (14 existing findings), so this stays off.
       'react-hooks/set-state-in-effect': 'off',
-      // A few refs are updated during render so a later click or save sees
-      // the latest id or rating. Moving those writes into effects changes timing.
-      'react-hooks/refs': 'off',
     },
   },
   {

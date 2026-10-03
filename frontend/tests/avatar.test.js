@@ -52,6 +52,24 @@ test('Avatar renders allowlisted https pictures and falls back otherwise', { tim
   assert.equal(document.querySelector('img'), null, 'a failed image load uses the default avatar');
   assert.equal(document.querySelector('.reader-avatar-placeholder').textContent, 'M');
 
+  const nextSrc = 'https://secure.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?d=identicon';
+  const { flushSync } = await import('react-dom');
+  await act(async () => {
+    flushSync(() => {
+      root.render(h(Avatar, { username: 'Maria', profilePicture: nextSrc }));
+    });
+    const nextImage = document.querySelector('img.reader-avatar');
+    assert.ok(nextImage, 'a valid new picture does not flash the placeholder');
+    assert.equal(nextImage.getAttribute('src'), nextSrc);
+  });
+
+  const failedSrc = 'https://www.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?d=identicon';
+  await act(async () => {
+    root.render(h(Avatar, { username: 'Maria', profilePicture: failedSrc }));
+  });
+  assert.equal(document.querySelector('img'), null, 'returning to a picture that already failed stays on the placeholder');
+  assert.equal(document.querySelector('.reader-avatar-placeholder').textContent, 'M');
+
   for (const profilePicture of [
     null,
     '',

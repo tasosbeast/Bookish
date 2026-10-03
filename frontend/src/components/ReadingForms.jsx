@@ -25,6 +25,7 @@ export function ShelfForm({ personal, onSaved }) {
     setSavedRating({ source: propRating, value: propRating });
   }
   const confirmedRatingRef = useRef(confirmedRating);
+  // eslint-disable-next-line react-hooks/refs -- save reads the rating confirmed during this render
   confirmedRatingRef.current = confirmedRating;
 
   const [rating, setRating] = useDraftValue(propRating != null ? String(propRating) : '');

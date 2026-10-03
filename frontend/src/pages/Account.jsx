@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../hooks/useAuth.js';
 import { api, session } from '../lib/api.js';
 import { Avatar } from '../components/Avatar.jsx';
@@ -23,6 +23,7 @@ export default function Account() {
   const [editing, setEditing] = useState(false);
   const [bio, setBio] = useState(user?.bio ?? '');
   const [profilePicture, setProfilePicture] = useState(user?.profilePicture ?? '');
+  const pictureBaseline = useRef('');
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -123,15 +124,15 @@ export default function Account() {
   }
 
   function startEditing() {
+    const baseline = user?.profilePicture ?? '';
+    pictureBaseline.current = baseline;
     setBio(user?.bio ?? '');
-    setProfilePicture(user?.profilePicture ?? '');
+    setProfilePicture(baseline);
     setError(null);
     setEditing(true);
   }
 
   function cancelEditing() {
-    setBio(user?.bio ?? '');
-    setProfilePicture(user?.profilePicture ?? '');
     setError(null);
     setEditing(false);
   }
@@ -141,9 +142,11 @@ export default function Account() {
     setError(null);
     setBusy(true);
     try {
-      // An unchanged picture is omitted so a stored legacy URL is not revalidated.
+      // Compare with the picture captured when editing started. A session refresh
+      // mid-edit must not resend an untouched draft. The baseline-side trim is
+      // the one that matters: a URL input strips the draft before React stores it.
       const body = { bio };
-      if (profilePicture !== (user?.profilePicture ?? '')) body.profilePicture = profilePicture;
+      if (profilePicture.trim() !== pictureBaseline.current.trim()) body.profilePicture = profilePicture;
       const result = await api('/auth/me', {
         method: 'PATCH',
         body,

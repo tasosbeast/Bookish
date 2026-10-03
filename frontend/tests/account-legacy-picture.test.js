@@ -153,4 +153,35 @@ test('legacy profile picture does not block other account edits', { timeout: 600
   const savedAvatar = document.querySelector('img.account-avatar');
   assert.equal(savedAvatar.getAttribute('src'), validPicture);
   assert.equal(savedAvatar.getAttribute('referrerpolicy'), 'no-referrer');
+
+  currentUser = { ...currentUser, profilePicture: legacyPicture };
+  await act(async () => session.updateUser(currentUser));
+  await edit();
+  assert.equal(document.querySelector('input[name="profilePicture"]').value, legacyPicture);
+  const newerPicture = 'https://lh4.googleusercontent.com/a/newer-from-another-device';
+  currentUser = { ...currentUser, profilePicture: newerPicture };
+  await act(async () => session.updateUser(currentUser));
+  assert.equal(document.querySelector('input[name="profilePicture"]').value, legacyPicture, 'the open draft keeps the picture from when editing started');
+  await act(async () => setInputValue(document.querySelector('textarea[name="bio"]'), 'Bio while the picture changed elsewhere'));
+  await submit();
+
+  assert.equal(requests.length, 5);
+  assert.deepEqual(requests[4].body, { bio: 'Bio while the picture changed elsewhere' });
+  assert.equal('profilePicture' in requests[4].body, false, 'an untouched picture is not sent when the session user changes');
+  assert.equal(document.querySelector('textarea[name="bio"]'), null, 'omitting the untouched picture still saves');
+  assert.equal(document.querySelector('img.account-avatar').getAttribute('src'), newerPicture);
+
+  const paddedPicture = `  ${newerPicture} `;
+  currentUser = { ...currentUser, profilePicture: paddedPicture };
+  await act(async () => session.updateUser(currentUser));
+  await edit();
+  await act(async () => {
+    setInputValue(document.querySelector('textarea[name="bio"]'), 'Whitespace picture');
+    setInputValue(document.querySelector('input[name="profilePicture"]'), paddedPicture);
+  });
+  await submit();
+
+  assert.equal(requests.length, 6);
+  assert.deepEqual(requests[5].body, { bio: 'Whitespace picture' });
+  assert.equal('profilePicture' in requests[5].body, false, 'a padded stored picture is unchanged after the URL input strips it');
 });
