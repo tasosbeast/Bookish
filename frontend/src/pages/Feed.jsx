@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api.js';
+import { Avatar } from '../components/Avatar.jsx';
 import { Cover, EmptyState, ErrorNotice, Loading } from '../components/shared.jsx';
 
 function renderStars(rating) {
@@ -32,7 +33,6 @@ function formatRelativeTime(dateString) {
 
 function ActivityCard({ activity }) {
   const { actor, book, type, rating, review, createdAt } = activity;
-  const initial = actor.username ? actor.username.slice(0, 1).toUpperCase() : '?';
 
   let actionText;
   if (type === 'started_reading') {
@@ -64,11 +64,7 @@ function ActivityCard({ activity }) {
   return (
     <article className="feed-card" id={`activity-${activity.id}`}>
       <div className="feed-card-header">
-        {actor.profilePicture ? (
-          <img src={actor.profilePicture} alt={`${actor.username}'s avatar`} className="reader-avatar" />
-        ) : (
-          <span className="reader-avatar-placeholder" aria-hidden="true">{initial}</span>
-        )}
+        <Avatar username={actor.username} profilePicture={actor.profilePicture} />
         <div className="feed-header-info">
           <p className="feed-action-line">{actionText}</p>
           <time dateTime={createdAt} className="muted small feed-timestamp">

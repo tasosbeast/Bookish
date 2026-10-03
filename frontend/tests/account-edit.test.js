@@ -83,7 +83,9 @@ test('profile editing flow in Account component', { timeout: 60000 }, async t =>
   root = createRoot(document.getElementById('root'));
   await act(async () => root.render(h(App)));
 
-  // Verify initial read state
+  // Verify initial read state. A stored non-allowlisted URL is kept in the form but not rendered.
+  assert.equal(document.querySelector('img.account-avatar'), null);
+  assert.equal(document.querySelector('span.account-avatar').textContent, 'R');
   assert.ok(document.body.textContent.includes('Initial bio'));
   assert.equal(document.querySelector('input[name="username"]'), null, 'Username must remain read-only');
   assert.equal(document.querySelector('input[name="email"]'), null, 'Email must remain read-only');
@@ -117,7 +119,7 @@ test('profile editing flow in Account component', { timeout: 60000 }, async t =>
 
   await act(async () => {
     setInputValue(bioInput2, 'Updated bio text');
-    setInputValue(picInput2, 'https://images.example/new-avatar.png');
+    setInputValue(picInput2, 'https://lh3.googleusercontent.com/a/new-avatar');
   });
 
   await act(async () => {
@@ -126,11 +128,13 @@ test('profile editing flow in Account component', { timeout: 60000 }, async t =>
 
   // Save sends intended PATCH body
   assert.equal(requests.length, 1);
-  assert.deepEqual(requests[0].body, { bio: 'Updated bio text', profilePicture: 'https://images.example/new-avatar.png' });
+  assert.deepEqual(requests[0].body, { bio: 'Updated bio text', profilePicture: 'https://lh3.googleusercontent.com/a/new-avatar' });
 
   // Successful save updates displayed bio/avatar immediately without reload
   assert.ok(document.body.textContent.includes('Updated bio text'));
-  assert.equal(document.querySelector('.account-avatar').src, 'https://images.example/new-avatar.png');
+  const savedAvatar = document.querySelector('img.account-avatar');
+  assert.equal(savedAvatar.src, 'https://lh3.googleusercontent.com/a/new-avatar');
+  assert.equal(savedAvatar.getAttribute('referrerpolicy'), 'no-referrer');
 
   // Clearing values works
   const editBtn3 = Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Edit profile');

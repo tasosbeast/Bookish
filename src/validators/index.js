@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { env } from '../config/env.js';
+import { isAllowedAvatarUrl } from '../lib/avatarUrl.js';
 
 const uuid = z.string().uuid();
 const rating = z.number().int().min(1).max(5);
@@ -75,16 +77,8 @@ const profilePictureSchema = z.union([
     .pipe(z.string().max(2048))
     .transform(s => (s === '' ? null : s))
     .refine(
-      val => {
-        if (val === null) return true;
-        try {
-          const url = new URL(val);
-          return url.protocol === 'http:' || url.protocol === 'https:';
-        } catch {
-          return false;
-        }
-      },
-      { message: 'Must be a valid http:// or https:// URL' }
+      val => val === null || isAllowedAvatarUrl(val, env.AVATAR_ALLOWED_HOSTS),
+      { message: 'Must be an https URL on an approved image host' }
     ),
   z.null(),
 ]).optional();

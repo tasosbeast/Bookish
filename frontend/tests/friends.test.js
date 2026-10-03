@@ -46,7 +46,7 @@ test('Friends frontend: protection, tabs, reader suggestions, request flows, emp
   let suggestionsData = {
     data: [
       {
-        user: { id: 'cand-1', username: 'Reader_Maria', profilePicture: null, bio: 'A vivid reader' },
+        user: { id: 'cand-1', username: 'Reader_Maria', profilePicture: 'https://secure.gravatar.com/avatar/maria?d=mp', bio: 'A vivid reader' },
         reason: { type: 'genres', genres: ['Thriller', 'Mystery'], commonRatedBooks: 0, sharedBooks: 2 },
       },
     ],
@@ -57,7 +57,7 @@ test('Friends frontend: protection, tabs, reader suggestions, request flows, emp
     data: [
       {
         friendshipId: 'f-1',
-        friend: { id: 'friend-1', username: 'Friend_Alex', profilePicture: null, bio: 'Coffee & novels' },
+        friend: { id: 'friend-1', username: 'Friend_Alex', profilePicture: 'http://tracking.example/pixel.gif', bio: 'Coffee & novels' },
         acceptedAt: '2026-09-01T00:00:00.000Z',
       },
     ],
@@ -66,10 +66,10 @@ test('Friends frontend: protection, tabs, reader suggestions, request flows, emp
   let requestsData = {
     data: {
       incoming: [
-        { id: 'req-in-1', user: { id: 'user-in-1', username: 'Incoming_Sam', profilePicture: null, bio: null }, createdAt: '2026-09-10T00:00:00.000Z' },
+        { id: 'req-in-1', user: { id: 'user-in-1', username: 'Incoming_Sam', profilePicture: 'https://evil.example/pixel.png', bio: null }, createdAt: '2026-09-10T00:00:00.000Z' },
       ],
       sent: [
-        { id: 'req-sent-1', user: { id: 'user-sent-1', username: 'Sent_Taylor', profilePicture: null, bio: null }, createdAt: '2026-09-10T00:00:00.000Z' },
+        { id: 'req-sent-1', user: { id: 'user-sent-1', username: 'Sent_Taylor', profilePicture: 'https://lh3.googleusercontent.com/a/taylor', bio: null }, createdAt: '2026-09-10T00:00:00.000Z' },
       ],
     },
   };
@@ -210,6 +210,10 @@ test('Friends frontend: protection, tabs, reader suggestions, request flows, emp
   assert.equal(tabButtons.length, 3, 'Renders 3 tabs: Suggestions, Friends, Requests');
 
   assert.ok(document.body.textContent.includes('Reader_Maria'), 'Renders candidate Reader_Maria');
+  const suggestionCard = [...document.querySelectorAll('.reader-card')].find(card => card.textContent.includes('Reader_Maria'));
+  const suggestionAvatar = suggestionCard.querySelector('img.reader-avatar');
+  assert.equal(suggestionAvatar.getAttribute('src'), 'https://secure.gravatar.com/avatar/maria?d=mp');
+  assert.equal(suggestionAvatar.getAttribute('referrerpolicy'), 'no-referrer');
   assert.ok(document.body.textContent.includes('You both read a lot of Thriller and Mystery'), 'Renders genre-based reason');
 
   // 4. Failed Add Friend interaction
@@ -240,6 +244,9 @@ test('Friends frontend: protection, tabs, reader suggestions, request flows, emp
     await new Promise(r => setTimeout(r, 0));
   });
   assert.ok(document.body.textContent.includes('Friend_Alex'), 'Renders accepted friend Friend_Alex');
+  const friendCard = [...document.querySelectorAll('.reader-card')].find(card => card.textContent.includes('Friend_Alex'));
+  assert.equal(friendCard.querySelector('img'), null, 'http friend avatar falls back to the initial');
+  assert.equal(friendCard.querySelector('.reader-avatar-placeholder').textContent, 'F');
   const removeBtn = document.querySelector('.remove-friend-button');
   assert.ok(removeBtn, 'Contains Remove friend button');
 
@@ -257,6 +264,13 @@ test('Friends frontend: protection, tabs, reader suggestions, request flows, emp
   });
   assert.ok(document.body.textContent.includes('Incoming_Sam'), 'Renders incoming request Incoming_Sam');
   assert.ok(document.body.textContent.includes('Sent_Taylor'), 'Renders sent request Sent_Taylor');
+  const incomingCard = [...document.querySelectorAll('.reader-card')].find(card => card.textContent.includes('Incoming_Sam'));
+  assert.equal(incomingCard.querySelector('img'), null, 'non-allowlisted https avatar is not rendered');
+  assert.equal(incomingCard.querySelector('.reader-avatar-placeholder').textContent, 'I');
+  const sentCard = [...document.querySelectorAll('.reader-card')].find(card => card.textContent.includes('Sent_Taylor'));
+  const sentAvatar = sentCard.querySelector('img.reader-avatar');
+  assert.equal(sentAvatar.getAttribute('src'), 'https://lh3.googleusercontent.com/a/taylor');
+  assert.equal(sentAvatar.getAttribute('loading'), 'lazy');
 
   const acceptBtn = document.querySelector('.accept-request-button');
   await act(async () => {
