@@ -7,7 +7,9 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { prisma } from '../../src/lib/prisma.js';
+import generated from '../../src/generated/prisma/index.js';
 import { CATALOG_DISCOVER_FORMAT, CATALOG_DISCOVER_VERSION, popularityScore } from '../../scripts/catalog/discover.js';
 import {
   createReadOnlyDbInterface,
@@ -17,6 +19,12 @@ import {
 } from '../../scripts/catalog/dedup-check.js';
 
 const execFileAsync = promisify(execFile);
+
+function createRawReadOnlyPrismaClient(databaseUrl) {
+  return new generated.PrismaClient({
+    adapter: new PrismaPg({ connectionString: readOnlyDatabaseUrl(databaseUrl), max: 10 }),
+  });
+}
 
 function isbnAt(index) {
   const stem = `979${String(index).padStart(9, '0')}`;
@@ -81,6 +89,19 @@ async function temporaryDirectory() {
   return fs.mkdtemp(join(tmpdir(), 'bookish-dedup-check-integration-'));
 }
 
+async function snapshotBook(bookId) {
+  return prisma.book.findUnique({
+    where: { id: bookId },
+    select: {
+      id: true,
+      title: true,
+      author: true,
+      isbn: true,
+      openLibraryWorkKey: true,
+    },
+  });
+}
+
 test('PostgreSQL: catalog dedup check performs only findMany reads', { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async t => {
   const tag = randomUUID().slice(0, 8);
   const seed = Number.parseInt(tag, 16) % 1000000;
@@ -107,34 +128,150 @@ test('PostgreSQL: catalog dedup check performs only findMany reads', { skip: !pr
   ]))}\n`, 'utf8');
 
   const readOnly = createReadOnlyPrismaClient(process.env.TEST_DATABASE_URL);
+  const originalFindMany = readOnly.book.findMany;
   let findManyCalls = 0;
-  const spiedDb = {
-    book: {
-      findMany: async (...args) => {
-        findManyCalls += 1;
-        return readOnly.book.findMany(...args);
-      },
-    },
-    $disconnect: (...args) => readOnly.$disconnect(...args),
+  readOnly.book.findMany = async (...args) => {
+    findManyCalls += 1;
+    return originalFindMany(...args);
   };
 
-  const { summary, results } = await runCatalogDedupCheck({ db: spiedDb, inputPath, outputPath });
+  const { summary, results } = await runCatalogDedupCheck({ db: readOnly, inputPath, outputPath });
   assert.deepEqual(summary, { new: 1, existing: 1, ambiguous: 0 });
   assert.equal(results[0].matchedBookIds[0], book.id);
   assert.equal(findManyCalls, 1);
-  await readOnly._client.$disconnect();
+  await readOnly.$disconnect();
 });
 
 test('PostgreSQL: read-only database URL rejects raw UPDATE statements', { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async t => {
-  const readOnly = createReadOnlyPrismaClient(process.env.TEST_DATABASE_URL);
-  t.after(async () => {
-    await readOnly._client.$disconnect();
+  const tag = randomUUID().slice(0, 8);
+  const book = await prisma.book.create({
+    data: {
+      title: `Read-only execute ${tag}`,
+      author: 'Author',
+      openLibraryWorkKey: `/works/OL${tag}W`,
+    },
   });
+  const before = await snapshotBook(book.id);
+  const readOnly = createRawReadOnlyPrismaClient(process.env.TEST_DATABASE_URL);
+  t.after(async () => {
+    await readOnly.$disconnect();
+    await prisma.book.deleteMany({ where: { id: book.id } });
+    await prisma.$disconnect();
+  });
+
   await assert.rejects(
-    () => readOnly._client.$executeRawUnsafe('UPDATE books SET title = title WHERE false'),
+    () => readOnly.$executeRawUnsafe('UPDATE books SET title = title WHERE false'),
     /read-only|cannot execute/i,
   );
+  assert.deepEqual(await snapshotBook(book.id), before);
   assert.match(decodeURIComponent(readOnlyDatabaseUrl(process.env.TEST_DATABASE_URL)), /default_transaction_read_only=on/);
+});
+
+test('PostgreSQL: read-only database URL rejects $queryRaw UPDATE and leaves rows unchanged', { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async t => {
+  const tag = randomUUID().slice(0, 8);
+  const book = await prisma.book.create({
+    data: {
+      title: `Read-only queryRaw ${tag}`,
+      author: 'Author',
+      openLibraryWorkKey: `/works/OL${tag}W`,
+    },
+  });
+  const before = await snapshotBook(book.id);
+  const readOnly = createRawReadOnlyPrismaClient(process.env.TEST_DATABASE_URL);
+  t.after(async () => {
+    await readOnly.$disconnect();
+    await prisma.book.deleteMany({ where: { id: book.id } });
+    await prisma.$disconnect();
+  });
+
+  await assert.rejects(
+    () => readOnly.$queryRawUnsafe('UPDATE books SET title = title WHERE false'),
+    /read-only|cannot execute/i,
+  );
+  assert.deepEqual(await snapshotBook(book.id), before);
+});
+
+test('PostgreSQL: read-only database URL rejects updateManyAndReturn and leaves rows unchanged', { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async t => {
+  const tag = randomUUID().slice(0, 8);
+  const book = await prisma.book.create({
+    data: {
+      title: `Read-only updateManyAndReturn ${tag}`,
+      author: 'Author',
+      openLibraryWorkKey: `/works/OL${tag}W`,
+    },
+  });
+  const before = await snapshotBook(book.id);
+  const readOnly = createRawReadOnlyPrismaClient(process.env.TEST_DATABASE_URL);
+  t.after(async () => {
+    await readOnly.$disconnect();
+    await prisma.book.deleteMany({ where: { id: book.id } });
+    await prisma.$disconnect();
+  });
+
+  await assert.rejects(
+    () => readOnly.book.updateManyAndReturn({
+      where: { id: book.id },
+      data: { title: 'Changed Title' },
+    }),
+    /read-only|cannot execute/i,
+  );
+  assert.deepEqual(await snapshotBook(book.id), before);
+});
+
+test('PostgreSQL: read-only database URL rejects callback $transaction writes and leaves rows unchanged', { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async t => {
+  const tag = randomUUID().slice(0, 8);
+  const book = await prisma.book.create({
+    data: {
+      title: `Read-only callback tx ${tag}`,
+      author: 'Author',
+      openLibraryWorkKey: `/works/OL${tag}W`,
+    },
+  });
+  const before = await snapshotBook(book.id);
+  const readOnly = createRawReadOnlyPrismaClient(process.env.TEST_DATABASE_URL);
+  t.after(async () => {
+    await readOnly.$disconnect();
+    await prisma.book.deleteMany({ where: { id: book.id } });
+    await prisma.$disconnect();
+  });
+
+  await assert.rejects(
+    () => readOnly.$transaction(async tx => tx.book.update({
+      where: { id: book.id },
+      data: { title: 'Changed Title' },
+    })),
+    /read-only|cannot execute/i,
+  );
+  assert.deepEqual(await snapshotBook(book.id), before);
+});
+
+test('PostgreSQL: read-only database URL rejects array $transaction writes and leaves rows unchanged', { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async t => {
+  const tag = randomUUID().slice(0, 8);
+  const book = await prisma.book.create({
+    data: {
+      title: `Read-only array tx ${tag}`,
+      author: 'Author',
+      openLibraryWorkKey: `/works/OL${tag}W`,
+    },
+  });
+  const before = await snapshotBook(book.id);
+  const readOnly = createRawReadOnlyPrismaClient(process.env.TEST_DATABASE_URL);
+  t.after(async () => {
+    await readOnly.$disconnect();
+    await prisma.book.deleteMany({ where: { id: book.id } });
+    await prisma.$disconnect();
+  });
+
+  await assert.rejects(
+    () => readOnly.$transaction([
+      readOnly.book.update({
+        where: { id: book.id },
+        data: { title: 'Changed Title' },
+      }),
+    ]),
+    /read-only|cannot execute/i,
+  );
+  assert.deepEqual(await snapshotBook(book.id), before);
 });
 
 test('PostgreSQL: read-only interface blocks createManyAndReturn', { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 }, async t => {

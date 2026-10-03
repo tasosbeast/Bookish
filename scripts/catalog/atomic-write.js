@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-export async function writeFileAtomic(path, content, { fsImpl = fs, platform = process.platform, mode = 0o600 } = {}) {
+export async function writeFileAtomic(path, content, {
+  fsImpl = fs,
+  platform = process.platform,
+  mode = 0o600,
+  validate = null,
+} = {}) {
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   const backup = `${path}.${process.pid}.${randomUUID()}.bak`;
   await fsImpl.mkdir(dirname(path), { recursive: true });
@@ -14,6 +19,7 @@ export async function writeFileAtomic(path, content, { fsImpl = fs, platform = p
     await handle.sync();
     await handle.close();
     handle = null;
+    if (validate) await validate(content);
     try {
       await fsImpl.rename(temporary, path);
     } catch (error) {

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CATALOG_DISCOVER_FORMAT, CATALOG_DISCOVER_VERSION, popularityScore } from '../scripts/catalog/discover.js';
 import { workIdentity } from '../scripts/catalog/work-identity.js';
+import { writeFileAtomic } from '../scripts/catalog/atomic-write.js';
 import {
   candidateTitleAuthorKey,
   checkCatalogDuplicates,
@@ -14,6 +15,8 @@ import {
   normalizeCandidateIsbns,
   readDedupReport,
   runCatalogDedupCheck,
+  validateDedupReport,
+  writeDedupReport,
 } from '../scripts/catalog/dedup-check.js';
 
 function isbnAt(index) {
@@ -314,6 +317,37 @@ test('runCatalogDedupCheck writes JSONL and prints summary counts', async () => 
   assert.equal(lines.length, 2);
   assert.equal(lines[0].status, 'existing');
   assert.equal(lines[1].status, 'new');
+});
+
+test('writeDedupReport leaves the previous report unchanged when validation fails', async () => {
+  const directory = await temporaryDirectory();
+  const outputPath = join(directory, 'report.jsonl');
+  const expected = [{
+    workKey: '/works/OL1W',
+    title: 'Original',
+    status: 'new',
+    matchedBookIds: [],
+    matchedBy: null,
+  }];
+  await writeDedupReport(outputPath, expected);
+  const before = await fs.readFile(outputPath, 'utf8');
+  const corrupted = expected.map(row => ({ ...row, status: 'existing' }));
+
+  await assert.rejects(
+    () => writeFileAtomic(outputPath, corrupted.map(row => `${JSON.stringify(row)}\n`).join(''), {
+      mode: 0o600,
+      validate: async content => {
+        const parsed = content
+          .split('\n')
+          .map(line => line.trim())
+          .filter(Boolean)
+          .map(line => JSON.parse(line));
+        validateDedupReport(parsed, expected);
+      },
+    }),
+    error => error?.code === 'invalid_dedup_report',
+  );
+  assert.equal(await fs.readFile(outputPath, 'utf8'), before);
 });
 
 test('loadDiscoverCandidates validates discover artifacts and rejects missing candidates', async () => {

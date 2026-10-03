@@ -38,10 +38,7 @@ export function createReadOnlyPrismaClient(databaseUrl) {
   const client = new generated.PrismaClient({
     adapter: new PrismaPg({ connectionString: readOnlyDatabaseUrl(databaseUrl), max: 10 }),
   });
-  return {
-    ...createReadOnlyDbInterface(client),
-    _client: client,
-  };
+  return createReadOnlyDbInterface(client);
 }
 
 function normalizeStoredIsbn(isbn) {
@@ -231,7 +228,7 @@ export async function readDedupReport(inputPath) {
   return results;
 }
 
-function validateDedupReport(results, expected) {
+export function validateDedupReport(results, expected) {
   if (results.length !== expected.length) {
     throw new CatalogContractError('invalid_dedup_report', 'Dedup report line count does not match the result set');
   }
@@ -252,8 +249,17 @@ function validateDedupReport(results, expected) {
 export async function writeDedupReport(outputPath, results) {
   const resolved = resolve(outputPath);
   const lines = results.map(result => `${JSON.stringify(result)}\n`).join('');
-  await writeFileAtomic(resolved, lines);
-  validateDedupReport(await readDedupReport(resolved), results);
+  await writeFileAtomic(resolved, lines, {
+    mode: 0o600,
+    validate: async content => {
+      const parsed = content
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+        .map(line => JSON.parse(line));
+      validateDedupReport(parsed, results);
+    },
+  });
 }
 
 export async function runCatalogDedupCheck({ db, inputPath, outputPath }) {

@@ -686,8 +686,6 @@ export async function createOpenLibraryWorkLookup({ indexPath, snapshotId }) {
     forEachWork(visit) {
       if (closed) fail('invalid_work_index', 'Work lookup is closed');
       for (const row of scan.iterate()) {
-        // Keep `scan` referenced for the whole scan. node:sqlite finalizes an iterator
-        // when its statement wrapper is collected.
         visit(row);
       }
     },

@@ -405,13 +405,18 @@ function assertMatchesLookup(lookup, candidates) {
   }
 }
 
-async function writeArtifactAtomically(outputPath, artifact, settings) {
-  await writeFileAtomic(outputPath, `${stableJson(artifact)}\n`);
-  let parsed;
-  try { parsed = JSON.parse(await fs.readFile(outputPath, 'utf8')); }
-  catch { fail('invalid_discover_artifact', 'Discover artifact is not valid JSON'); }
-  validateDiscoverArtifact(parsed, settings);
-  if (stableJson(parsed) !== stableJson(artifact)) fail('invalid_discover_artifact', 'Discover artifact did not round-trip');
+export async function writeDiscoverArtifactAtomically(outputPath, artifact, settings) {
+  const serialized = `${stableJson(artifact)}\n`;
+  await writeFileAtomic(outputPath, serialized, {
+    mode: 0o644,
+    validate: async content => {
+      let parsed;
+      try { parsed = JSON.parse(content); }
+      catch { fail('invalid_discover_artifact', 'Discover artifact is not valid JSON'); }
+      validateDiscoverArtifact(parsed, settings);
+      if (stableJson(parsed) !== stableJson(artifact)) fail('invalid_discover_artifact', 'Discover artifact did not round-trip');
+    },
+  });
 }
 
 export async function discoverCatalogCandidates({
@@ -454,7 +459,7 @@ export async function discoverCatalogCandidates({
       candidates: selection.candidates,
     };
     validateDiscoverArtifact(artifact, settings);
-    await writeArtifactAtomically(settings.outputPath, artifact, settings);
+    await writeDiscoverArtifactAtomically(settings.outputPath, artifact, settings);
     return { ...artifact, outputPath: settings.outputPath };
   } finally {
     lookup.close();
