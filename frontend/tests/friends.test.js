@@ -46,7 +46,7 @@ test('Friends frontend: protection, tabs, reader suggestions, request flows, emp
   let suggestionsData = {
     data: [
       {
-        user: { id: 'cand-1', username: 'Reader_Maria', profilePicture: 'https://secure.gravatar.com/avatar/maria?d=mp', bio: 'A vivid reader' },
+        user: { id: 'cand-1', username: 'Reader_Maria', profilePicture: 'https://secure.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?d=mp', bio: 'A vivid reader' },
         reason: { type: 'genres', genres: ['Thriller', 'Mystery'], commonRatedBooks: 0, sharedBooks: 2 },
       },
     ],
@@ -212,7 +212,7 @@ test('Friends frontend: protection, tabs, reader suggestions, request flows, emp
   assert.ok(document.body.textContent.includes('Reader_Maria'), 'Renders candidate Reader_Maria');
   const suggestionCard = [...document.querySelectorAll('.reader-card')].find(card => card.textContent.includes('Reader_Maria'));
   const suggestionAvatar = suggestionCard.querySelector('img.reader-avatar');
-  assert.equal(suggestionAvatar.getAttribute('src'), 'https://secure.gravatar.com/avatar/maria?d=mp');
+  assert.equal(suggestionAvatar.getAttribute('src'), 'https://secure.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?d=mp');
   assert.equal(suggestionAvatar.getAttribute('referrerpolicy'), 'no-referrer');
   assert.ok(document.body.textContent.includes('You both read a lot of Thriller and Mystery'), 'Renders genre-based reason');
 

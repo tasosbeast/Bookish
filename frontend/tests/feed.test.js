@@ -65,7 +65,7 @@ test('Feed frontend: protection, navigation, activity types, empty states, pagin
         id: 'act-3',
         type: 'rated_book',
         createdAt: new Date(Date.now() - 7200000).toISOString(),
-        actor: { id: 'friend-2', username: 'Alex', profilePicture: 'https://www.gravatar.com/avatar/abc?s=80&d=identicon' },
+        actor: { id: 'friend-2', username: 'Alex', profilePicture: 'https://www.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?s=80&d=identicon' },
         book: { id: 'book-3', title: 'Foundation', author: 'Isaac Asimov', coverImageUrl: null, isbn: '9780553293357' },
         rating: 4,
         review: null,
@@ -228,7 +228,7 @@ test('Feed frontend: protection, navigation, activity types, empty states, pagin
   assert.equal(startedCard.querySelector('.reader-avatar-placeholder').textContent, 'M');
   const ratedCard = [...document.querySelectorAll('.feed-card')].find(card => card.textContent.includes('rated Foundation'));
   const ratedAvatar = ratedCard.querySelector('img.reader-avatar');
-  assert.equal(ratedAvatar.getAttribute('src'), 'https://www.gravatar.com/avatar/abc?s=80&d=identicon');
+  assert.equal(ratedAvatar.getAttribute('src'), 'https://www.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?s=80&d=identicon');
   assert.equal(ratedAvatar.getAttribute('referrerpolicy'), 'no-referrer');
   assert.equal(ratedAvatar.getAttribute('loading'), 'lazy');
   assert.ok(document.body.textContent.includes('Alex reviewed Snow Crash'), 'reviewed_book text rendered');

@@ -38,16 +38,17 @@ test('avatar host allowlist defaults to Gravatar and Google user content', () =>
 test('profile pictures accept only https URLs on allowlisted hosts', () => {
   const accepted = [
     'https://www.gravatar.com/avatar/00000000000000000000000000000000',
-    'https://secure.gravatar.com/avatar/abc?s=200&d=identicon',
-    'https://gravatar.com/avatar/abc?default=mp',
-    'https://s.gravatar.com/avatar/abc?d=retro',
-    'https://0.gravatar.com/avatar/abc?d=initials',
-    'https://2.gravatar.com/avatar/abc?d=color',
+    'https://secure.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?s=200&d=identicon',
+    'https://gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?default=mp',
+    'https://s.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?d=retro',
+    'https://0.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?d=initials',
+    'https://2.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e.jpg?d=color',
+    'https://www.gravatar.com/avatar/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.png',
     'https://lh3.googleusercontent.com/a-/photo',
     'https://lh4.googleusercontent.com/a/photo=s96-c',
     'https://lh5.googleusercontent.com/a/photo',
     'https://lh6.googleusercontent.com/a/photo',
-    'HTTPS://WWW.GRAVATAR.COM/avatar/abc',
+    'HTTPS://WWW.GRAVATAR.COM/avatar/d41d8cd98f00b204e9800998ecf8427e',
   ];
   for (const profilePicture of accepted) {
     assert.equal(updateProfileSchema.parse({ body: { profilePicture } }).body.profilePicture, profilePicture.trim(), profilePicture);
@@ -86,6 +87,11 @@ test('profile pictures accept only https URLs on allowlisted hosts', () => {
     'https://x.bc.googleusercontent.com/a',
     'https://abc-colab.googleusercontent.com/a',
     'https://3.gravatar.com/avatar/abc',
+    'https://www.gravatar.com/avatar/abc',
+    'https://www.gravatar.com/avatar/x/..%2f..%2f',
+    'https://www.gravatar.com/avatar/x/%2e%2e/%2e%2e/secret',
+    'https://www.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e.jpg/extra',
+    'https://www.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e.',
     'https://lh7.googleusercontent.com/a/photo',
     `https://www.gravatar.com/${'a'.repeat(2100)}`,
   ];

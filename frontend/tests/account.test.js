@@ -21,7 +21,7 @@ test('signed-in readers can view only their safe profile fields at the account r
     session?.destroy(); await server?.close(); dom.window.close(); globalThis.fetch = nativeFetch;
     for (const [key, descriptor] of original) descriptor ? Object.defineProperty(globalThis, key, descriptor) : delete globalThis[key];
   });
-  const user = { id: 'internal-user-id', username: 'reader', email: 'reader@example.com', profilePicture: 'https://www.gravatar.com/avatar/reader?d=identicon', bio: 'A quiet corner for good books.' };
+  const user = { id: 'internal-user-id', username: 'reader', email: 'reader@example.com', profilePicture: 'https://www.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?d=identicon', bio: 'A quiet corner for good books.' };
   globalThis.fetch = async input => {
     if (new URL(input).pathname === '/api/auth/login') return Response.json({ user, accessToken: `header.${btoa(JSON.stringify({ exp: Date.now() / 1000 + 900 }))}.signature`, expiresIn: 900 });
     return Response.json({ data: [], pagination: { page: 1, limit: 18, total: 0, totalPages: 0 } });

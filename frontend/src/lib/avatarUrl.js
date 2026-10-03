@@ -26,6 +26,7 @@ const GRAVATAR_DEFAULTS = new Set([
 const PUBLIC_SUFFIX_LABELS = new Set(['ac', 'co', 'com', 'edu', 'gob', 'gov', 'govt', 'ne', 'net', 'or', 'org', 'sch']);
 
 const HOSTNAME = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+const GRAVATAR_PATH = /^\/avatar\/(?:[a-f0-9]{32}|[a-f0-9]{64})(?:\.[a-z0-9]+)?$/i;
 
 function isIpLiteral(hostname) {
   if (hostname.startsWith('[') || hostname.includes(':')) return true;
@@ -87,7 +88,7 @@ function paramName(name) {
 
 function gravatarUrlIsSafe(url) {
   if (!isGravatarHost(url.hostname)) return true;
-  if (!url.pathname.startsWith('/avatar/')) return false;
+  if (!GRAVATAR_PATH.test(url.pathname)) return false;
   for (const [key, value] of url.searchParams) {
     const name = paramName(key);
     if (name !== 'd' && name !== 'default') continue;

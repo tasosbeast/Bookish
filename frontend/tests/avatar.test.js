@@ -39,9 +39,9 @@ test('Avatar renders allowlisted https pictures and falls back otherwise', { tim
     await act(async () => { root.render(h(Avatar, props)); });
   };
 
-  await render({ username: 'Maria', profilePicture: '  https://www.gravatar.com/avatar/abc?d=identicon  ' });
+  await render({ username: 'Maria', profilePicture: '  https://www.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?d=identicon  ' });
   const allowed = document.querySelector('img.reader-avatar');
-  assert.equal(allowed.getAttribute('src'), 'https://www.gravatar.com/avatar/abc?d=identicon');
+  assert.equal(allowed.getAttribute('src'), 'https://www.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?d=identicon');
   assert.equal(allowed.alt, "Maria's avatar");
   assert.equal(allowed.getAttribute('referrerpolicy'), 'no-referrer');
   assert.equal(allowed.getAttribute('loading'), 'lazy');
@@ -63,6 +63,7 @@ test('Avatar renders allowlisted https pictures and falls back otherwise', { tim
     'https://abc-colab.googleusercontent.com/a',
     'https://www.gravatar.com/photo/abc',
     'https://www.gravatar.com./avatar/abc',
+    'https://www.gravatar.com/avatar/x/..%2f..%2f',
   ]) {
     await render({ username: 'alex', profilePicture });
     assert.equal(document.querySelector('img'), null, `no image for ${profilePicture}`);

@@ -36,8 +36,8 @@ test('PATCH /api/auth/me profile editing flow', { skip: !process.env.TEST_DATABA
   assert.deepEqual(Object.keys(bioRes.body.user).sort(), ['bio', 'email', 'id', 'profilePicture', 'username']);
 
   // 3. authenticated user can update profilePicture to an allowlisted https URL
-  const picRes = await patch({ profilePicture: '  https://www.gravatar.com/avatar/abc?d=identicon  ' }).expect(200);
-  assert.equal(picRes.body.user.profilePicture, 'https://www.gravatar.com/avatar/abc?d=identicon');
+  const picRes = await patch({ profilePicture: '  https://www.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?d=identicon  ' }).expect(200);
+  assert.equal(picRes.body.user.profilePicture, 'https://www.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?d=identicon');
   assert.equal(picRes.body.user.bio, 'Love reading sci-fi and fantasy.');
 
   // 4. clearing either value stores null
