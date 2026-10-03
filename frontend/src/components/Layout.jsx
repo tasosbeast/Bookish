@@ -6,7 +6,7 @@ import { Icon, ErrorNotice } from './shared.jsx';
 import { NotificationBell } from './NotificationBell.jsx';
 
 function BrandWordmark({ className }) {
-  return <Link to="/" className={className} aria-label="Bookish"><span className="wordmark" aria-hidden="true">B<Icon className="wordmark-book" strokeWidth={2} />kish<span className="brand-dot">.</span></span></Link>;
+  return <Link to="/" className={className} aria-label="Bookish"><span className="wordmark" aria-hidden="true">b<Icon className="wordmark-book" strokeWidth={2} />kish<span className="brand-dot">.</span></span></Link>;
 }
 
 export default function Layout() {

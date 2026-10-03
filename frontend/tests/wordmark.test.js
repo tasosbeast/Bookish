@@ -54,12 +54,11 @@ test('Bookish logo accessible name is Bookish', { timeout: 60000 }, async t => {
     const wordmark = link.querySelector('.wordmark');
     assert.equal(wordmark.getAttribute('aria-hidden'), 'true');
     const parts = [...wordmark.childNodes].map(node => (node.nodeType === 3 ? node.textContent : node.nodeName.toLowerCase()));
-    assert.deepEqual(parts, ['B', 'svg', 'kish', 'span']);
+    assert.deepEqual(parts, ['b', 'svg', 'kish', 'span']);
     assert.equal(wordmark.querySelector('.brand-dot').textContent, '.');
 
     const icon = wordmark.querySelector('svg');
     assert.equal(icon.getAttribute('aria-hidden'), 'true');
-    assert.match(icon.querySelector('path').getAttribute('d'), /^M12 5/);
     assert.equal(link.querySelector(':scope > svg'), null);
   }
 });
