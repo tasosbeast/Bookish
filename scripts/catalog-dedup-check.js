@@ -1,5 +1,4 @@
 import { resolve } from 'node:path';
-import { env } from '../src/config/env.js';
 import {
   createReadOnlyPrismaClient,
   runCatalogDedupCheck,
@@ -27,10 +26,12 @@ function parseArguments(args) {
   return options;
 }
 
-const db = createReadOnlyPrismaClient(env.DATABASE_URL);
-
+let db;
 try {
   const options = parseArguments(process.argv.slice(2));
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) throw new Error('DATABASE_URL is required');
+  db = createReadOnlyPrismaClient(databaseUrl);
   const { summary } = await runCatalogDedupCheck({
     db,
     inputPath: options.input,
@@ -41,5 +42,5 @@ try {
   console.error(error.message);
   process.exitCode = 1;
 } finally {
-  await db.$disconnect();
+  await db?.$disconnect();
 }

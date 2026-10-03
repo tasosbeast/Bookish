@@ -2,7 +2,7 @@
 
 Offline enrich of discover candidates (`catalog:enrich`).
 
-The command reads a discover artifact, streams one local Open Library editions dump, and writes the same artifact shape with `isbns` and `primaryAuthor` on each candidate. Candidates stay in a work-key map. The dump is not loaded into memory, and the command does not access PostgreSQL. ISBN-10 values convert to ISBN-13, invalid checksums are dropped, and ISBNs are deduplicated and capped at 50 per work. `primaryAuthor` is the author-index name for the candidate's first author key, or null when that key is absent. The author index snapshotId must match the input artifact. The command reports matched editions, works with ISBNs, works without ISBNs, and works with an author. `catalog:dedup-check` accepts the enriched file.
+The command reads a discover artifact, streams one local Open Library editions dump, and writes the same artifact shape with `isbns` and `primaryAuthor` on each candidate. Candidates stay in a work-key map. The dump is not loaded into memory, and the command does not access PostgreSQL. ISBN-10 values convert to ISBN-13 and invalid checksums are dropped. Each work keeps the lowest 200 ISBN-13s, so the set does not depend on dump order. `primaryAuthor` comes from `lookup.sqlite` for the candidate's first author key, or null when that key is absent. The author index snapshotId must match the input artifact. The summary reports matched editions, works with ISBNs, works without ISBNs, works with an author, works whose ISBN list was truncated, bad checksums, and malformed rows. `catalog:dedup-check` accepts the enriched file.
 
 Acceptance: `npm run lint` with 0 warnings, `npm test`, integration tests, and `npm test --prefix frontend` green. No database access, migrations, or schema changes.
 
@@ -22,8 +22,9 @@ Existing rules still apply: non-books rejected via `pilotDisqualificationReason`
 
 1. Candidate scoring and selection (`catalog:discover --limit N`)
 2. Read-only dedup against the database
-3. Offline enrich from discover to dedup-check (`catalog:enrich`)
+3. A resolved-artifact bridge
 4. A batched, idempotent `--dry-run`/`--apply` import
+5. Offline enrich from discover to dedup-check (`catalog:enrich`)
 
 catalog:dedup-check is done (#34, merged as 3e86b39).
 catalog:discover is done (#33, merged as 563cdba).

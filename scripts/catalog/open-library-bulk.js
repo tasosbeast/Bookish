@@ -57,7 +57,11 @@ function dumpColumns(line) {
 
 function inputStream(path) {
   const source = createReadStream(path);
-  return path.toLowerCase().endsWith('.gz') ? source.pipe(createGunzip()) : source;
+  if (!path.toLowerCase().endsWith('.gz')) return source;
+  const gunzip = createGunzip();
+  // pipe() does not forward source errors. A missing .gz otherwise crashes as an unhandled 'error'.
+  source.on('error', error => gunzip.destroy(error));
+  return source.pipe(gunzip);
 }
 
 // Actual Open Library dumps are tab-separated: type, key, revision, timestamp, JSON payload.

@@ -26,3 +26,27 @@ test('writeFileAtomic leaves the previous file unchanged when validate rejects s
 
   assert.equal(await fs.readFile(path, 'utf8'), original);
 });
+
+test('writeFileAtomic validates the temp file re-read from disk', async () => {
+  const directory = await temporaryDirectory();
+  const path = join(directory, 'artifact.json');
+  let readFromDisk = null;
+  const fsImpl = {
+    ...fs,
+    async readFile(file, encoding) {
+      const content = await fs.readFile(file, encoding);
+      if (String(file).endsWith('.tmp') || String(file).includes('.tmp')) readFromDisk = content;
+      return content;
+    },
+  };
+  let validated = null;
+  await writeFileAtomic(path, '{"status":"from-disk"}\n', {
+    fsImpl,
+    validate: content => {
+      validated = content;
+    },
+  });
+  assert.equal(readFromDisk, '{"status":"from-disk"}\n');
+  assert.equal(validated, readFromDisk);
+  assert.equal(await fs.readFile(path, 'utf8'), '{"status":"from-disk"}\n');
+});

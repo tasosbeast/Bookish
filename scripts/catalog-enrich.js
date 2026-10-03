@@ -38,7 +38,7 @@ function parseArguments(args) {
 try {
   const options = parseArguments(process.argv.slice(2));
   const onProgress = counts => {
-    process.stderr.write(`[progress] rows ${counts.rowsScanned} | matchedEditions ${counts.matchedEditions} | worksWithIsbns ${counts.worksWithIsbns} | worksWithoutIsbns ${counts.worksWithoutIsbns} | worksWithAuthor ${counts.worksWithAuthor}\n`);
+    process.stderr.write(`[progress] rows ${counts.rowsScanned} | matchedEditions ${counts.matchedEditions} | worksWithIsbns ${counts.worksWithIsbns} | worksWithoutIsbns ${counts.worksWithoutIsbns} | worksWithAuthor ${counts.worksWithAuthor} | worksIsbnTruncated ${counts.worksIsbnTruncated} | badChecksums ${counts.badChecksums} | malformedRows ${counts.malformedRows}\n`);
   };
   const { artifact: _artifact, ...summary } = await enrichCatalogCandidates({
     inputPath: options.input,

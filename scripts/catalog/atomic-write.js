@@ -19,7 +19,10 @@ export async function writeFileAtomic(path, content, {
     await handle.sync();
     await handle.close();
     handle = null;
-    if (validate) await validate(content);
+    if (validate) {
+      const written = await fsImpl.readFile(temporary, 'utf8');
+      await validate(written);
+    }
     try {
       await fsImpl.rename(temporary, path);
     } catch (error) {

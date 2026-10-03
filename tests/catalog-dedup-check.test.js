@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { CATALOG_DISCOVER_FORMAT, CATALOG_DISCOVER_VERSION, popularityScore } from '../scripts/catalog/discover.js';
 import { workIdentity } from '../scripts/catalog/work-identity.js';
-import { writeFileAtomic } from '../scripts/catalog/atomic-write.js';
 import {
   candidateTitleAuthorKey,
   checkCatalogDuplicates,
@@ -15,9 +17,10 @@ import {
   normalizeCandidateIsbns,
   readDedupReport,
   runCatalogDedupCheck,
-  validateDedupReport,
   writeDedupReport,
 } from '../scripts/catalog/dedup-check.js';
+
+const execFileAsync = promisify(execFile);
 
 function isbnAt(index) {
   const stem = `979${String(index).padStart(9, '0')}`;
@@ -232,6 +235,21 @@ test('checkCatalogDuplicates reports ambiguous when multiple books share a work 
   assert.deepEqual(summary, { new: 0, existing: 0, ambiguous: 1 });
 });
 
+test('checkCatalogDuplicates reports ambiguous when several ISBNs point at different books', async () => {
+  const firstIsbn = isbnAt(11);
+  const secondIsbn = isbnAt(12);
+  const db = createMockDb([
+    { id: 'book-a', title: 'First', author: 'Author A', isbn: firstIsbn, openLibraryWorkKey: null },
+    { id: 'book-b', title: 'Second', author: 'Author B', isbn: secondIsbn, openLibraryWorkKey: null },
+  ]);
+  const { results } = await checkCatalogDuplicates(db, [
+    discoverCandidate({ workKey: '/works/OL910W', isbns: [firstIsbn, secondIsbn] }),
+  ]);
+  assert.equal(results[0].status, 'ambiguous');
+  assert.equal(results[0].matchedBy, 'isbn');
+  assert.deepEqual(results[0].matchedBookIds, ['book-a', 'book-b']);
+});
+
 test('checkCatalogDuplicates reports ambiguous when work key and title-author disagree', async () => {
   const isbn = isbnAt(77);
   const db = createMockDb([
@@ -331,23 +349,25 @@ test('writeDedupReport leaves the previous report unchanged when validation fail
   }];
   await writeDedupReport(outputPath, expected);
   const before = await fs.readFile(outputPath, 'utf8');
-  const corrupted = expected.map(row => ({ ...row, status: 'existing' }));
+  const corrupted = expected.map(row => ({ ...row, status: NaN }));
 
   await assert.rejects(
-    () => writeFileAtomic(outputPath, corrupted.map(row => `${JSON.stringify(row)}\n`).join(''), {
-      mode: 0o600,
-      validate: async content => {
-        const parsed = content
-          .split('\n')
-          .map(line => line.trim())
-          .filter(Boolean)
-          .map(line => JSON.parse(line));
-        validateDedupReport(parsed, expected);
-      },
-    }),
+    () => writeDedupReport(outputPath, corrupted),
     error => error?.code === 'invalid_dedup_report',
   );
   assert.equal(await fs.readFile(outputPath, 'utf8'), before);
+  assert.deepEqual((await fs.readdir(directory)).filter(name => name.includes('.tmp') || name.includes('.bak')), []);
+});
+
+test('catalog:dedup-check CLI parses arguments before connecting and does not load env.js', async () => {
+  const source = await fs.readFile(new URL('../scripts/catalog-dedup-check.js', import.meta.url), 'utf8');
+  assert.equal(source.includes('src/config/env.js'), false);
+  assert.equal(source.includes('process.env.DATABASE_URL'), true);
+  const script = fileURLToPath(new URL('../scripts/catalog-dedup-check.js', import.meta.url));
+  await assert.rejects(
+    () => execFileAsync(process.execPath, [script], { env: { PATH: process.env.PATH } }),
+    error => error.code === 1 && error.stderr.includes('--input and --output are required'),
+  );
 });
 
 test('loadDiscoverCandidates validates discover artifacts and rejects missing candidates', async () => {

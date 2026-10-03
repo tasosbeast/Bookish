@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
-import { buildOpenLibraryAuthorIndex } from '../scripts/catalog/open-library-bulk.js';
+import { buildOpenLibraryAuthorIndex, buildOpenLibraryAuthorLookup } from '../scripts/catalog/open-library-bulk.js';
 import {
   CATALOG_DISCOVER_FORMAT,
   CATALOG_DISCOVER_SCORING,
@@ -98,9 +98,9 @@ async function writeGzip(path, text) {
   await fs.writeFile(path, gzipSync(Buffer.from(text)));
 }
 
-async function writeAuthorIndex(directory, authors, snapshotId = SNAPSHOT_ID) {
-  const inputPath = join(directory, 'authors.txt');
-  const indexPath = join(directory, 'author-index');
+async function writeAuthorIndex(directory, authors, snapshotId = SNAPSHOT_ID, { lookup = true } = {}) {
+  const inputPath = join(directory, `authors-${snapshotId}.txt`);
+  const indexPath = join(directory, `author-index-${snapshotId}`);
   await fs.writeFile(inputPath, authors.map(author => authorLine(author.key, author.name)).join(''));
   await buildOpenLibraryAuthorIndex({
     inputPath,
@@ -108,7 +108,12 @@ async function writeAuthorIndex(directory, authors, snapshotId = SNAPSHOT_ID) {
     snapshotId,
     generatedAt: GENERATED_AT,
   });
+  if (lookup) await buildOpenLibraryAuthorLookup({ indexPath, snapshotId, batchSize: 1 });
   return indexPath;
+}
+
+function assertNoTempFiles(names) {
+  assert.deepEqual(names.filter(name => name.includes('.tmp') || name.includes('.bak')), []);
 }
 
 async function enrichFixture({
@@ -116,17 +121,19 @@ async function enrichFixture({
   candidates,
   editions,
   authors,
+  authorsIndexPath: existingAuthorIndex = null,
   snapshotId = SNAPSHOT_ID,
   authorSnapshotId = snapshotId,
   progressInterval = 1,
   outputName = 'enriched.json',
+  editionsName = 'ol_dump_editions_fixture.txt.gz',
 }) {
-  const inputPath = join(directory, 'discover.json');
-  const editionsPath = join(directory, 'ol_dump_editions_fixture.txt.gz');
+  const inputPath = join(directory, `discover-${outputName}`);
+  const editionsPath = join(directory, editionsName);
   const outputPath = join(directory, outputName);
   await fs.writeFile(inputPath, `${JSON.stringify(discoverArtifact(candidates, snapshotId))}\n`);
   await writeGzip(editionsPath, editions);
-  const authorsIndexPath = await writeAuthorIndex(directory, authors, authorSnapshotId);
+  const authorsIndexPath = existingAuthorIndex ?? await writeAuthorIndex(directory, authors, authorSnapshotId);
   const progress = [];
   const result = await enrichCatalogCandidates({
     inputPath,
@@ -177,6 +184,10 @@ test('enrich converts ISBN-10 including X, drops invalid checksums, and dedupes'
   assert.equal(result.worksWithIsbns, 1);
   assert.equal(result.worksWithoutIsbns, 0);
   assert.equal(result.worksWithAuthor, 1);
+  assert.equal(result.badChecksums, 4);
+  assert.equal(result.malformedRows, 1);
+  assert.equal(result.worksIsbnTruncated, 0);
+  assert.equal((await fs.stat(join(result.authorsIndexPath, 'lookup.sqlite'))).isFile(), true);
   assert.ok(result.progress.length >= 1);
   assert.equal(result.progress.at(-1).matchedEditions, 2);
   assert.equal(result.progress.at(-1).worksWithIsbns, 1);
@@ -187,11 +198,11 @@ test('enrich converts ISBN-10 including X, drops invalid checksums, and dedupes'
   assert.equal(loaded[0].primaryAuthor, 'Jane Austen');
 });
 
-test('enrich caps ISBNs at 50 per work', async (t) => {
-  assert.equal(CATALOG_ENRICH_MAX_ISBNS, 50);
+test('enrich keeps the lowest 200 ISBN-13s per work', async (t) => {
+  assert.equal(CATALOG_ENRICH_MAX_ISBNS, 200);
   const directory = await temporaryDirectory();
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
-  const isbns = Array.from({ length: 51 }, (_, index) => isbn13For(index));
+  const isbns = Array.from({ length: 201 }, (_, index) => isbn13For(index + 1000)).reverse();
   const result = await enrichFixture({
     directory,
     candidates: [discoverCandidate()],
@@ -202,10 +213,47 @@ test('enrich caps ISBNs at 50 per work', async (t) => {
     }),
     authors: [{ key: '/authors/OL1A', name: 'Jane Austen' }],
   });
-  assert.equal(result.artifact.candidates[0].isbns.length, 50);
-  assert.equal(result.artifact.candidates[0].isbns[0], isbn13For(0));
-  assert.equal(result.artifact.candidates[0].isbns[49], isbn13For(49));
-  assert.equal(result.artifact.candidates[0].isbns.includes(isbn13For(50)), false);
+  const expected = Array.from({ length: 200 }, (_, index) => isbn13For(index + 1000));
+  assert.deepEqual(result.artifact.candidates[0].isbns, expected);
+  assert.equal(result.worksIsbnTruncated, 1);
+});
+
+test('enrich keeps the same ISBN-13 set for a 60+ edition work regardless of dump order', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const total = 220;
+  const lines = Array.from({ length: total }, (_, index) => editionLine(`/books/OL${index}M`, {
+    title: 'Many Editions',
+    works: [{ key: '/works/OL100W' }],
+    isbn_13: [isbn13For(index)],
+  }));
+  const authors = [{ key: '/authors/OL1A', name: 'Jane Austen' }];
+  const authorsIndexPath = await writeAuthorIndex(directory, authors);
+  const candidates = [discoverCandidate()];
+  const forward = await enrichFixture({
+    directory,
+    candidates,
+    editions: lines.join(''),
+    authorsIndexPath,
+    outputName: 'forward.json',
+    editionsName: 'forward.txt.gz',
+  });
+  const reverse = await enrichFixture({
+    directory,
+    candidates,
+    editions: lines.slice().reverse().join(''),
+    authorsIndexPath,
+    outputName: 'reverse.json',
+    editionsName: 'reverse.txt.gz',
+  });
+  const expected = Array.from({ length: CATALOG_ENRICH_MAX_ISBNS }, (_, index) => isbn13For(index));
+  assert.equal(total > 60, true);
+  assert.deepEqual(forward.artifact.candidates[0].isbns, expected);
+  assert.deepEqual(reverse.artifact.candidates[0].isbns, expected);
+  assert.equal(forward.worksIsbnTruncated, 1);
+  assert.equal(reverse.worksIsbnTruncated, 1);
+  assert.equal(forward.matchedEditions, total);
+  assert.equal(reverse.matchedEditions, total);
 });
 
 test('enrich leaves primaryAuthor null when the first author key is unknown', async (t) => {
@@ -278,6 +326,94 @@ test('enrich rejects an author index snapshot that differs from the input', asyn
     error => error.code === 'author_snapshot_mismatch',
   );
   assert.equal(await fs.readFile(outputPath, 'utf8'), previous);
+  assertNoTempFiles(await fs.readdir(directory));
+});
+
+test('enrich rejects a directory passed as the discover input and leaves no output', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const inputPath = join(directory, 'discover-dir');
+  const editionsPath = join(directory, 'editions.txt');
+  const outputPath = join(directory, 'enriched.json');
+  const previous = '{"keep":"previous"}\n';
+  await fs.mkdir(inputPath);
+  await fs.writeFile(editionsPath, 'unused\n');
+  await fs.writeFile(outputPath, previous);
+
+  await assert.rejects(
+    () => enrichCatalogCandidates({
+      inputPath,
+      editionsPath,
+      authorsIndexPath: directory,
+      outputPath,
+    }),
+    error => error.code === 'invalid_argument' && error.message.includes('discover input must be a file'),
+  );
+  assert.equal(await fs.readFile(outputPath, 'utf8'), previous);
+  assertNoTempFiles(await fs.readdir(directory));
+});
+
+test('enrich rejects an unreadable editions file and leaves no output', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(async () => {
+    await fs.chmod(join(directory, 'editions.txt'), 0o644).catch(() => {});
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+  const inputPath = join(directory, 'discover.json');
+  const editionsPath = join(directory, 'editions.txt');
+  const outputPath = join(directory, 'enriched.json');
+  const previous = '{"keep":"previous"}\n';
+  await fs.writeFile(inputPath, `${JSON.stringify(discoverArtifact([discoverCandidate()]))}\n`);
+  await fs.writeFile(editionsPath, 'secret\n');
+  await fs.chmod(editionsPath, 0o000);
+  await fs.writeFile(outputPath, previous);
+
+  await assert.rejects(
+    () => enrichCatalogCandidates({
+      inputPath,
+      editionsPath,
+      authorsIndexPath: directory,
+      outputPath,
+    }),
+    error => error.code === 'invalid_argument' && /Unable to read editions dump/.test(error.message) && /EACCES/.test(error.message),
+  );
+  assert.equal(await fs.readFile(outputPath, 'utf8'), previous);
+  assertNoTempFiles(await fs.readdir(directory));
+});
+
+test('enrich requires lookup.sqlite instead of reading author shards', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const outputPath = join(directory, 'enriched.json');
+  const previous = '{"keep":"previous"}\n';
+  await fs.writeFile(outputPath, previous);
+  const inputPath = join(directory, 'discover.json');
+  const editionsPath = join(directory, 'editions.txt.gz');
+  await fs.writeFile(inputPath, `${JSON.stringify(discoverArtifact([discoverCandidate()]))}\n`);
+  await writeGzip(editionsPath, editionLine('/books/OL1M', {
+    title: 'Edition',
+    works: [{ key: '/works/OL100W' }],
+    isbn_13: [isbn13For(2)],
+  }));
+  const authorsIndexPath = await writeAuthorIndex(
+    directory,
+    [{ key: '/authors/OL1A', name: 'Jane Austen' }],
+    SNAPSHOT_ID,
+    { lookup: false },
+  );
+
+  await assert.rejects(
+    () => enrichCatalogCandidates({
+      inputPath,
+      editionsPath,
+      authorsIndexPath,
+      outputPath,
+    }),
+    error => error.code === 'invalid_author_index' && error.message.includes('run catalog:ol-author-lookup-build first'),
+  );
+  assert.equal(await fs.readFile(outputPath, 'utf8'), previous);
+  assertNoTempFiles(await fs.readdir(directory));
+  assert.equal(await fs.access(join(authorsIndexPath, 'lookup.sqlite')).then(() => true).catch(() => false), false);
 });
 
 test('writeEnrichedArtifactAtomically keeps the previous file when validation fails', async (t) => {

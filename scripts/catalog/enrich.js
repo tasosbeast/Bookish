@@ -1,5 +1,6 @@
+import { constants as fsConstants } from 'node:fs';
 import * as fs from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { writeFileAtomic } from './atomic-write.js';
 import { CatalogContractError } from './contracts.js';
 import { validateDiscoverArtifact } from './discover.js';
@@ -13,7 +14,7 @@ import {
 } from './open-library-bulk.js';
 import { SnapshotRecordError } from './snapshot-reader.js';
 
-export const CATALOG_ENRICH_MAX_ISBNS = 50;
+export const CATALOG_ENRICH_MAX_ISBNS = 200;
 export const CATALOG_ENRICH_DEFAULT_PROGRESS_INTERVAL = 500_000;
 
 const ENRICHED_CANDIDATE_KEYS = Object.freeze([
@@ -55,16 +56,26 @@ function exactKeys(value, keys, label) {
   }
 }
 
-async function assertReadable(path, label) {
+async function assertReadable(path, label, kind) {
   try {
-    await fs.access(path);
+    await fs.access(path, fsConstants.R_OK);
+    const stat = await fs.stat(path);
+    if (kind === 'file' && !stat.isFile()) fail('invalid_argument', `${label} must be a file: ${path}`);
+    if (kind === 'directory' && !stat.isDirectory()) fail('invalid_argument', `${label} must be a directory: ${path}`);
   } catch (cause) {
+    if (cause instanceof CatalogContractError) throw cause;
     fail('invalid_argument', `Unable to read ${label} ${path}: ${cause.message}`);
   }
 }
 
 function bump(counts, field) {
   counts[field] += 1;
+  if (!Number.isSafeInteger(counts[field])) fail('invalid_enriched_artifact', `${field} exceeded a safe integer`);
+}
+
+function addCount(counts, field, amount) {
+  if (!amount) return;
+  counts[field] += amount;
   if (!Number.isSafeInteger(counts[field])) fail('invalid_enriched_artifact', `${field} exceeded a safe integer`);
 }
 
@@ -75,6 +86,9 @@ function progressSnapshot(counts) {
     worksWithIsbns: counts.worksWithIsbns,
     worksWithoutIsbns: counts.worksTotal - counts.worksWithIsbns,
     worksWithAuthor: counts.worksWithAuthor,
+    worksIsbnTruncated: counts.worksIsbnTruncated,
+    badChecksums: counts.badChecksums,
+    malformedRows: counts.malformedRows,
   };
 }
 
@@ -153,7 +167,12 @@ export async function writeEnrichedArtifactAtomically(outputPath, artifact, { sn
 function candidateEntries(candidates) {
   const entries = new Map();
   for (const candidate of candidates) {
-    entries.set(candidate.workKey, { isbns: new Set(), primaryAuthor: null });
+    entries.set(candidate.workKey, {
+      isbns: new Set(),
+      highestIsbn: '',
+      truncated: false,
+      primaryAuthor: null,
+    });
   }
   return entries;
 }
@@ -170,12 +189,46 @@ function matchingWorkKeys(data, entries) {
   return matched ?? NO_MATCHES;
 }
 
-function addIsbns(entry, isbns, counts) {
-  for (const isbn of isbns) {
-    if (entry.isbns.size >= CATALOG_ENRICH_MAX_ISBNS) return;
-    const before = entry.isbns.size;
+function highestIsbn(isbns) {
+  let highest = '';
+  for (const isbn of isbns) if (isbn > highest) highest = isbn;
+  return highest;
+}
+
+function noteTruncation(entry, counts) {
+  if (entry.truncated) return;
+  entry.truncated = true;
+  bump(counts, 'worksIsbnTruncated');
+}
+
+// Keep the lowest ISBN-13s. A later smaller value replaces the current highest, so dump order does not change the set.
+function addIsbn(entry, isbn, counts) {
+  if (entry.isbns.has(isbn)) return;
+  if (entry.isbns.size < CATALOG_ENRICH_MAX_ISBNS) {
     entry.isbns.add(isbn);
-    if (before === 0 && entry.isbns.size === 1) bump(counts, 'worksWithIsbns');
+    if (entry.isbns.size === 1) bump(counts, 'worksWithIsbns');
+    if (entry.isbns.size === CATALOG_ENRICH_MAX_ISBNS) entry.highestIsbn = highestIsbn(entry.isbns);
+    return;
+  }
+  if (isbn >= entry.highestIsbn) {
+    noteTruncation(entry, counts);
+    return;
+  }
+  entry.isbns.delete(entry.highestIsbn);
+  entry.isbns.add(isbn);
+  entry.highestIsbn = highestIsbn(entry.isbns);
+  noteTruncation(entry, counts);
+}
+
+async function assertAuthorLookupDatabase(authorsIndex) {
+  const lookupPath = join(authorsIndex, 'lookup.sqlite');
+  try {
+    await fs.access(lookupPath, fsConstants.R_OK);
+    const stat = await fs.stat(lookupPath);
+    if (!stat.isFile()) fail('invalid_author_index', 'Author lookup database is missing; run catalog:ol-author-lookup-build first');
+  } catch (cause) {
+    if (cause instanceof CatalogContractError) throw cause;
+    fail('invalid_author_index', 'Author lookup database is missing; run catalog:ol-author-lookup-build first');
   }
 }
 
@@ -202,12 +255,20 @@ async function scanEditions(editionsPath, entries, counts, progressInterval, onP
   for await (const record of readOpenLibraryBulkRecords(editionsPath)) {
     bump(counts, 'rowsScanned');
     try {
-      if (record instanceof SnapshotRecordError || record?.type !== '/type/edition' || !plainObject(record.data)) continue;
+      if (record instanceof SnapshotRecordError) {
+        bump(counts, 'malformedRows');
+        continue;
+      }
+      if (record?.type !== '/type/edition' || !plainObject(record.data)) continue;
       const matched = matchingWorkKeys(record.data, entries);
       if (!matched.length) continue;
       bump(counts, 'matchedEditions');
-      const isbns = isbn13Values(record.data).values;
-      for (const workKey of matched) addIsbns(entries.get(workKey), isbns, counts);
+      const isbns = isbn13Values(record.data);
+      addCount(counts, 'badChecksums', isbns.invalid);
+      for (const workKey of matched) {
+        const entry = entries.get(workKey);
+        for (const isbn of isbns.values) addIsbn(entry, isbn, counts);
+      }
     } finally {
       noteProgress(counts, progressInterval, onProgress);
     }
@@ -248,9 +309,9 @@ export async function enrichCatalogCandidates({
   const editions = requiredPath(editionsPath, 'editionsPath');
   const authorsIndex = requiredPath(authorsIndexPath, 'authorsIndexPath');
   const output = requiredPath(outputPath, 'outputPath');
-  await assertReadable(input, 'discover input');
-  await assertReadable(editions, 'editions dump');
-  await assertReadable(authorsIndex, 'author index');
+  await assertReadable(input, 'discover input', 'file');
+  await assertReadable(editions, 'editions dump', 'file');
+  await assertReadable(authorsIndex, 'author index', 'directory');
 
   const artifact = await readDiscoverArtifact(input);
   const snapshotId = artifact.snapshotId;
@@ -258,6 +319,7 @@ export async function enrichCatalogCandidates({
   if (authorMetadata.snapshotId !== snapshotId) {
     fail('author_snapshot_mismatch', 'Author index snapshotId does not match the discover artifact');
   }
+  await assertAuthorLookupDatabase(authorsIndex);
 
   const entries = candidateEntries(artifact.candidates);
   const counts = {
@@ -266,6 +328,9 @@ export async function enrichCatalogCandidates({
     worksWithIsbns: 0,
     worksTotal: entries.size,
     worksWithAuthor: 0,
+    worksIsbnTruncated: 0,
+    badChecksums: 0,
+    malformedRows: 0,
   };
   const authorLookup = await createOpenLibraryAuthorLookup({ indexPath: authorsIndex, snapshotId });
   try {
