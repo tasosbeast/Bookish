@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { isAllowedAvatarUrl } from '../lib/avatarUrl.js';
 import { allowedAvatarHosts } from '../lib/avatarHosts.js';
 
@@ -9,13 +9,9 @@ export function Avatar({
   placeholderClassName = 'reader-avatar-placeholder',
   alt,
 }) {
-  const [failed, setFailed] = useState(false);
+  const [failedSrc, setFailedSrc] = useState(null);
   const src = typeof profilePicture === 'string' ? profilePicture.trim() : '';
-  const showImage = src !== '' && isAllowedAvatarUrl(src, allowedAvatarHosts) && !failed;
-
-  useEffect(() => {
-    setFailed(false);
-  }, [src]);
+  const showImage = src !== '' && isAllowedAvatarUrl(src, allowedAvatarHosts) && failedSrc !== src;
 
   if (!showImage) {
     const initial = username ? String(username).slice(0, 1).toUpperCase() : '?';
@@ -29,7 +25,7 @@ export function Avatar({
       alt={alt ?? (username ? `${username}'s avatar` : 'Reader avatar')}
       referrerPolicy="no-referrer"
       loading="lazy"
-      onError={() => setFailed(true)}
+      onError={() => setFailedSrc(src)}
     />
   );
 }
