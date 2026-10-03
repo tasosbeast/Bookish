@@ -10,8 +10,9 @@ Explicit sign-out (`session.logout()`, including the header control in `Layout.j
 
 - Perform the server delete while the user is still authenticated, before the session is cleared or revoked.
 - Bound that cleanup to about three seconds. Abort the in-flight delete and any token refresh it started so sign-out still finishes.
+- Become a guest before waiting on the auth lock, so a refresh already in flight cannot keep the reader signed in. Server revocation still runs when the lock is free.
 - Logout must still finish if unsubscribing fails, there is no subscription, push is unsupported, or notification permission is not granted.
-- Forced sign-out (`refresh` 401 and `invalidate`) has no access token left for the server delete. Best-effort: drop only the browser subscription.
+- Forced sign-out (`refresh` 401, including while restoring a reopened page, and `invalidate`) has no access token left for the server delete. Best-effort: drop only the browser subscription. Network and 5xx refresh errors do not.
 - Keep the Account page enable/disable toggle behavior unchanged.
 - The delete endpoint already exists. No backend contract, schema, or deployment changes.
 
@@ -23,6 +24,9 @@ Explicit sign-out (`session.logout()`, including the header control in `Layout.j
 - Logout still reaches guest and calls `/auth/logout` when cleanup never resolves.
 - An expired access token is refreshed before the server delete.
 - `getRegistration()` rejecting still signs out.
+- A refresh that already holds the auth lock still yields guest status immediately. Logout also returns if another request keeps the lock, and the server revocation still runs when the lock is free.
+- Aborting one refresh waiter does not cancel the shared refresh. Network and 5xx refresh errors do not drop the browser subscription. Another tab's sign-out drops it once. `SESSION_CHANGED` during the delete still signs out.
+- A new subscription waits for an in-flight unsubscribe. An unconfigured push client reads as off and warns once.
 - Existing Account push toggle coverage stays in place.
 
 ## Out of Scope
@@ -35,7 +39,7 @@ Explicit sign-out (`session.logout()`, including the header control in `Layout.j
 ## Acceptance Criteria
 
 1. Explicit logout removes the push subscription both in the browser (PushManager unsubscribe) and on the server (existing push-subscription delete endpoint).
-2. Logout always completes, even if unsubscribing fails, hangs, there is no subscription, push isn't supported, or permission isn't granted. Cleanup cannot block sign-out past its deadline. The server-side delete happens while the user is still authenticated.
+2. Logout always completes, even if unsubscribing fails, hangs, there is no subscription, push isn't supported, or permission isn't granted. Cleanup cannot block sign-out past its deadline. The reader becomes a guest without waiting for an in-flight refresh to release the auth lock. The server-side delete happens while the user is still authenticated.
 3. Forced sign-out drops the browser subscription without calling the authenticated delete.
 4. The existing Account.jsx push toggle keeps working as before.
 5. Tests cover logout with an active subscription, without one, when unsubscribe fails, when cleanup never resolves, when the access token must be refreshed, and when `getRegistration()` rejects.

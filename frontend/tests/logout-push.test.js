@@ -33,6 +33,9 @@ test('logout removes the push subscription without blocking sign-out', { timeout
   let accessExpiresIn = 900;
   let loginToken = null;
   let refreshedToken = null;
+  let allowRegister = false;
+  let changeSessionOnDelete = false;
+  const testPublicKey = 'BGouzo1xJ7_lwbhCB1DsNprRI7yu1PeBoyThiRRlIrwG_S9ZrJW7hkNOnH2_vAZH1U6zB-wTBFkbm5xStaPLKWk';
 
   function issueToken(expSeconds) {
     return `header.${btoa(JSON.stringify({ sub: 'user-logout-push', exp: expSeconds }))}.signature`;
@@ -63,17 +66,25 @@ test('logout removes the push subscription without blocking sign-out', { timeout
       },
     };
     globalThis.Notification = dom.window.Notification;
-    dom.window.navigator.serviceWorker = {
-      getRegistration: async () => ({
-        pushManager: {
-          getSubscription: async () => {
-            if (subscriptionGate) await subscriptionGate;
-            return mockSubscription;
-          },
+    const registration = {
+      pushManager: {
+        getSubscription: async () => {
+          if (subscriptionGate) await subscriptionGate;
+          return mockSubscription;
         },
-      }),
-      register: async () => { throw new Error('register should not run during logout'); },
-      ready: Promise.resolve({}),
+        subscribe: async () => {
+          mockSubscription = subscription();
+          return mockSubscription;
+        },
+      },
+    };
+    dom.window.navigator.serviceWorker = {
+      getRegistration: async () => registration,
+      register: async () => {
+        if (!allowRegister) throw new Error('register should not run during logout');
+        return registration;
+      },
+      ready: Promise.resolve(registration),
     };
   }
 
@@ -112,10 +123,25 @@ test('logout removes the push subscription without blocking sign-out', { timeout
     }
     if (url.pathname === '/api/auth/logout') return new Response(null, { status: 204 });
     if (url.pathname === '/api/push/subscriptions' && method === 'DELETE') {
+      if (changeSessionOnDelete) {
+        let storageKey = null;
+        for (let index = 0; index < dom.window.localStorage.length; index += 1) {
+          const item = dom.window.localStorage.key(index);
+          if (item?.startsWith('bookish:session:')) storageKey = item;
+        }
+        if (!storageKey) throw new Error('missing session marker');
+        dom.window.localStorage.setItem(storageKey, JSON.stringify({ id: 'other-reader', signedOut: false }));
+      }
       if (deleteStatus !== 200) {
         return Response.json({ error: { code: 'SERVER_ERROR', message: 'delete failed' } }, { status: deleteStatus });
       }
       return Response.json({ data: { status: 'unsubscribed' } });
+    }
+    if (url.pathname === '/api/push/public-key') {
+      return Response.json({ data: { publicKey: testPublicKey } });
+    }
+    if (url.pathname === '/api/push/subscriptions' && method === 'POST') {
+      return Response.json({ data: { status: 'subscribed' } }, { status: 201 });
     }
     if (url.pathname.startsWith('/api/notifications')) {
       return Response.json({ data: [], unreadCount: 0 });
@@ -324,4 +350,75 @@ test('logout removes the push subscription without blocking sign-out', { timeout
   assert.equal(session.getSnapshot().status, 'guest');
   assert.equal(unsubscribeCalled, 1, 'Forced sign-out unsubscribed in the browser');
   assert.equal(since(forcedStart).some(call => call.path === '/api/push/subscriptions'), false);
+
+  // Another account taking over during the delete still signs this browser out.
+  installPushSupport();
+  await signIn();
+  mockSubscription = subscription();
+  unsubscribeCalled = 0;
+  changeSessionOnDelete = true;
+  const changedStart = calls.length;
+  const changedWarnings = [];
+  console.warn = (...args) => changedWarnings.push(args.map(String).join(' '));
+  try {
+    await signOutSession();
+  } finally {
+    console.warn = originalWarn;
+    changeSessionOnDelete = false;
+  }
+  assert.ok(changedWarnings.some(line => line.includes('Your account changed')));
+  assert.equal(unsubscribeCalled, 1);
+  assert.ok(since(changedStart).some(call => call.path === '/api/push/subscriptions' && call.method === 'DELETE'));
+  assert.ok(since(changedStart).some(call => call.path === '/api/auth/logout'));
+  assert.equal(session.getSnapshot().status, 'guest');
+  assert.equal((await session.credentials()).token, null);
+
+  // A late unsubscribe must finish before subscribeToPush creates a replacement.
+  const {
+    subscribeToPush, unsubscribeFromPush, configurePushClient, checkSubscriptionStatus,
+  } = await server.ssrLoadModule('/src/lib/push.js');
+  const { api } = await server.ssrLoadModule('/src/lib/api.js');
+  installPushSupport();
+  allowRegister = true;
+  await signIn();
+  let releaseBrowserUnsub;
+  mockSubscription = subscription();
+  mockSubscription.unsubscribe = () => new Promise(resolve => {
+    releaseBrowserUnsub = () => {
+      unsubscribeCalled += 1;
+      mockSubscription = null;
+      resolve(true);
+    };
+  });
+  dom.window.Notification.permission = 'default';
+  permissionRequests = 0;
+  const raceStart = calls.length;
+  const hangingUnsub = unsubscribeFromPush();
+  for (let attempt = 0; attempt < 50 && !releaseBrowserUnsub; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.equal(typeof releaseBrowserUnsub, 'function');
+  const subscribing = subscribeToPush();
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(permissionRequests, 0, 'subscribe waits for the in-flight unsubscribe');
+  assert.equal(since(raceStart).some(call => call.path === '/api/push/subscriptions' && call.method === 'POST'), false);
+  releaseBrowserUnsub();
+  await hangingUnsub;
+  await subscribing;
+  assert.equal(permissionRequests, 1);
+  assert.ok(since(raceStart).some(call => call.path === '/api/push/subscriptions' && call.method === 'POST'));
+  allowRegister = false;
+
+  // An unconfigured push client reads as off and says so, without throwing from a status check.
+  configurePushClient(null);
+  const unconfiguredWarnings = [];
+  console.warn = (...args) => unconfiguredWarnings.push(args.map(String).join(' '));
+  try {
+    assert.equal(await checkSubscriptionStatus(endpoint), false);
+    assert.ok(unconfiguredWarnings.some(line => line.includes('not configured')));
+    await assert.rejects(subscribeToPush(), /currently unavailable/);
+  } finally {
+    console.warn = originalWarn;
+    configurePushClient(api);
+  }
 });

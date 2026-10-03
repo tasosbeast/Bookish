@@ -1,10 +1,26 @@
 // The API client is injected from api.js so this module does not import it back.
-let pushApi = async () => {
-  throw new Error('Push client is not configured.');
-};
+let pushApi = null;
+let warnedUnconfigured = false;
+let pendingUnsubscribe = Promise.resolve();
 
 export function configurePushClient(client) {
-  pushApi = client;
+  pushApi = typeof client === 'function' ? client : null;
+  if (pushApi) warnedUnconfigured = false;
+}
+
+function requirePushApi() {
+  if (pushApi) return pushApi;
+  if (!warnedUnconfigured) {
+    warnedUnconfigured = true;
+    console.warn('[push] Push client is not configured.');
+  }
+  return null;
+}
+
+function trackUnsubscribe(promise) {
+  const settled = Promise.resolve(promise).then(() => {}, () => {});
+  pendingUnsubscribe = pendingUnsubscribe.then(() => settled, () => settled);
+  return promise;
 }
 
 export function isPushSupported() {
@@ -38,8 +54,10 @@ export async function getExistingSubscription() {
 
 export async function checkSubscriptionStatus(endpoint) {
   if (!endpoint || !isPushSupported()) return false;
+  const client = requirePushApi();
+  if (!client) return false;
   try {
-    const result = await pushApi('/push/subscriptions/status', {
+    const result = await client('/push/subscriptions/status', {
       method: 'POST',
       auth: 'required',
       body: { endpoint },
@@ -54,6 +72,12 @@ export async function subscribeToPush() {
   if (!isPushSupported()) {
     throw new Error('Browser notifications are not supported on this device.');
   }
+  // A logout unsubscribe that outlived its deadline must finish before a new subscription is created.
+  await pendingUnsubscribe;
+  const client = requirePushApi();
+  if (!client) {
+    throw new Error('Push notifications are currently unavailable.');
+  }
 
   const permission = await Notification.requestPermission();
   if (permission !== 'granted') {
@@ -65,7 +89,7 @@ export async function subscribeToPush() {
     await navigator.serviceWorker.ready;
   }
 
-  const keyResponse = await pushApi('/push/public-key', { auth: 'none' });
+  const keyResponse = await client('/push/public-key', { auth: 'none' });
   const publicKey = keyResponse?.data?.publicKey;
   if (!publicKey) {
     throw new Error('Push notifications are currently unavailable.');
@@ -84,7 +108,7 @@ export async function subscribeToPush() {
   const p256dh = json.keys?.p256dh;
   const authKey = json.keys?.auth;
 
-  await pushApi('/push/subscriptions', {
+  await client('/push/subscriptions', {
     method: 'POST',
     auth: 'required',
     body: {
@@ -99,8 +123,7 @@ export async function subscribeToPush() {
   return subscription;
 }
 
-// Browser-only. Used when the session is already unauthenticated, so no server delete is attempted.
-export async function dropBrowserPushSubscription() {
+async function dropBrowserPushSubscriptionNow() {
   if (!isPushSupported()) return false;
   try {
     const registration = await navigator.serviceWorker.getRegistration();
@@ -113,7 +136,12 @@ export async function dropBrowserPushSubscription() {
   }
 }
 
-export async function unsubscribeFromPush({ signal } = {}) {
+// Browser-only. Used when the session is already unauthenticated, so no server delete is attempted.
+export function dropBrowserPushSubscription() {
+  return trackUnsubscribe(dropBrowserPushSubscriptionNow());
+}
+
+async function unsubscribeFromPushNow({ signal } = {}) {
   if (signal?.aborted || !isPushSupported()) return false;
   try {
     const registration = await navigator.serviceWorker.getRegistration();
@@ -121,8 +149,12 @@ export async function unsubscribeFromPush({ signal } = {}) {
     const subscription = await registration.pushManager.getSubscription();
     if (!subscription) return false;
 
+    const client = requirePushApi();
+    if (!client) {
+      return await subscription.unsubscribe();
+    }
     try {
-      await pushApi('/push/subscriptions', {
+      await client('/push/subscriptions', {
         method: 'DELETE',
         auth: 'required',
         body: { endpoint: subscription.endpoint },
@@ -146,4 +178,8 @@ export async function unsubscribeFromPush({ signal } = {}) {
     }
     throw err;
   }
+}
+
+export function unsubscribeFromPush(options) {
+  return trackUnsubscribe(unsubscribeFromPushNow(options));
 }

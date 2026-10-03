@@ -2,13 +2,15 @@ import { ApiError, readResponse } from './http.js';
 
 // Tokens live only in this closure. Storage carries an account-change marker, never credentials.
 const LOGOUT_CLEANUP_MS = 3000;
+const LOGOUT_LOCK_WAIT_MS = 10000;
 
-export function createSession({ baseUrl, fetcher = fetch, locks, storage, channel, listenStorage = () => () => {}, now = Date.now, makeId = () => crypto.randomUUID(), beforeLogout, onSignedOut, logoutCleanupMs = LOGOUT_CLEANUP_MS }) {
+export function createSession({ baseUrl, fetcher = fetch, locks, storage, channel, listenStorage = () => () => {}, now = Date.now, makeId = () => crypto.randomUUID(), beforeLogout, onSignedOut, logoutCleanupMs = LOGOUT_CLEANUP_MS, logoutLockWaitMs = LOGOUT_LOCK_WAIT_MS }) {
   const key = `bookish:session:${baseUrl}`;
   let token = null;
   let expiresAt = 0;
   let marker = null;
   let refreshPending = null;
+  let refreshController = null;
   let initialized = false;
   let state = { status: 'restoring', user: null, error: null, version: 0 };
   const listeners = new Set();
@@ -17,10 +19,11 @@ export function createSession({ baseUrl, fetcher = fetch, locks, storage, channe
   const sameMarker = (a, b) => a?.id === b?.id;
   let explicitLogout = false;
   const clear = (status = 'guest', error = null) => {
-    const forcedSignOut = state.status === 'authenticated' && status === 'guest' && !explicitLogout;
+    // Authenticated invalidate/refresh 401, and a revoked session discovered while restoring.
+    // Network and 5xx failures do not come through here, so they do not drop push state.
+    const ended = status === 'guest' && !explicitLogout && (state.status === 'authenticated' || state.status === 'restoring');
     token = null; expiresAt = 0; emit({ status, user: null, error });
-    // Refresh 401 and invalidate() land here with no access token left, so only the browser subscription can be dropped.
-    if (forcedSignOut && typeof onSignedOut === 'function') void Promise.resolve(onSignedOut()).then(() => {}, () => {});
+    if (ended && typeof onSignedOut === 'function') void Promise.resolve(onSignedOut()).then(() => {}, () => {});
   };
   const unsupported = () => new ApiError(0, 'BROWSER_UNSUPPORTED', 'Please use an up-to-date browser to sign in.');
   const exclusive = work => {
@@ -54,22 +57,33 @@ export function createSession({ baseUrl, fetcher = fetch, locks, storage, channe
     }
   }
   function refresh(rejectedToken, signal) {
-    if (refreshPending) return refreshPending;
+    const bind = controller => {
+      if (!signal || !controller) return;
+      if (signal.aborted) controller.abort();
+      else signal.addEventListener('abort', () => controller.abort(), { once: true });
+    };
+    // A joined caller stops waiting when its own signal aborts. That must not cancel
+    // the shared refresh for anyone else; logout aborts the controller explicitly.
+    if (refreshPending) return observeAbort(refreshPending, signal);
+    const controller = new AbortController();
+    refreshController = controller;
+    bind(controller);
+    const localSignal = controller.signal;
     refreshPending = exclusive(async () => {
       sync();
       if (marker?.signedOut) { clear(); return null; }
       if (token && token !== rejectedToken && expiresAt > now() + 5000) return token;
       const startedWith = marker;
       try {
-        const result = await authPost('refresh', undefined, signal);
+        const result = await authPost('refresh', undefined, localSignal);
         const { user } = await readResponse(await fetcher(`${baseUrl}/auth/me`, {
-          credentials: 'include', signal, headers: { Authorization: `Bearer ${result.accessToken}` },
+          credentials: 'include', signal: localSignal, headers: { Authorization: `Bearer ${result.accessToken}` },
         }));
         if (!sameMarker(startedWith, readMarker())) { sync(); return null; }
         accept(result, user);
         return token;
       } catch (error) {
-        if (signal?.aborted || error?.name === 'AbortError') throw error;
+        if (localSignal.aborted || error?.name === 'AbortError') throw error;
         if (error.status === 401) { clear(); return null; }
         // A network error must not masquerade as logout or trigger an automatic refresh loop.
         emit({ status: token ? 'authenticated' : 'error', error });
@@ -78,7 +92,10 @@ export function createSession({ baseUrl, fetcher = fetch, locks, storage, channe
     }).catch(error => {
       if (error.code === 'BROWSER_UNSUPPORTED') clear('error', error);
       throw error;
-    }).finally(() => { refreshPending = null; });
+    }).finally(() => {
+      refreshPending = null;
+      if (refreshController === controller) refreshController = null;
+    });
     return refreshPending;
   }
   async function initialize(signal) {
@@ -94,17 +111,37 @@ export function createSession({ baseUrl, fetcher = fetch, locks, storage, channe
     return exclusive(async () => {
       // Check storage availability before making a cookie-changing request.
       storage.setItem(key, JSON.stringify(readMarker()));
+      const startedWith = marker;
       const result = await authPost(action, body);
+      // A logout that published while this request was in flight must not be overwritten.
+      if (!sameMarker(startedWith, readMarker())) { sync(); return null; }
       publish(false);
       accept(result, result.user);
       return result.user;
     });
   }
+  function observeAbort(pending, signal) {
+    if (!signal) return pending;
+    if (signal.aborted) return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener('abort', onAbort);
+        fn(value);
+      };
+      const onAbort = () => finish(reject, new DOMException('The operation was aborted.', 'AbortError'));
+      signal.addEventListener('abort', onAbort, { once: true });
+      pending.then(value => finish(resolve, value), error => finish(reject, error));
+    });
+  }
   async function logout() {
     // Bound push cleanup so a cold API or a hung PushManager cannot leave the reader signed in.
-    // The signal aborts the delete and any refresh it started, which releases the auth lock.
     explicitLogout = true;
     try {
+      // A refresh already inside the auth lock cannot observe a signal attached after it started.
+      refreshController?.abort();
       if (typeof beforeLogout === 'function') {
         const controller = new AbortController();
         let timer;
@@ -119,12 +156,23 @@ export function createSession({ baseUrl, fetcher = fetch, locks, storage, channe
         finally { clearTimeout(timer); }
         if (timedOut) console.warn('[session] Push cleanup timed out; continuing sign-out');
       }
-      return await exclusive(async () => {
-        // Persist local logout even if the network fails, so another tab cannot silently restore it.
-        publish(true);
-        clear();
-        await authPost('logout');
-      });
+      // Drop local credentials before waiting for the auth lock. An in-flight refresh
+      // compares markers and will not accept a new token after this publish.
+      refreshController?.abort();
+      publish(true);
+      clear();
+      const revocation = exclusive(async () => { await authPost('logout'); });
+      const finished = revocation.then(() => 'done', () => 'failed');
+      let timer;
+      const timedOut = new Promise(resolve => { timer = setTimeout(() => resolve('timeout'), logoutLockWaitMs); });
+      try {
+        const outcome = await Promise.race([finished, timedOut]);
+        if (outcome === 'timeout') {
+          console.warn('[session] Sign-out is waiting on another request; this device is already signed out');
+          return;
+        }
+        if (outcome === 'failed') await revocation;
+      } finally { clearTimeout(timer); }
     } finally { explicitLogout = false; }
   }
   async function credentials(options) {

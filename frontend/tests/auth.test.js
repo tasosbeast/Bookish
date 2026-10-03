@@ -259,6 +259,183 @@ test('forced sign-out drops local push state without treating explicit logout as
   assert.equal(drops, 2);
 });
 
+test('aborting one refresh waiter leaves the shared refresh running', async () => {
+  let release;
+  const env = environment();
+  const session = env.make({
+    fetcher: async (url, options) => {
+      if (url.endsWith('/refresh')) {
+        await new Promise((resolve, reject) => {
+          release = resolve;
+          const abort = () => reject(new DOMException('The operation was aborted.', 'AbortError'));
+          if (options?.signal?.aborted) abort();
+          else options?.signal?.addEventListener('abort', abort, { once: true });
+        });
+        return json({ accessToken: jwt(Date.now() / 1000 + 900), expiresIn: 900 });
+      }
+      if (url.endsWith('/me')) return json({ user: { id: 'reader', username: 'reader' } });
+      return json({ accessToken: jwt(Date.now() / 1000 + 900), expiresIn: 900, user: { id: 'reader', username: 'reader' } });
+    },
+  });
+  await session.authenticate('login', { email: 'reader@example.com', password: 'fixture' });
+  const token = (await session.credentials()).token;
+  const first = session.refresh(token);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  const controller = new AbortController();
+  const second = session.refresh(token, controller.signal);
+  controller.abort();
+  await assert.rejects(second, { name: 'AbortError' });
+  assert.equal(session.getSnapshot().status, 'authenticated');
+  release();
+  const renewed = await first;
+  assert.equal(session.getSnapshot().status, 'authenticated');
+  assert.ok(renewed);
+  assert.notEqual(renewed, token);
+});
+
+test('logout returns while another request still holds the auth lock', { timeout: 2000 }, async () => {
+  let holdLogin = false;
+  let unblock;
+  const calls = [];
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.map(String).join(' '));
+  const env = environment();
+  const session = env.make({
+    logoutLockWaitMs: 40,
+    fetcher: async url => {
+      calls.push(url);
+      if (url.endsWith('/login') && holdLogin) await new Promise(resolve => { unblock = resolve; });
+      if (url.endsWith('/logout')) return new Response(null, { status: 204 });
+      if (url.endsWith('/me')) return json({ user: { id: 'reader', username: 'reader' } });
+      if (url.endsWith('/refresh')) return json({ accessToken: jwt(Date.now() / 1000 + 900), expiresIn: 900 });
+      return json({ accessToken: jwt(Date.now() / 1000 + 900), expiresIn: 900, user: { id: 'reader', username: 'reader' } });
+    },
+  });
+  try {
+    await session.authenticate('login', { email: 'reader@example.com', password: 'fixture' });
+    holdLogin = true;
+    const pendingLogin = session.authenticate('login', { email: 'reader@example.com', password: 'fixture' });
+    await new Promise(resolve => setTimeout(resolve, 15));
+    assert.equal(typeof unblock, 'function');
+    const started = Date.now();
+    await session.logout();
+    assert.ok(Date.now() - started < 1000);
+    assert.equal(session.getSnapshot().status, 'guest');
+    assert.equal(calls.some(url => url.endsWith('/logout')), false);
+    assert.ok(warnings.some(line => line.includes('already signed out')));
+    unblock();
+    await pendingLogin;
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(session.getSnapshot().status, 'guest');
+    assert.ok(calls.some(url => url.endsWith('/logout')));
+  } finally {
+    console.warn = originalWarn;
+    unblock?.();
+  }
+});
+
+test('a hung refresh before logout still yields guest status immediately', { timeout: 2000 }, async () => {
+  let release;
+  const calls = [];
+  const env = environment();
+  const session = env.make({
+    fetcher: async url => {
+      calls.push(url);
+      if (url.endsWith('/refresh')) {
+        await new Promise(resolve => { release = resolve; });
+        return json({ accessToken: jwt(Date.now() / 1000 + 900), expiresIn: 900 });
+      }
+      if (url.endsWith('/me')) return json({ user: { id: 'reader', username: 'reader' } });
+      if (url.endsWith('/logout')) return new Response(null, { status: 204 });
+      return json({ accessToken: jwt(Date.now() / 1000 + 900), expiresIn: 900, user: { id: 'reader', username: 'reader' } });
+    },
+  });
+  await session.authenticate('login', { email: 'reader@example.com', password: 'fixture' });
+  const hung = session.refresh((await session.credentials()).token);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(session.getSnapshot().status, 'authenticated');
+  const pending = session.logout();
+  assert.equal(session.getSnapshot().status, 'guest');
+  assert.equal(session.getSnapshot().user, null);
+  assert.equal(calls.some(url => url.endsWith('/logout')), false);
+  release();
+  await hung.catch(() => {});
+  await pending;
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(session.getSnapshot().status, 'guest');
+  assert.equal(session.getSnapshot().user, null);
+  assert.ok(calls.some(url => url.endsWith('/logout')));
+});
+
+test('refresh network and server errors do not drop the browser subscription', async () => {
+  let mode = 'ok';
+  let drops = 0;
+  const env = environment();
+  const session = env.make({
+    onSignedOut: () => { drops += 1; },
+    fetcher: async url => {
+      if (url.endsWith('/refresh')) {
+        if (mode === 'offline') throw new TypeError('offline');
+        if (mode === '500') return failure(500, 'SERVER_ERROR');
+        return json({ accessToken: jwt(Date.now() / 1000 + 900), expiresIn: 900 });
+      }
+      if (url.endsWith('/me')) return json({ user: { id: 'reader', username: 'reader' } });
+      if (url.endsWith('/logout')) return new Response(null, { status: 204 });
+      return json({ accessToken: jwt(Date.now() / 1000 + 900), expiresIn: 900, user: { id: 'reader', username: 'reader' } });
+    },
+  });
+  await session.authenticate('login', { email: 'reader@example.com', password: 'fixture' });
+  const token = (await session.credentials()).token;
+  mode = 'offline';
+  await assert.rejects(session.refresh(token), /offline/);
+  assert.equal(session.getSnapshot().status, 'authenticated');
+  assert.equal(drops, 0);
+  mode = '500';
+  await assert.rejects(session.refresh(token), /SERVER_ERROR/);
+  assert.equal(session.getSnapshot().status, 'authenticated');
+  assert.equal(drops, 0);
+});
+
+test('a revoked session discovered while restoring drops the browser subscription once', async () => {
+  let drops = 0;
+  const env = environment();
+  const session = env.make({
+    onSignedOut: () => { drops += 1; },
+    fetcher: async url => {
+      if (url.endsWith('/refresh')) return failure(401, 'SESSION_EXPIRED');
+      if (url.endsWith('/me')) return json({ user: { id: 'reader', username: 'reader' } });
+      return json({ accessToken: jwt(Date.now() / 1000 + 900), expiresIn: 900, user: { id: 'reader' } });
+    },
+  });
+  assert.equal(session.getSnapshot().status, 'restoring');
+  await session.initialize();
+  assert.equal(session.getSnapshot().status, 'guest');
+  assert.equal(drops, 1);
+  await session.initialize();
+  assert.equal(drops, 1);
+});
+
+test('another tab signing out drops the local subscription once', async () => {
+  const env = environment();
+  let storageEvent;
+  let drops = 0;
+  const idle = env.make({
+    listenStorage: callback => { storageEvent = callback; return () => {}; },
+    onSignedOut: () => { drops += 1; },
+  });
+  const other = env.make();
+  await idle.authenticate('login', { email: 'reader@example.com', password: 'fixture' });
+  await other.authenticate('login', { email: 'reader@example.com', password: 'fixture' });
+  await other.logout();
+  assert.equal(drops, 0);
+  storageEvent({ key: 'bookish:session:/api' });
+  assert.equal(idle.getSnapshot().status, 'guest');
+  assert.equal(drops, 1);
+  storageEvent({ key: 'bookish:session:/api' });
+  assert.equal(drops, 1);
+});
+
 test('simulated page reload restores authentication from refresh cookie without persisting tokens', async () => {
   const env = environment();
   const session1 = env.make();
