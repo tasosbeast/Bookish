@@ -36,6 +36,7 @@ async function temporaryDirectory() {
 async function buildFixture(directory, options = {}) {
   const outputPath = join(directory, 'works-index');
   const progress = [];
+  progress.validating = 0;
   const result = await buildOpenLibraryWorkIndex({
     worksPath: fileURLToPath(WORKS),
     ratingsPath: fileURLToPath(RATINGS),
@@ -45,7 +46,10 @@ async function buildFixture(directory, options = {}) {
     generatedAt: GENERATED_AT,
     batchSize: 1,
     progressInterval: 1,
-    onProgress: (statistics) => progress.push(statistics),
+    onProgress: (statistics, phase) => {
+      if (phase === 'validating') progress.validating += 1;
+      else progress.push(statistics);
+    },
     ...options,
   });
   const lookup = await createOpenLibraryWorkLookup({ indexPath: outputPath, snapshotId: SNAPSHOT_ID });
@@ -88,6 +92,7 @@ test('works index stores fields, deterministic duplicates, ratings, shelves, and
     },
   });
   assert.equal(progress.length, 15 + 14 + 12);
+  assert.ok(progress.validating >= 1);
   assert.deepEqual(progress.at(-1), result.statistics);
   const metadata = JSON.parse(await fs.readFile(join(outputPath, 'index.json'), 'utf8'));
   assert.deepEqual(metadata.statistics, result.statistics);
@@ -125,7 +130,7 @@ test('works index stores fields, deterministic duplicates, ratings, shelves, and
   assert.equal(lookup.get('/works/OL14W').title, 'High rev');
   assert.equal(lookup.get('/works/OL999W'), null);
   assert.equal(lookup.get('/works/OL888W'), null);
-  assert.equal(lookup.get('/works/OLMISSINGW'), null);
+  assert.equal(lookup.get('/works/OL20W'), null);
 });
 
 test('gzip-compressed inputs produce the same works index without network access', async (t) => {
@@ -243,6 +248,65 @@ test('lookup rejects a missing, corrupt, or snapshot-mismatched works index with
     createOpenLibraryWorkLookup({ indexPath: outputPath, snapshotId: SNAPSHOT_ID }),
     error => error.code === 'invalid_work_index',
   );
+});
+
+test('a missing gzip input rejects and leaves no building directory', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const { outputPath, lookup } = await buildFixture(directory);
+  t.after(() => lookup.close());
+  const before = lookup.get('/works/OL10W');
+  const build = (ratingsPath, readingLogPath) => buildOpenLibraryWorkIndex({
+    worksPath: fileURLToPath(WORKS),
+    ratingsPath,
+    readingLogPath,
+    outputPath,
+    snapshotId: SNAPSHOT_ID,
+    generatedAt: GENERATED_AT,
+  });
+  await assert.rejects(
+    build(join(directory, 'missing-ratings.txt.gz'), fileURLToPath(READING_LOG)),
+    error => error.code === 'invalid_argument',
+  );
+  await assert.rejects(
+    build(fileURLToPath(RATINGS), join(directory, 'missing-reading-log.txt.gz')),
+    error => error.code === 'invalid_argument',
+  );
+  const unreadableGzip = join(directory, 'ratings-dir.txt.gz');
+  await fs.mkdir(unreadableGzip);
+  await assert.rejects(build(unreadableGzip, fileURLToPath(READING_LOG)));
+  assert.equal((await fs.readdir(directory)).some(name => name.includes('.building-')), false);
+  assert.deepEqual(lookup.get('/works/OL10W'), before);
+});
+
+test('work keys that do not match /works/OL…W are rejected', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const worksPath = join(directory, 'works.txt');
+  const ratingsPath = join(directory, 'ratings.txt');
+  const readingLogPath = join(directory, 'reading-log.txt');
+  await fs.writeFile(worksPath, [
+    '/type/work\t/works/NOTVALID\t1\t2026-01-01T00:00:00.000000\t{"title":"Bad key"}\n',
+    '/type/work\t/works/OL1W\t1\t2026-01-01T00:00:00.000000\t{"title":"Good"}\n',
+  ].join(''));
+  await fs.writeFile(ratingsPath, '');
+  await fs.writeFile(readingLogPath, '');
+  const outputPath = join(directory, 'works-index');
+  const result = await buildOpenLibraryWorkIndex({
+    worksPath,
+    ratingsPath,
+    readingLogPath,
+    outputPath,
+    snapshotId: SNAPSHOT_ID,
+    generatedAt: GENERATED_AT,
+  });
+  assert.equal(result.statistics.works.accepted, 1);
+  assert.equal(result.statistics.works.rejected, 1);
+  assert.equal(result.statistics.works.rejectedByReason.malformed_row, 1);
+  const lookup = await createOpenLibraryWorkLookup({ indexPath: outputPath, snapshotId: SNAPSHOT_ID });
+  t.after(() => lookup.close());
+  assert.equal(lookup.get('/works/NOTVALID'), null);
+  assert.equal(lookup.get('/works/OL1W').title, 'Good');
 });
 
 test('failed works index build preserves an existing known-good artifact', async (t) => {

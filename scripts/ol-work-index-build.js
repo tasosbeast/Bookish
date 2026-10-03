@@ -42,8 +42,9 @@ function parseArguments(args) {
 
 try {
   const options = parseArguments(process.argv.slice(2));
-  const onProgress = (statistics) => {
-    process.stderr.write(`[progress] works ${statistics.works.input} | ratings ${statistics.ratings.input} | reading-log ${statistics.readingLog.input}\n`);
+  const onProgress = (statistics, phase) => {
+    const stage = phase === 'validating' ? 'validating | ' : '';
+    process.stderr.write(`[progress] ${stage}works ${statistics.works.input} | ratings ${statistics.ratings.input} | reading-log ${statistics.readingLog.input}\n`);
   };
   const result = await buildOpenLibraryWorkIndex({
     worksPath: options.works,

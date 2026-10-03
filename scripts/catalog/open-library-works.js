@@ -90,7 +90,19 @@ function reject(section, reason) {
 
 function inputStream(path) {
   const source = createReadStream(path);
-  return path.toLowerCase().endsWith('.gz') ? source.pipe(createGunzip()) : source;
+  if (!path.toLowerCase().endsWith('.gz')) return source;
+  const gunzip = createGunzip();
+  // pipe() does not forward source errors. A missing .gz otherwise crashes as an unhandled 'error'.
+  source.on('error', error => gunzip.destroy(error));
+  return source.pipe(gunzip);
+}
+
+async function assertReadableInput(inputPath) {
+  try {
+    await fs.access(inputPath);
+  } catch (cause) {
+    fail('invalid_argument', `Unable to read ${inputPath}: ${cause.message}`);
+  }
 }
 
 async function* readSignalRows(path) {
@@ -249,7 +261,7 @@ function databaseMetadata(database) {
   });
 }
 
-function assertDatabaseMatches(database, metadata, { scanRows }) {
+function assertDatabaseMatches(database, metadata, { scanRows, progressInterval = 0, onProgress = null }) {
   const integrity = database.prepare('PRAGMA integrity_check').all();
   if (integrity.length !== 1 || integrity[0].integrity_check !== 'ok') fail('invalid_work_index', 'Work index failed SQLite integrity validation');
   const stored = databaseMetadata(database);
@@ -264,6 +276,7 @@ function assertDatabaseMatches(database, metadata, { scanRows }) {
   if (totals.ratings !== metadata.statistics.ratings.accepted) fail('invalid_work_index', 'Rating counts do not match metadata');
   if (totals.reading_log !== metadata.statistics.readingLog.accepted) fail('invalid_work_index', 'Reading-log counts do not match metadata');
   if (!scanRows) return;
+  if (typeof onProgress === 'function') onProgress(JSON.parse(stableJson(metadata.statistics)), 'validating');
   let works = 0;
   let ratings = 0;
   let readingLog = 0;
@@ -290,6 +303,9 @@ function assertDatabaseMatches(database, metadata, { scanRows }) {
     }
     ratings += row.ratings_count;
     readingLog += row.want_to_read_count + row.currently_reading_count + row.already_read_count;
+    if (typeof onProgress === 'function' && progressInterval && works % progressInterval === 0) {
+      onProgress(JSON.parse(stableJson(metadata.statistics)), 'validating');
+    }
   }
   if (works !== metadata.statistics.works.accepted || ratings !== metadata.statistics.ratings.accepted || readingLog !== metadata.statistics.readingLog.accepted) {
     fail('invalid_work_index', 'Scanned work aggregates do not match metadata');
@@ -316,6 +332,9 @@ function workRecord(row) {
   };
 }
 
+// Two renames, because a directory cannot atomically replace an existing directory.
+// A crash after the existing output moves aside and before the temp directory takes its
+// place leaves the previous artifact at the `.previous-*` path and the new tree at the temp path.
 async function replaceDirectory(tempPath, outputPath) {
   const backup = `${outputPath}.previous-${process.pid}-${Date.now()}`;
   let moved = false;
@@ -371,7 +390,7 @@ async function loadWorks({ database, worksPath, statistics, batch, progressInter
       const key = text(record.key);
       const revision = parseRevision(record.revision);
       const lineNumber = record.lineNumber;
-      if (!plainObject(record.data) || !key || revision === null || !Number.isSafeInteger(lineNumber)) {
+      if (!plainObject(record.data) || !key || !WORK_KEY_PATTERN.test(key) || revision === null || !Number.isSafeInteger(lineNumber)) {
         reject(statistics.works, 'malformed_row');
         continue;
       }
@@ -500,6 +519,9 @@ export async function buildOpenLibraryWorkIndex({
   batchSize = positiveInteger(batchSize, 'batchSize');
   progressInterval = positiveInteger(progressInterval, 'progressInterval');
   outputPath = resolve(outputPath);
+  worksPath = resolve(worksPath);
+  ratingsPath = resolve(ratingsPath);
+  readingLogPath = resolve(readingLogPath);
   const tempPath = `${outputPath}.building-${process.pid}-${Date.now()}`;
   const statistics = emptyStatistics();
   const seen = { count: 0 };
@@ -529,6 +551,9 @@ export async function buildOpenLibraryWorkIndex({
   };
   try {
     await fs.mkdir(dirname(outputPath), { recursive: true });
+    await assertReadableInput(worksPath);
+    await assertReadableInput(ratingsPath);
+    await assertReadableInput(readingLogPath);
     await fs.rm(tempPath, { recursive: true, force: true });
     await fs.mkdir(tempPath, { recursive: true });
     database = new DatabaseSync(join(tempPath, WORK_INDEX_FILE));
@@ -567,9 +592,9 @@ export async function buildOpenLibraryWorkIndex({
       PRAGMA user_version = ${OPEN_LIBRARY_WORK_INDEX_VERSION};
     `);
     const phase = { database, statistics, batch, progressInterval, onProgress, seen };
-    await loadWorks({ ...phase, worksPath: resolve(worksPath) });
-    await loadRatings({ ...phase, ratingsPath: resolve(ratingsPath) });
-    await loadReadingLog({ ...phase, readingLogPath: resolve(readingLogPath) });
+    await loadWorks({ ...phase, worksPath });
+    await loadRatings({ ...phase, ratingsPath });
+    await loadReadingLog({ ...phase, readingLogPath });
     database.exec('PRAGMA locking_mode = NORMAL; PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; BEGIN IMMEDIATE;');
     transactionOpen = true;
     database.prepare(`
@@ -604,12 +629,13 @@ export async function buildOpenLibraryWorkIndex({
     const written = await readWorkIndexMetadata(tempPath);
     const { DatabaseSync: ReadDatabase } = await sqlite();
     const validationDatabase = new ReadDatabase(join(tempPath, WORK_INDEX_FILE), { readOnly: true });
-    try { assertDatabaseMatches(validationDatabase, written, { scanRows: true }); }
+    try { assertDatabaseMatches(validationDatabase, written, { scanRows: true, progressInterval, onProgress }); }
     finally { validationDatabase.close(); }
     await replaceDirectory(tempPath, outputPath);
     return { ...metadata, outputPath };
   } catch (cause) {
     if (database && transactionOpen) {
+      // ROLLBACK is a no-op while journal_mode=OFF. The temp directory is removed below either way.
       try { database.exec('ROLLBACK;'); } catch { /* rollback is best-effort */ }
     }
     if (database) {
