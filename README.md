@@ -143,6 +143,14 @@ npm run catalog:ol-work-index-build -- --works path/to/ol_dump_works.txt.gz --ra
 
 The builder reads only those local files. It writes a validated SQLite database and `index.json` under `scripts/catalog-cache/open-library-works` (override with `--output`). It does not download dumps, contact providers, or access PostgreSQL.
 
+Rank candidates from that index with `catalog:discover`. The command reads the local works index only and writes a validated JSON artifact. It records `languageCheck` as `pending` because English editions are decided later from the editions dump. The score is `((bayesian - 1) / 4) * ln(1 + weightedReaders + ratingsCount)`. `bayesian` is the average pulled toward 20 prior ratings at 3.5. `weightedReaders` is `1 * alreadyRead + 0.75 * currentlyReading + 0.25 * wantToRead`. A work with no ratings and no shelf counts scores 0 and is rejected as `no_signal`. Ties break by work key.
+
+```powershell
+npm run catalog:discover -- --works-index scripts/catalog-cache/open-library-works --snapshot-id open-library-2026-08-31 --limit 500 --output scripts/catalog-cache/catalog-discover.json
+```
+
+`--output` defaults to `scripts/catalog-cache/catalog-discover.json`. `--min-ratings` defaults to 0 and `--min-readers` defaults to 10 raw shelf counts across all three shelves. There is no minimum Bayesian score. `--limit` must be from 1 through 10000. `--exclude-keys` is an optional file of `/works/OL…W` keys, one per line.
+
 Before a large local bulk build, check the target volume. The preflight uses an intentionally conservative 8× input-size temporary-space estimate plus a reserve; it refuses the check with a non-zero exit status when that requirement exceeds free space. Override the amplification only with measurements from a comparable local build.
 
 ```powershell

@@ -74,7 +74,7 @@ model Book {
   coverImageUrl   String?     @map("cover_image_url") @db.Text
   isbn            String?     @unique @db.VarChar(13)
   // Nullable Open Library work key (/works/OLnnnW). Unique when set; existing rows stay null.
-  openLibraryWorkKey String?  @unique @map("open_library_work_key") @db.Text
+  openLibraryWorkKey String? @unique @map("open_library_work_key") @db.Text
   publicationYear Int?        @map("publication_year") @db.SmallInt
   publicationDate DateTime?   @map("publication_date") @db.Date
   // Cache of AVG(UserBook.userRating); null means no ratings.

@@ -1,12 +1,8 @@
 # Current Task
 
-Add `Book.openLibraryWorkKey` to the Prisma schema as a nullable unique string, plus an additive migration.
+Candidate scoring and selection (`catalog:discover --limit N`).
 
-The field is `openLibraryWorkKey String? @unique @map("open_library_work_key") @db.Text`. The migration adds that nullable column and a unique index only. There is no data backfill and no change to other columns. Existing rows stay NULL. PostgreSQL allows multiple NULLs in the unique index.
-
-Book create and update APIs do not accept Open Library fields, so validators and routes stay unchanged. `serializeBook` omits the column so current response shapes stay the same.
-
-`npm run db:deploy` runs `prisma migrate deploy`. Render's bookish-api start command is `npm run db:deploy && npm start`, and the service auto-deploys `main`. The production migration runs automatically on the Render deploy after merge, so the product owner's merge decision is the apply step.
+The command reads a local Open Library works index and writes the top N works by the documented popularity score: a 0–1 Bayesian rating times the log of ratings plus weighted shelf counts. Works with no ratings and no shelf counts are rejected as `no_signal`. `--min-readers` defaults to 10 raw shelf counts and `--min-ratings` defaults to 0. Hard filters also require a cover, a non-empty title, and a `/works/OL<digits>W` key. English is not decided from works; the artifact records `languageCheck` as `pending`. The command does not access PostgreSQL, Prisma, or the network. `--limit` is at most 10000.
 
 ## Recorded for later
 
@@ -27,6 +23,7 @@ Existing rules still apply: non-books rejected via `pilotDisqualificationReason`
 3. A resolved-artifact bridge
 4. A batched, idempotent `--dry-run`/`--apply` import
 
+Book.openLibraryWorkKey is done (PR #32, merged as e1d281d).
 #31 catalog:ol-work-index-build is done (merged as 7fbf1ee).
 Issue #14 wordmark book icon is done (PR #30, merged as 9ee4596).
 Account picture drafts, lint warnings, and avatar fallback are done (PR #29).

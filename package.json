@@ -29,6 +29,7 @@
     "catalog:ol-snapshot-build": "node --experimental-sqlite scripts/ol-snapshot-build.js",
     "catalog:ol-targeted-extract": "node --experimental-sqlite scripts/ol-targeted-extract.js",
     "catalog:ol-work-index-build": "node --experimental-sqlite scripts/ol-work-index-build.js",
+    "catalog:discover": "node --experimental-sqlite scripts/catalog-discover.js",
     "release:readiness": "node scripts/release-data-readiness.js",
     "release:prh-sync": "node scripts/sync-prh-releases.js",
     "test": "node --experimental-sqlite --import ./tests/setup.js --test --test-concurrency=1 tests/*.test.js",
