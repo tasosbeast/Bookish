@@ -95,6 +95,12 @@ function reportRow(candidate, status = 'new') {
   };
 }
 
+function dedupReportRows(rows, artifact) {
+  const digest = artifact?.languageCheckDigest;
+  if (!digest) return rows;
+  return rows.map(row => ({ ...row, languageCheckDigest: digest }));
+}
+
 async function temporaryDirectory() {
   return fs.mkdtemp(join(tmpdir(), 'bookish-import-works-integration-'));
 }
@@ -140,13 +146,13 @@ test('PostgreSQL: --apply inserts mapped works and a rerun inserts 0', { skip: !
   });
 
   const artifact = enrichedArtifact(candidates, 'passed');
-  const reportRows = [
+  const reportRows = dedupReportRows([
     reportRow(withIsbn),
     reportRow(withoutIsbn),
     reportRow(existing, 'existing'),
     reportRow(ambiguous, 'ambiguous'),
     reportRow(missingAuthor),
-  ];
+  ], artifact);
   const first = await importCatalogWorks({
     db: prisma,
     reportRows,
@@ -240,10 +246,11 @@ test('PostgreSQL: a pre-existing work key or ISBN is skipped without changing th
     primaryAuthor: 'New Author',
     isbns: [isbnAt(seed + 3)],
   });
+  const artifact = enrichedArtifact([isbnCandidate, keyCandidate], 'passed');
   const { summary } = await importCatalogWorks({
     db: prisma,
-    reportRows: [reportRow(isbnCandidate), reportRow(keyCandidate)],
-    artifact: enrichedArtifact([isbnCandidate, keyCandidate], 'passed'),
+    reportRows: dedupReportRows([reportRow(isbnCandidate), reportRow(keyCandidate)], artifact),
+    artifact,
     apply: true,
     limit: 10,
     batchSize: 10,
@@ -329,10 +336,11 @@ test('PostgreSQL: a failing batch rolls back only that batch', { skip: !process.
     await prisma.book.deleteMany({ where: { openLibraryWorkKey: { in: workKeys } } });
     await prisma.$disconnect();
   });
+  const artifact = enrichedArtifact(candidates, 'passed');
   const { summary, rows, exitCode } = await importCatalogWorks({
     db: prisma,
-    reportRows: candidates.map(candidate => reportRow(candidate)),
-    artifact: enrichedArtifact(candidates, 'passed'),
+    reportRows: dedupReportRows(candidates.map(candidate => reportRow(candidate)), artifact),
+    artifact,
     apply: true,
     limit: 3,
     batchSize: 1,
@@ -380,9 +388,11 @@ test('PostgreSQL: catalog:import CLI --apply inserts and the default dry-run doe
   const planReport = join(directory, 'plan-report.jsonl');
   const planEnriched = join(directory, 'plan-enriched.json');
   const planOutput = join(directory, 'plan-out.jsonl');
-  await fs.writeFile(applyEnriched, `${JSON.stringify(enrichedArtifact([applied], 'passed'))}\n`);
-  await fs.writeFile(applyReport, `${JSON.stringify(reportRow(applied))}\n`);
-  await fs.writeFile(planEnriched, `${JSON.stringify(enrichedArtifact([planned]))}\n`);
+  const applyArtifact = enrichedArtifact([applied], 'passed');
+  const planArtifact = enrichedArtifact([planned]);
+  await fs.writeFile(applyEnriched, `${JSON.stringify(applyArtifact)}\n`);
+  await fs.writeFile(applyReport, `${JSON.stringify(dedupReportRows([reportRow(applied)], applyArtifact)[0])}\n`);
+  await fs.writeFile(planEnriched, `${JSON.stringify(planArtifact)}\n`);
   await fs.writeFile(planReport, `${JSON.stringify(reportRow(planned))}\n`);
   const env = { ...process.env, DATABASE_URL: process.env.TEST_DATABASE_URL };
   const apply = await execFileAsync(process.execPath, [

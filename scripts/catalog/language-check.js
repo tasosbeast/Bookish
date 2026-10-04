@@ -2,11 +2,10 @@ import { createHash } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
-import { writeFileAtomic } from './atomic-write.js';
+import { assertOutputDirectoryWritable, writeFileAtomic } from './atomic-write.js';
 import { CatalogContractError } from './contracts.js';
 import { validateEnrichedArtifact } from './enrich.js';
 import { stableJson } from './external-sort.js';
-import { assertOutputDirectoryWritable } from './import.js';
 import { readOpenLibraryBulkRecords } from './open-library-bulk.js';
 import { SnapshotRecordError } from './snapshot-reader.js';
 
@@ -271,7 +270,7 @@ export async function checkCatalogLanguages({
   const output = requiredPath(outputPath, 'outputPath');
   await assertReadable(input, 'enriched input');
   const editionStat = await assertReadable(editions, 'editions dump');
-  await assertOutputDirectoryWritable(output);
+  await assertOutputDirectoryWritable(output, { label: 'Language-check output' });
   const { artifact, enrichedInputSha256 } = await readEnrichedInput(input);
   const pinnedSnapshotId = artifact.snapshotId;
   if (snapshotId !== undefined && snapshotId !== pinnedSnapshotId) {

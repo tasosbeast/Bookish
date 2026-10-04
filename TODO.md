@@ -27,7 +27,7 @@ Existing rules still apply: non-books rejected via `pilotDisqualificationReason`
 5. Offline enrich from discover to dedup-check (`catalog:enrich`) — done
 6. Offline English-language check (`catalog:language-check`) — done
 
-Catalog pipeline cleanup is done (PR #38).
+Catalog pipeline cleanup is in review (PR #38).
 catalog:language-check is done (#37, merged as 989a1d2).
 catalog:import is done (#36, merged as 19f07b2).
 catalog:enrich is done (#35, merged as aee1a45).

@@ -160,13 +160,14 @@ async function writeClassificationFixture(directory) {
   return { inputPath, editionsPath };
 }
 
-function reportRows(candidates) {
+function reportRows(candidates, languageCheckDigest = null) {
   return candidates.map(candidate => ({
     workKey: candidate.workKey,
     title: candidate.title,
     status: 'new',
     matchedBookIds: [],
     matchedBy: null,
+    ...(languageCheckDigest ? { languageCheckDigest } : {}),
   }));
 }
 
@@ -255,7 +256,7 @@ test('language check verifies the output directory is writable before scanning t
     await assert.rejects(
       () => checkCatalogLanguages({ inputPath, editionsPath, outputPath }),
       error => error instanceof Error
-        && error.message.includes(`Import output directory is not writable: ${locked}`),
+        && error.message.includes(`Language-check output directory is not writable: ${locked}`),
     );
   } finally {
     await fs.chmod(locked, 0o755);
@@ -334,7 +335,7 @@ test('import apply accepts a real language check and refuses a tampered language
   const { inputPath, editionsPath } = await writeClassificationFixture(directory);
   const outputPath = join(directory, 'checked.json');
   const { artifact } = await checkCatalogLanguages({ inputPath, editionsPath, outputPath });
-  const rows = reportRows(artifact.candidates);
+  const rows = reportRows(artifact.candidates, artifact.languageCheckDigest);
   const applied = await importCatalogWorks({
     db: applyDb(),
     reportRows: rows,
@@ -373,8 +374,8 @@ test('import apply accepts a real language check and refuses a tampered language
     }),
     error => error instanceof Error
       && error.message.includes('Refusing --apply')
-      && error.message.includes('language check validation failed')
-      && error.message.includes('languageCheckDigest does not match'),
+      && error.message.includes('dedup report line 1 languageCheckDigest does not match')
+      && error.message.includes('Re-run catalog:language-check and catalog:dedup-check'),
   );
   const edited = structuredClone(artifact);
   edited.candidates[0].languages = ['/languages/fre'];

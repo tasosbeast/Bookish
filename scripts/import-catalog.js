@@ -1,8 +1,8 @@
 import 'dotenv/config';
+import { assertOutputDirectoryWritable } from './catalog/atomic-write.js';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {
-  assertOutputDirectoryWritable,
   createImportPrismaClient,
   importCatalogWorks,
   importResolvedCatalog,
@@ -27,7 +27,7 @@ async function runWorksImport(args) {
   const options = parseCatalogWorksImportArgs(args);
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error('DATABASE_URL is required');
-  await assertOutputDirectoryWritable(options.output);
+  await assertOutputDirectoryWritable(options.output, { label: 'Import output' });
   const sources = await loadWorksImportSources(options.report, options.enriched);
   const db = createImportPrismaClient(databaseUrl, { apply: options.apply });
   try {
@@ -43,6 +43,9 @@ async function runWorksImport(args) {
       batchSize: options.batchSize,
       outputPath: options.output,
     });
+    if (!options.apply && summary.languageCheckError) {
+      console.error(`languageCheckDigest is invalid: ${summary.languageCheckError}. Re-run catalog:language-check.`);
+    }
     console.log(JSON.stringify(summary));
     if (summary.failed) process.exitCode = 1;
   } finally {

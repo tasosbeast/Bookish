@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { constants as fsConstants } from 'node:fs';
 import * as fs from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { PrismaPg } from '@prisma/adapter-pg';
 import generated from '../../src/generated/prisma/index.js';
 import { serializable } from '../../src/lib/transaction.js';
@@ -144,6 +143,7 @@ export const CATALOG_IMPORT_SKIP_REASONS = Object.freeze([
   'duplicate_work_key',
   'duplicate_isbn',
   'limit',
+  'not_attempted',
 ]);
 
 const ISBN13_FORMAT = /^[0-9]{13}$/;
@@ -279,6 +279,27 @@ function validateReportRow(row, index, snapshotId) {
   }
   if (Object.hasOwn(row, 'snapshotId') && row.snapshotId !== snapshotId) {
     importFail('snapshot_mismatch', `Dedup report line ${index + 1} snapshotId does not match enriched snapshot ${snapshotId}`);
+  }
+  if (Object.hasOwn(row, 'languageCheckDigest') && typeof row.languageCheckDigest !== 'string') {
+    importFail('invalid_dedup_report', `Dedup report line ${index + 1} languageCheckDigest is invalid`);
+  }
+}
+
+const RERUN_LANGUAGE_CHECK = 'Re-run catalog:language-check on the enriched artifact.';
+
+function assertReportLanguageCheckDigest(reportRows, artifact, { apply, allowUncheckedLanguage }) {
+  if (!apply || allowUncheckedLanguage || artifact?.languageCheck !== 'passed') return;
+  const artifactDigest = artifact.languageCheckDigest;
+  if (typeof artifactDigest !== 'string' || !artifactDigest) {
+    throw new Error(`Refusing --apply because the language-checked artifact has no languageCheckDigest. ${RERUN_LANGUAGE_CHECK}`);
+  }
+  for (let index = 0; index < reportRows.length; index += 1) {
+    const row = reportRows[index];
+    if (row.languageCheckDigest !== artifactDigest) {
+      throw new Error(
+        `Refusing --apply because dedup report line ${index + 1} languageCheckDigest does not match the language-checked artifact. Re-run catalog:language-check and catalog:dedup-check.`,
+      );
+    }
   }
 }
 
@@ -474,6 +495,7 @@ export function buildImportSummary({
   batches,
   languageCheck = null,
   digestValid = null,
+  languageCheckError = null,
   report = null,
 }) {
   const skipped = Object.fromEntries(CATALOG_IMPORT_SKIP_REASONS.map(reason => [reason, 0]));
@@ -499,6 +521,7 @@ export function buildImportSummary({
     snapshotId,
     languageCheck,
     digestValid,
+    languageCheckError,
     limit,
     batchSize,
     batches,
@@ -553,6 +576,7 @@ function assertReportConsistent(rows, summary) {
     batches: summary.batches,
     languageCheck: summary.languageCheck ?? null,
     digestValid: summary.digestValid ?? null,
+    languageCheckError: summary.languageCheckError ?? null,
     report: summary.report ?? null,
   });
   if (stableJson(rebuilt) !== stableJson(summary)) {
@@ -573,6 +597,7 @@ export async function writeCatalogImportReport(outputPath, { rows, summary }) {
     ...summary,
     languageCheck: summary.languageCheck ?? null,
     digestValid: summary.digestValid ?? null,
+    languageCheckError: summary.languageCheckError ?? null,
     report: summary.report ?? resolved,
   };
   // The summary is written after the JSONL report and names that report path.
@@ -613,20 +638,20 @@ function evaluateLanguageCheck(artifact, { apply, allowUncheckedLanguage }) {
       languageCheckError = error?.message ?? String(error);
     }
   }
-  if (!apply) return { languageCheck, digestValid };
+  if (!apply) return { languageCheck, digestValid, languageCheckError };
   if (allowUncheckedLanguage) {
     console.error(
       `WARNING: --allow-unchecked-language is set. Applying catalog works with languageCheck ${JSON.stringify(languageCheck)} and digestValid ${JSON.stringify(digestValid)} instead of requiring languageCheck "passed" with a matching digest.`,
     );
-    return { languageCheck, digestValid };
+    return { languageCheck, digestValid, languageCheckError };
   }
   if (languageCheck !== 'passed') {
-    throw new Error(`Refusing --apply because languageCheck is ${JSON.stringify(languageCheck)}, not "passed". Pass --allow-unchecked-language to apply anyway.`);
+    throw new Error(`Refusing --apply because languageCheck is ${JSON.stringify(languageCheck)}, not "passed". ${RERUN_LANGUAGE_CHECK} Pass --allow-unchecked-language to apply anyway.`);
   }
   if (!digestValid) {
-    throw new Error(`Refusing --apply because language check validation failed: ${languageCheckError}. Pass --allow-unchecked-language to apply anyway.`);
+    throw new Error(`Refusing --apply because language check validation failed: ${languageCheckError}. ${RERUN_LANGUAGE_CHECK} Pass --allow-unchecked-language to apply anyway.`);
   }
-  return { languageCheck, digestValid };
+  return { languageCheck, digestValid, languageCheckError };
 }
 
 export async function importCatalogWorks({
@@ -648,7 +673,8 @@ export async function importCatalogWorks({
   const boundedLimit = importLimit(limit);
   const boundedBatch = importBatchSize(batchSize);
   const { snapshotId, joined } = join ?? joinReportToEnriched(reportRows, artifact);
-  const { languageCheck, digestValid } = evaluateLanguageCheck(artifact, { apply, allowUncheckedLanguage });
+  assertReportLanguageCheckDigest(reportRows, artifact, { apply, allowUncheckedLanguage });
+  const { languageCheck, digestValid, languageCheckError } = evaluateLanguageCheck(artifact, { apply, allowUncheckedLanguage });
   const resultsByKey = new Map();
   const selected = [];
   for (const { row, candidate } of joined) {
@@ -704,15 +730,7 @@ export async function importCatalogWorks({
   if (failFast) {
     for (const item of selected) {
       if (resultsByKey.has(item.workKey)) continue;
-      resultsByKey.set(
-        item.workKey,
-        resultRow(
-          item.workKey,
-          apply ? 'fail' : 'plan',
-          apply ? 'batch_failed' : null,
-          apply ? 'import stopped by --fail-fast' : null,
-        ),
-      );
+      resultsByKey.set(item.workKey, resultRow(item.workKey, 'skip', 'not_attempted'));
     }
   }
   const rows = joined.map(({ row }) => {
@@ -726,6 +744,7 @@ export async function importCatalogWorks({
     snapshotId,
     languageCheck,
     digestValid,
+    languageCheckError,
     limit: boundedLimit,
     batchSize: boundedBatch,
     batches: batches.length,
@@ -794,16 +813,6 @@ export function parseCatalogWorksImportArgs(args) {
     throw new Error('--report, --enriched, and --output are required');
   }
   return options;
-}
-
-export async function assertOutputDirectoryWritable(outputPath) {
-  const directory = dirname(resolve(outputPath));
-  try {
-    await fs.mkdir(directory, { recursive: true });
-    await fs.access(directory, fsConstants.W_OK);
-  } catch {
-    throw new Error(`Import output directory is not writable: ${directory}`);
-  }
 }
 
 export function createImportPrismaClient(databaseUrl, { apply }) {
