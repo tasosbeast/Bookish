@@ -55,14 +55,14 @@ function byRank(left, right) {
   return right.score - left.score || (left.workKey < right.workKey ? -1 : left.workKey > right.workKey ? 1 : 0);
 }
 
-function enrichedArtifact(candidates) {
+function enrichedArtifact(candidates, languageCheck = 'pending') {
   const sorted = [...candidates].sort(byRank);
   return {
     format: CATALOG_DISCOVER_FORMAT,
     version: CATALOG_DISCOVER_VERSION,
     snapshotId: 'fixture-snapshot',
     generatedAt: '2026-08-31T00:00:00.000Z',
-    languageCheck: 'pending',
+    languageCheck,
     scoring: { ...CATALOG_DISCOVER_SCORING },
     counts: {
       considered: sorted.length,
@@ -136,7 +136,7 @@ test('PostgreSQL: --apply inserts mapped works and a rerun inserts 0', { skip: !
     await prisma.$disconnect();
   });
 
-  const artifact = enrichedArtifact(candidates);
+  const artifact = enrichedArtifact(candidates, 'passed');
   const reportRows = [
     reportRow(withIsbn),
     reportRow(withoutIsbn),
@@ -240,7 +240,7 @@ test('PostgreSQL: a pre-existing work key or ISBN is skipped without changing th
   const { summary } = await importCatalogWorks({
     db: prisma,
     reportRows: [reportRow(isbnCandidate), reportRow(keyCandidate)],
-    artifact: enrichedArtifact([isbnCandidate, keyCandidate]),
+    artifact: enrichedArtifact([isbnCandidate, keyCandidate], 'passed'),
     apply: true,
     limit: 10,
     batchSize: 10,
@@ -329,7 +329,7 @@ test('PostgreSQL: a failing batch rolls back only that batch', { skip: !process.
   const { summary, rows, exitCode } = await importCatalogWorks({
     db: prisma,
     reportRows: candidates.map(candidate => reportRow(candidate)),
-    artifact: enrichedArtifact(candidates),
+    artifact: enrichedArtifact(candidates, 'passed'),
     apply: true,
     limit: 3,
     batchSize: 1,
@@ -377,7 +377,7 @@ test('PostgreSQL: catalog:import CLI --apply inserts and the default dry-run doe
   const planReport = join(directory, 'plan-report.jsonl');
   const planEnriched = join(directory, 'plan-enriched.json');
   const planOutput = join(directory, 'plan-out.jsonl');
-  await fs.writeFile(applyEnriched, `${JSON.stringify(enrichedArtifact([applied]))}\n`);
+  await fs.writeFile(applyEnriched, `${JSON.stringify(enrichedArtifact([applied], 'passed'))}\n`);
   await fs.writeFile(applyReport, `${JSON.stringify(reportRow(applied))}\n`);
   await fs.writeFile(planEnriched, `${JSON.stringify(enrichedArtifact([planned]))}\n`);
   await fs.writeFile(planReport, `${JSON.stringify(reportRow(planned))}\n`);

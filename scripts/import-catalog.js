@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {
+  assertOutputDirectoryWritable,
   createImportPrismaClient,
   importCatalogWorks,
   importResolvedCatalog,
@@ -17,6 +18,7 @@ function worksImportRequested(args) {
     || argument === '--output'
     || argument === '--limit'
     || argument === '--batch-size'
+    || argument === '--allow-unchecked-language'
   ));
 }
 
@@ -24,6 +26,7 @@ async function runWorksImport(args) {
   const options = parseCatalogWorksImportArgs(args);
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error('DATABASE_URL is required');
+  await assertOutputDirectoryWritable(options.output);
   const sources = await loadWorksImportSources(options.report, options.enriched);
   const db = createImportPrismaClient(databaseUrl, { apply: options.apply });
   try {
@@ -32,6 +35,7 @@ async function runWorksImport(args) {
       reportRows: sources.reportRows,
       artifact: sources.artifact,
       apply: options.apply,
+      allowUncheckedLanguage: options.allowUncheckedLanguage,
       limit: options.limit,
       batchSize: options.batchSize,
       outputPath: options.output,

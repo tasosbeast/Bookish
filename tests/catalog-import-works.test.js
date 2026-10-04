@@ -15,8 +15,11 @@ import {
 } from '../scripts/catalog/discover.js';
 import { normalizeIsbn10ToIsbn13 } from '../scripts/catalog/normalize.js';
 import {
+  CATALOG_IMPORT_AUTHOR_MAX_LENGTH,
   CATALOG_IMPORT_DEFAULT_BATCH_SIZE,
   CATALOG_IMPORT_DEFAULT_LIMIT,
+  CATALOG_IMPORT_SKIP_REASONS,
+  CATALOG_IMPORT_TITLE_MAX_LENGTH,
   catalogImportSummaryPath,
   candidateImportSkipReason,
   createImportPrismaClient,
@@ -62,14 +65,14 @@ function byRank(left, right) {
   return right.score - left.score || (left.workKey < right.workKey ? -1 : left.workKey > right.workKey ? 1 : 0);
 }
 
-function enrichedArtifact(candidates, snapshotId = SNAPSHOT_ID) {
+function enrichedArtifact(candidates, snapshotId = SNAPSHOT_ID, languageCheck = 'pending') {
   const sorted = [...candidates].sort(byRank);
   return {
     format: CATALOG_DISCOVER_FORMAT,
     version: CATALOG_DISCOVER_VERSION,
     snapshotId,
     generatedAt: '2026-08-31T00:00:00.000Z',
-    languageCheck: 'pending',
+    languageCheck,
     scoring: { ...CATALOG_DISCOVER_SCORING },
     counts: {
       considered: sorted.length,
@@ -106,6 +109,10 @@ function key(index) {
 
 async function temporaryDirectory() {
   return fs.mkdtemp(join(tmpdir(), 'bookish-import-works-'));
+}
+
+function skipCounts(overrides = {}) {
+  return Object.fromEntries(CATALOG_IMPORT_SKIP_REASONS.map(reason => [reason, overrides[reason] ?? 0]));
 }
 
 test('mapCandidateToBook stores the lowest ISBN-13, primary author, cover, and a schema-valid year', () => {
@@ -145,6 +152,31 @@ test('mapCandidateToBook stores the lowest ISBN-13, primary author, cover, and a
   assert.equal(candidateImportSkipReason({ title: 'Kindred', primaryAuthor: '!!!' }), 'missing_author');
   assert.equal(candidateImportSkipReason({ title: 'Kindred', primaryAuthor: null }), 'missing_author');
   assert.equal(candidateImportSkipReason({ title: '   ', primaryAuthor: 'Octavia Butler' }), 'missing_title');
+  assert.equal(candidateImportSkipReason({ title: '戦争と平和', primaryAuthor: 'Leo Tolstoy' }), 'unsupported_script');
+  assert.equal(candidateImportSkipReason({ title: '\u0000\u0001', primaryAuthor: 'Octavia Butler' }), 'missing_title');
+  const longTitle = `T${'a'.repeat(CATALOG_IMPORT_TITLE_MAX_LENGTH + 50)}`;
+  const longAuthor = `A${'b'.repeat(CATALOG_IMPORT_AUTHOR_MAX_LENGTH + 50)}`;
+  const sanitized = mapCandidateToBook({
+    workKey: '/works/OL44W',
+    title: `Kindred\u0000\u0001 ${longTitle.slice(1)}`,
+    primaryAuthor: `\uD800Octavia\uDFFF ${longAuthor.slice(1)}`,
+    isbns: [],
+    coverIds: [1],
+  });
+  assert.equal(sanitized.book.title.length, CATALOG_IMPORT_TITLE_MAX_LENGTH);
+  assert.equal(sanitized.book.author.length, CATALOG_IMPORT_AUTHOR_MAX_LENGTH);
+  assert.equal(sanitized.book.title.includes('\u0000'), false);
+  assert.equal(sanitized.book.author.includes('\uD800'), false);
+  assert.equal(sanitized.book.author.includes('\uDFFF'), false);
+  const emoji = mapCandidateToBook({
+    workKey: '/works/OL45W',
+    title: 'Kindred \uD83D\uDE00',
+    primaryAuthor: 'Jane \uD83D\uDE00 Austen',
+    isbns: [],
+    coverIds: [1],
+  });
+  assert.equal(emoji.book.title, 'Kindred 😀');
+  assert.equal(emoji.book.author, 'Jane 😀 Austen');
 });
 
 test('import skips existing, ambiguous, missing identity, duplicates, and rows past the limit', async () => {
@@ -163,7 +195,7 @@ test('import skips existing, ambiguous, missing identity, duplicates, and rows p
     enrichedCandidate({ workKey: key(8), title: 'Second', isbns: [isbn4] }),
     enrichedCandidate({ workKey: key(9), title: 'Over Limit', isbns: [isbnAt(35)] }),
   ];
-  const artifact = enrichedArtifact(candidates);
+  const artifact = enrichedArtifact(candidates, SNAPSHOT_ID, 'passed');
   const reportRows = [
     reportRow(candidates[0], 'existing'),
     reportRow(candidates[1], 'ambiguous', { matchedBy: 'isbn', matchedBookIds: ['a', 'b'] }),
@@ -229,15 +261,14 @@ test('import skips existing, ambiguous, missing identity, duplicates, and rows p
   assert.equal(summary.inserted, 2);
   assert.equal(summary.planned, 0);
   assert.equal(summary.failed, 0);
-  assert.deepEqual(summary.skipped, {
+  assert.deepEqual(summary.skipped, skipCounts({
     existing: 1,
     ambiguous: 1,
-    missing_title: 0,
     missing_author: 2,
     duplicate_work_key: 1,
     duplicate_isbn: 1,
     limit: 1,
-  });
+  }));
   assert.deepEqual(rows.map(row => [row.workKey, row.action, row.reason]), [
     [key(1), 'skip', 'existing'],
     [key(2), 'skip', 'ambiguous'],
@@ -293,6 +324,8 @@ test('dry-run plans batches without write calls and records zero inserts', async
   assert.equal(exitCode, 0);
   assert.equal(summary.mode, 'dry-run');
   assert.equal(summary.snapshotId, SNAPSHOT_ID);
+  assert.equal(summary.languageCheck, 'pending');
+  assert.equal(summary.report, outputPath);
   assert.equal(summary.limit, 4);
   assert.equal(summary.batchSize, 2);
   assert.equal(summary.batches, 2);
@@ -306,6 +339,8 @@ test('dry-run plans batches without write calls and records zero inserts', async
   const summaryFile = JSON.parse(await fs.readFile(catalogImportSummaryPath(outputPath), 'utf8'));
   assert.equal(summaryFile.inserted, 0);
   assert.equal(summaryFile.planned, 4);
+  assert.equal(summaryFile.languageCheck, 'pending');
+  assert.equal(summaryFile.report, outputPath);
 });
 
 test('a repeated ISBN inside one batch is skipped before insert', async () => {
@@ -356,7 +391,7 @@ test('a failed batch is recorded and later batches still run', async () => {
   const { summary, rows, exitCode } = await importCatalogWorks({
     db,
     reportRows: candidates.map(candidate => reportRow(candidate)),
-    artifact: enrichedArtifact(candidates),
+    artifact: enrichedArtifact(candidates, SNAPSHOT_ID, 'passed'),
     apply: true,
     limit: 3,
     batchSize: 1,
@@ -403,22 +438,16 @@ test('writeCatalogImportReport keeps the previous summary when validation fails'
   const summary = {
     mode: 'dry-run',
     snapshotId: SNAPSHOT_ID,
+    languageCheck: 'pending',
     limit: 1,
     batchSize: 1,
     batches: 1,
     planned: 1,
     inserted: 0,
-    skipped: {
-      existing: 0,
-      ambiguous: 0,
-      missing_title: 0,
-      missing_author: 0,
-      duplicate_work_key: 0,
-      duplicate_isbn: 0,
-      limit: 0,
-    },
+    skipped: skipCounts(),
     failed: 0,
     errors: [],
+    report: outputPath,
   };
   await writeCatalogImportReport(outputPath, { rows, summary });
   const summaryPath = catalogImportSummaryPath(outputPath);
@@ -438,6 +467,7 @@ test('works import defaults and the read-only client expose no write methods', a
     '--output', 'out.jsonl',
   ]);
   assert.equal(parsed.apply, false);
+  assert.equal(parsed.allowUncheckedLanguage, false);
   assert.equal(parsed.limit, CATALOG_IMPORT_DEFAULT_LIMIT);
   assert.equal(parsed.batchSize, CATALOG_IMPORT_DEFAULT_BATCH_SIZE);
   assert.equal(parsed.report.endsWith(`${join('report.jsonl')}`), true);
@@ -498,4 +528,216 @@ test('catalog:import reads DATABASE_URL from .env for the works import', async (
       && !`${error.stderr}${error.stdout}`.includes('DATABASE_URL is required')
       && /Can't reach database server at 127\.0\.0\.1:1/.test(`${error.stdout}`),
   );
+});
+
+function trackingDb() {
+  const stored = [];
+  const matches = ({ where } = {}) => {
+    if (!where?.OR) return [...stored];
+    return stored.filter(book => where.OR.some(clause => (
+      clause.openLibraryWorkKey?.in?.includes(book.openLibraryWorkKey)
+      || clause.isbn?.in?.includes(book.isbn)
+    )));
+  };
+  return {
+    book: { findMany: async query => matches(query) },
+    $transaction: async work => work({
+      book: {
+        findMany: async query => matches(query),
+        createMany: async ({ data }) => {
+          stored.push(...data);
+          return { count: data.length };
+        },
+      },
+    }),
+  };
+}
+
+test('dry-run and apply count a later-batch duplicate ISBN the same way', async () => {
+  const shared = isbnAt(120);
+  const candidates = [0, 1, 2].map(index => enrichedCandidate({
+    workKey: key(120 + index),
+    title: `Seen ${index}`,
+    isbns: [index === 0 ? shared : isbnAt(130 + index)],
+  }));
+  candidates.push(enrichedCandidate({
+    workKey: key(123),
+    title: 'Later Duplicate',
+    isbns: [shared],
+  }));
+  const artifact = enrichedArtifact(candidates, SNAPSHOT_ID, 'passed');
+  const reportRows = candidates.map(candidate => reportRow(candidate));
+  const dry = await importCatalogWorks({
+    db: trackingDb(),
+    reportRows,
+    artifact,
+    apply: false,
+    limit: 10,
+    batchSize: 3,
+  });
+  const applied = await importCatalogWorks({
+    db: trackingDb(),
+    reportRows,
+    artifact,
+    apply: true,
+    limit: 10,
+    batchSize: 3,
+  });
+  assert.equal(dry.summary.planned, 3);
+  assert.equal(applied.summary.inserted, 3);
+  assert.equal(dry.summary.skipped.duplicate_isbn, 1);
+  assert.equal(applied.summary.skipped.duplicate_isbn, 1);
+  assert.deepEqual(dry.summary.skipped, applied.summary.skipped);
+  assert.deepEqual(dry.rows.map(row => row.reason), applied.rows.map(row => row.reason));
+  assert.equal(dry.rows.at(-1).action, 'skip');
+  assert.equal(applied.rows.at(-1).action, 'skip');
+});
+
+test('apply refuses an unchecked language and dry-run reports it', async () => {
+  const candidate = enrichedCandidate({ workKey: key(140), title: 'Unchecked Language', isbns: [isbnAt(140)] });
+  const calls = [];
+  const db = {
+    book: {
+      findMany: async () => {
+        calls.push('findMany');
+        return [];
+      },
+    },
+    $transaction: async () => { calls.push('transaction'); },
+  };
+  await assert.rejects(
+    async () => importCatalogWorks({
+      db,
+      reportRows: [reportRow(candidate)],
+      artifact: enrichedArtifact([candidate]),
+      apply: true,
+    }),
+    error => error instanceof Error
+      && error.message.includes('Refusing --apply')
+      && error.message.includes('not "passed"')
+      && error.message.includes('--allow-unchecked-language'),
+  );
+  assert.deepEqual(calls, []);
+  const dry = await importCatalogWorks({
+    db,
+    reportRows: [reportRow(candidate)],
+    artifact: enrichedArtifact([candidate]),
+    apply: false,
+  });
+  assert.equal(dry.summary.languageCheck, 'pending');
+  assert.equal(dry.summary.planned, 1);
+  assert.deepEqual(calls, ['findMany']);
+});
+
+test('--allow-unchecked-language permits apply and prints a warning', async () => {
+  const candidate = enrichedCandidate({ workKey: key(141), title: 'Language Override', isbns: [isbnAt(141)] });
+  const checked = enrichedCandidate({ workKey: key(142), title: 'Language Passed', isbns: [isbnAt(142)] });
+  const warnings = [];
+  const original = console.error;
+  console.error = (...parts) => { warnings.push(parts.map(String).join(' ')); };
+  try {
+    const overridden = await importCatalogWorks({
+      db: trackingDb(),
+      reportRows: [reportRow(candidate)],
+      artifact: enrichedArtifact([candidate]),
+      apply: true,
+      allowUncheckedLanguage: true,
+    });
+    assert.equal(overridden.summary.inserted, 1);
+    assert.equal(overridden.summary.languageCheck, 'pending');
+    const quiet = [];
+    console.error = (...parts) => { quiet.push(parts.map(String).join(' ')); };
+    const passed = await importCatalogWorks({
+      db: trackingDb(),
+      reportRows: [reportRow(checked)],
+      artifact: enrichedArtifact([checked], SNAPSHOT_ID, 'passed'),
+      apply: true,
+    });
+    assert.equal(passed.summary.inserted, 1);
+    assert.equal(passed.summary.languageCheck, 'passed');
+    assert.deepEqual(quiet, []);
+  } finally {
+    console.error = original;
+  }
+  assert.match(warnings.join('\n'), /WARNING: --allow-unchecked-language/);
+});
+
+test('non-books are skipped with pilotDisqualificationReason and do not consume the limit', async () => {
+  const audio = enrichedCandidate({ workKey: key(150), title: 'Book (Audiobook)', isbns: [isbnAt(150)] });
+  const real = enrichedCandidate({ workKey: key(151), title: 'Real Book', isbns: [isbnAt(151)] });
+  const { summary, rows } = await importCatalogWorks({
+    db: { book: { findMany: async () => [] } },
+    reportRows: [reportRow(audio), reportRow(real)],
+    artifact: enrichedArtifact([audio, real]),
+    apply: false,
+    limit: 1,
+    batchSize: 10,
+  });
+  assert.equal(rows[0].reason, 'audiobook');
+  assert.equal(rows[1].action, 'plan');
+  assert.equal(summary.skipped.audiobook, 1);
+  assert.equal(summary.skipped.limit, 0);
+  assert.equal(summary.planned, 1);
+});
+
+test('catalog:import refuses --apply until languageCheck is passed', async () => {
+  const directory = await temporaryDirectory();
+  const candidate = enrichedCandidate({ workKey: key(160), title: 'Pending Apply', isbns: [isbnAt(160)] });
+  const artifactPath = join(directory, 'enriched.json');
+  const reportPath = join(directory, 'report.jsonl');
+  const outputPath = join(directory, 'out.jsonl');
+  await fs.writeFile(artifactPath, `${JSON.stringify(enrichedArtifact([candidate]))}\n`);
+  await fs.writeFile(reportPath, `${JSON.stringify(reportRow(candidate))}\n`);
+  const env = {
+    PATH: process.env.PATH,
+    DATABASE_URL: 'postgresql://invalid:invalid@127.0.0.1:1/bookish_test',
+  };
+  await assert.rejects(
+    () => execFileAsync(process.execPath, [
+      SCRIPT, '--report', reportPath, '--enriched', artifactPath, '--output', outputPath, '--apply',
+    ], { env }),
+    error => error.code === 1
+      && error.stderr.includes('Refusing --apply')
+      && !/Can't reach database server|ECONNREFUSED/.test(`${error.stdout}${error.stderr}`),
+  );
+  await assert.rejects(
+    () => execFileAsync(process.execPath, [
+      SCRIPT,
+      '--report', reportPath,
+      '--enriched', artifactPath,
+      '--output', outputPath,
+      '--apply',
+      '--allow-unchecked-language',
+    ], { env }),
+    error => error.code === 1
+      && /WARNING: --allow-unchecked-language/.test(error.stderr)
+      && /Can't reach database server at 127\.0\.0\.1:1/.test(error.stdout),
+  );
+});
+
+test('catalog:import checks the output directory before connecting', { skip: process.getuid?.() === 0 }, async () => {
+  const directory = await temporaryDirectory();
+  const locked = join(directory, 'locked');
+  await fs.mkdir(locked);
+  await fs.chmod(locked, 0o000);
+  try {
+    await assert.rejects(
+      () => execFileAsync(process.execPath, [
+        SCRIPT,
+        '--report', join(directory, 'report.jsonl'),
+        '--enriched', join(directory, 'enriched.json'),
+        '--output', join(locked, 'out.jsonl'),
+      ], {
+        env: {
+          PATH: process.env.PATH,
+          DATABASE_URL: 'postgresql://invalid:invalid@127.0.0.1:1/bookish_test',
+        },
+      }),
+      error => error.code === 1
+        && error.stderr.includes(`Import output directory is not writable: ${locked}`)
+        && !/Can't reach database server|ECONNREFUSED|Unable to read/.test(`${error.stdout}${error.stderr}`),
+    );
+  } finally {
+    await fs.chmod(locked, 0o755);
+  }
 });

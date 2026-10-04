@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
 import * as fs from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { PrismaPg } from '@prisma/adapter-pg';
 import generated from '../../src/generated/prisma/index.js';
 import { serializable } from '../../src/lib/transaction.js';
@@ -19,6 +20,7 @@ import {
 } from './dedup-check.js';
 import { validateEnrichedArtifact } from './enrich.js';
 import { stableJson } from './external-sort.js';
+import { pilotDisqualificationReason } from './pilot-planner.js';
 import { workIdentity } from './work-identity.js';
 
 const CONTROLLED_GENRE_SLUGS = new Set([
@@ -122,11 +124,22 @@ export async function importResolvedCatalog(db, artifactValue, { apply, report =
 export const CATALOG_IMPORT_DEFAULT_LIMIT = 500;
 export const CATALOG_IMPORT_MAX_LIMIT = 10_000;
 export const CATALOG_IMPORT_DEFAULT_BATCH_SIZE = 100;
+export const CATALOG_IMPORT_TITLE_MAX_LENGTH = 500;
+export const CATALOG_IMPORT_AUTHOR_MAX_LENGTH = 300;
 export const CATALOG_IMPORT_SKIP_REASONS = Object.freeze([
   'existing',
   'ambiguous',
   'missing_title',
   'missing_author',
+  'unsupported_script',
+  'audiobook',
+  'ebook',
+  'large_print',
+  'boxed_set',
+  'calendar',
+  'journal',
+  'cards',
+  'non_book',
   'duplicate_work_key',
   'duplicate_isbn',
   'limit',
@@ -142,8 +155,44 @@ function importFail(code, message) {
   throw new CatalogContractError(code, message);
 }
 
-function displayText(value) {
-  return typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
+function stripUnsafeCharacters(value) {
+  let cleaned = '';
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) continue;
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        cleaned += value[index] + value[index + 1];
+        index += 1;
+      }
+      continue;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) continue;
+    cleaned += value[index];
+  }
+  return cleaned;
+}
+
+function displayText(value, maxLength) {
+  if (typeof value !== 'string') return '';
+  const cleaned = stripUnsafeCharacters(value).trim().replace(/\s+/g, ' ');
+  const points = [...cleaned];
+  if (points.length <= maxLength) return cleaned;
+  return points.slice(0, maxLength).join('');
+}
+
+function displayTitle(value) {
+  return displayText(value, CATALOG_IMPORT_TITLE_MAX_LENGTH);
+}
+
+function displayAuthor(value) {
+  return displayText(value, CATALOG_IMPORT_AUTHOR_MAX_LENGTH);
+}
+
+function unsupportedScriptTitle(title) {
+  if (!/\p{L}/u.test(title)) return false;
+  return !/\p{Script=Latin}/u.test(title.normalize('NFKD'));
 }
 
 function boundedInteger(value, name, maximum) {
@@ -191,14 +240,14 @@ export function importPublicationYear(candidate) {
 }
 
 export function candidateImportSkipReason(candidate) {
-  const title = displayText(candidate?.title);
+  const title = displayTitle(candidate?.title);
   if (!title) return 'missing_title';
-  const author = displayText(candidate?.primaryAuthor);
+  const author = displayAuthor(candidate?.primaryAuthor);
   if (!author) return 'missing_author';
   const normalized = { title, primaryAuthor: author };
   if (candidateTitleAuthorKey(normalized)) return null;
   const [titleKey, authorKey] = workIdentity({ title, author }).split('\u0000');
-  if (!titleKey) return 'missing_title';
+  if (!titleKey) return unsupportedScriptTitle(title) ? 'unsupported_script' : 'missing_title';
   if (!authorKey) return 'missing_author';
   return 'missing_author';
 }
@@ -209,8 +258,8 @@ export function mapCandidateToBook(candidate) {
   if (!isValidOpenLibraryWorkKey(candidate.workKey)) importFail('invalid_dedup_report', 'Import candidate work key is invalid');
   const publicationYear = importPublicationYear(candidate);
   const book = {
-    title: displayText(candidate.title),
-    author: displayText(candidate.primaryAuthor),
+    title: displayTitle(candidate.title),
+    author: displayAuthor(candidate.primaryAuthor),
     isbn: lowestImportIsbn(candidate),
     openLibraryWorkKey: candidate.workKey,
     coverImageUrl: importCoverImageUrl(candidate),
@@ -237,9 +286,16 @@ function validateReportRow(row, index, snapshotId) {
   }
 }
 
+function artifactForJoin(artifact) {
+  if (plainObject(artifact) && artifact.languageCheck === 'passed') {
+    return { ...artifact, languageCheck: 'pending' };
+  }
+  return artifact;
+}
+
 export function joinReportToEnriched(reportRows, artifact) {
   if (!Array.isArray(reportRows)) importFail('invalid_dedup_report', 'Dedup report must be a list of rows');
-  const validated = validateEnrichedArtifact(artifact);
+  const validated = validateEnrichedArtifact(artifactForJoin(artifact));
   if (reportRows.length !== validated.candidates.length) {
     importFail('snapshot_mismatch', `Dedup report does not match enriched snapshot ${validated.snapshotId}`);
   }
@@ -289,9 +345,9 @@ function errorText(error) {
   return message.length > 500 ? message.slice(0, 500) : message;
 }
 
-function classifyBatch(books, existingBooks) {
-  const workKeys = new Set();
-  const isbns = new Set();
+function classifyBatch(books, existingBooks, seen = { workKeys: new Set(), isbns: new Set() }) {
+  const workKeys = new Set(seen.workKeys);
+  const isbns = new Set(seen.isbns);
   for (const book of existingBooks) {
     if (isValidOpenLibraryWorkKey(book.openLibraryWorkKey)) workKeys.add(book.openLibraryWorkKey);
     if (typeof book.isbn === 'string' && ISBN13_FORMAT.test(book.isbn)) isbns.add(book.isbn);
@@ -358,16 +414,16 @@ async function confirmInserted(tx, books) {
   return { inserted, skipped };
 }
 
-async function runImportBatch({ db, batch, apply, afterBatchInsert, index }) {
+async function runImportBatch({ db, batch, apply, afterBatchInsert, index, seen }) {
   const books = batch.map(item => item.book);
   if (!apply) {
     const existing = await findExistingBooks(db, books);
-    const classified = classifyBatch(books, existing);
+    const classified = classifyBatch(books, existing, seen);
     return { skipped: classified.skipped, accepted: classified.insert };
   }
   return db.$transaction(async tx => {
     const existing = await findExistingBooks(tx, books);
-    const classified = classifyBatch(books, existing);
+    const classified = classifyBatch(books, existing, seen);
     if (classified.insert.length) {
       await tx.book.createMany({
         data: classified.insert.map(toBookCreateData),
@@ -383,7 +439,16 @@ async function runImportBatch({ db, batch, apply, afterBatchInsert, index }) {
   }, { timeout: 15000 });
 }
 
-export function buildImportSummary({ rows, mode, snapshotId, limit, batchSize, batches }) {
+export function buildImportSummary({
+  rows,
+  mode,
+  snapshotId,
+  limit,
+  batchSize,
+  batches,
+  languageCheck = null,
+  report = null,
+}) {
   const skipped = Object.fromEntries(CATALOG_IMPORT_SKIP_REASONS.map(reason => [reason, 0]));
   const errors = [];
   let planned = 0;
@@ -405,6 +470,7 @@ export function buildImportSummary({ rows, mode, snapshotId, limit, batchSize, b
   return {
     mode,
     snapshotId,
+    languageCheck,
     limit,
     batchSize,
     batches,
@@ -413,6 +479,7 @@ export function buildImportSummary({ rows, mode, snapshotId, limit, batchSize, b
     skipped,
     failed,
     errors,
+    report,
   };
 }
 
@@ -456,6 +523,8 @@ function assertReportConsistent(rows, summary) {
     limit: summary.limit,
     batchSize: summary.batchSize,
     batches: summary.batches,
+    languageCheck: summary.languageCheck ?? null,
+    report: summary.report ?? null,
   });
   if (stableJson(rebuilt) !== stableJson(summary)) {
     importFail('invalid_import_report', 'Import summary does not match the JSONL rows');
@@ -471,6 +540,12 @@ export function catalogImportSummaryPath(outputPath) {
 export async function writeCatalogImportReport(outputPath, { rows, summary }) {
   const resolved = resolve(outputPath);
   const lines = rows.map(row => `${JSON.stringify(row)}\n`).join('');
+  const recorded = {
+    ...summary,
+    languageCheck: summary.languageCheck ?? null,
+    report: summary.report ?? resolved,
+  };
+  // The summary is written after the JSONL report and names that report path.
   await writeFileAtomic(resolved, lines, {
     mode: 0o600,
     validate: async content => {
@@ -482,17 +557,29 @@ export async function writeCatalogImportReport(outputPath, { rows, summary }) {
     },
   });
   const summaryPath = catalogImportSummaryPath(resolved);
-  await writeFileAtomic(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, {
+  await writeFileAtomic(summaryPath, `${JSON.stringify(recorded, null, 2)}\n`, {
     mode: 0o600,
     validate: async content => {
       let parsed;
       try { parsed = JSON.parse(content); }
       catch { importFail('invalid_import_report', 'Import summary is not valid JSON'); }
       assertReportConsistent(rows, parsed);
-      if (stableJson(parsed) !== stableJson(summary)) importFail('invalid_import_report', 'Import summary did not round-trip');
+      if (stableJson(parsed) !== stableJson(recorded)) importFail('invalid_import_report', 'Import summary did not round-trip');
     },
   });
   return { outputPath: resolved, summaryPath };
+}
+
+function assertApplyLanguage(artifact, { apply, allowUncheckedLanguage }) {
+  const languageCheck = artifact?.languageCheck ?? null;
+  if (!apply) return languageCheck;
+  if (languageCheck !== 'passed' && !allowUncheckedLanguage) {
+    throw new Error(`Refusing --apply because languageCheck is ${JSON.stringify(languageCheck)}, not "passed". Pass --allow-unchecked-language to apply anyway.`);
+  }
+  if (allowUncheckedLanguage) {
+    console.error(`WARNING: --allow-unchecked-language is set. Applying catalog works with languageCheck ${JSON.stringify(languageCheck)} instead of requiring "passed".`);
+  }
+  return languageCheck;
 }
 
 export async function importCatalogWorks({
@@ -500,15 +587,18 @@ export async function importCatalogWorks({
   reportRows,
   artifact,
   apply = false,
+  allowUncheckedLanguage = false,
   limit = CATALOG_IMPORT_DEFAULT_LIMIT,
   batchSize = CATALOG_IMPORT_DEFAULT_BATCH_SIZE,
   outputPath = null,
   afterBatchInsert = null,
 } = {}) {
   if (typeof apply !== 'boolean') throw new TypeError('apply must be true or false');
+  if (typeof allowUncheckedLanguage !== 'boolean') throw new TypeError('allowUncheckedLanguage must be true or false');
   const boundedLimit = importLimit(limit);
   const boundedBatch = importBatchSize(batchSize);
   const { snapshotId, joined } = joinReportToEnriched(reportRows, artifact);
+  const languageCheck = assertApplyLanguage(artifact, { apply, allowUncheckedLanguage });
   const resultsByKey = new Map();
   const selected = [];
   for (const { row, candidate } of joined) {
@@ -521,6 +611,11 @@ export async function importCatalogWorks({
       resultsByKey.set(row.workKey, resultRow(row.workKey, 'skip', mapped.skip));
       continue;
     }
+    const disqualified = pilotDisqualificationReason(candidate);
+    if (disqualified) {
+      resultsByKey.set(row.workKey, resultRow(row.workKey, 'skip', disqualified));
+      continue;
+    }
     if (selected.length >= boundedLimit) {
       resultsByKey.set(row.workKey, resultRow(row.workKey, 'skip', 'limit'));
       continue;
@@ -528,6 +623,7 @@ export async function importCatalogWorks({
     selected.push({ workKey: row.workKey, book: mapped.book });
   }
   const batches = chunk(selected, boundedBatch);
+  const seen = { workKeys: new Set(), isbns: new Set() };
   for (let index = 0; index < batches.length; index += 1) {
     const batch = batches[index];
     try {
@@ -537,11 +633,14 @@ export async function importCatalogWorks({
         apply,
         afterBatchInsert: apply ? afterBatchInsert : null,
         index,
+        seen,
       });
       for (const item of outcome.skipped) {
         resultsByKey.set(item.book.openLibraryWorkKey, resultRow(item.book.openLibraryWorkKey, 'skip', item.reason));
       }
       for (const book of outcome.accepted) {
+        seen.workKeys.add(book.openLibraryWorkKey);
+        if (book.isbn) seen.isbns.add(book.isbn);
         resultsByKey.set(book.openLibraryWorkKey, resultRow(book.openLibraryWorkKey, apply ? 'insert' : 'plan'));
       }
     } catch (error) {
@@ -560,9 +659,11 @@ export async function importCatalogWorks({
     rows,
     mode: apply ? 'apply' : 'dry-run',
     snapshotId,
+    languageCheck,
     limit: boundedLimit,
     batchSize: boundedBatch,
     batches: batches.length,
+    report: outputPath ? resolve(outputPath) : null,
   });
   if (outputPath) await writeCatalogImportReport(outputPath, { rows, summary });
   return { rows, summary, exitCode: summary.failed > 0 ? 1 : 0 };
@@ -580,6 +681,7 @@ export function parseCatalogWorksImportArgs(args) {
     enriched: null,
     output: null,
     apply: false,
+    allowUncheckedLanguage: false,
     limit: CATALOG_IMPORT_DEFAULT_LIMIT,
     batchSize: CATALOG_IMPORT_DEFAULT_BATCH_SIZE,
   };
@@ -590,6 +692,12 @@ export function parseCatalogWorksImportArgs(args) {
       if (seen.has(argument)) throw new Error('--apply was provided more than once');
       seen.add(argument);
       options.apply = true;
+      continue;
+    }
+    if (argument === '--allow-unchecked-language') {
+      if (seen.has(argument)) throw new Error('--allow-unchecked-language was provided more than once');
+      seen.add(argument);
+      options.allowUncheckedLanguage = true;
       continue;
     }
     if (argument === '--dry-run' || argument === '--artifact') {
@@ -613,6 +721,16 @@ export function parseCatalogWorksImportArgs(args) {
     throw new Error('--report, --enriched, and --output are required');
   }
   return options;
+}
+
+export async function assertOutputDirectoryWritable(outputPath) {
+  const directory = dirname(resolve(outputPath));
+  try {
+    await fs.mkdir(directory, { recursive: true });
+    await fs.access(directory, fsConstants.W_OK);
+  } catch {
+    throw new Error(`Import output directory is not writable: ${directory}`);
+  }
 }
 
 export function createImportPrismaClient(databaseUrl, { apply }) {

@@ -68,7 +68,7 @@ test('readOpenLibraryBulkRecords rejects a directory path cleanly', async (t) =>
   );
 });
 
-test('readOpenLibraryBulkRecords forwards gunzip source errors on unreadable .gz', async (t) => {
+test('readOpenLibraryBulkRecords forwards gunzip source errors on unreadable .gz', { skip: process.getuid?.() === 0 }, async (t) => {
   const directory = await temporaryDirectory();
   const gzPath = join(directory, 'unreadable.txt.gz');
   t.after(async () => {
