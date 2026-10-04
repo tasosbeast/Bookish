@@ -50,8 +50,9 @@ export function pilotDisqualificationReason(candidate) {
     return 'boxed_set';
   }
 
-  // 5. Calendar
-  if (/\bcalendar\b/.test(format) || /\bcalendar\b/.test(title)) {
+  // 5. Calendar. Titles need a product cue; a bare "calendar" matches novels such as Calendar Girl.
+  const calendarTitle = /\b(?:(?:wall|desk|engagement|pocket)[\s-]+calendars?|\d{4}[\s-]+calendars?|calendars?[\s-]+\d{4})\b/;
+  if (/\bcalendar\b/.test(format) || calendarTitle.test(title)) {
     return 'calendar';
   }
 

@@ -29,6 +29,7 @@ import {
   parseCatalogWorksImportArgs,
   writeCatalogImportReport,
 } from '../scripts/catalog/import.js';
+import { sealLanguageCheckedArtifact } from '../scripts/catalog/language-check.js';
 
 const execFileAsync = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL('../scripts/import-catalog.js', import.meta.url));
@@ -67,7 +68,7 @@ function byRank(left, right) {
 
 function enrichedArtifact(candidates, snapshotId = SNAPSHOT_ID, languageCheck = 'pending') {
   const sorted = [...candidates].sort(byRank);
-  return {
+  const artifact = {
     format: CATALOG_DISCOVER_FORMAT,
     version: CATALOG_DISCOVER_VERSION,
     snapshotId,
@@ -90,6 +91,8 @@ function enrichedArtifact(candidates, snapshotId = SNAPSHOT_ID, languageCheck = 
     },
     candidates: sorted,
   };
+  if (languageCheck !== 'passed') return artifact;
+  return sealLanguageCheckedArtifact(artifact);
 }
 
 function reportRow(candidate, status = 'new', extra = {}) {
@@ -177,6 +180,24 @@ test('mapCandidateToBook stores the lowest ISBN-13, primary author, cover, and a
   });
   assert.equal(emoji.book.title, 'Kindred 😀');
   assert.equal(emoji.book.author, 'Jane 😀 Austen');
+  const broken = mapCandidateToBook({
+    workKey: '/works/OL46W',
+    title: 'Line\nBreak',
+    primaryAuthor: 'Tab\tAuthor',
+    isbns: [],
+    coverIds: [1],
+  });
+  assert.equal(broken.book.title, 'Line Break');
+  assert.equal(broken.book.author, 'Tab Author');
+  const spaced = mapCandidateToBook({
+    workKey: '/works/OL47W',
+    title: 'Line\r\n\tBreak',
+    primaryAuthor: 'Ann\nLee',
+    isbns: [],
+    coverIds: [1],
+  });
+  assert.equal(spaced.book.title, 'Line Break');
+  assert.equal(spaced.book.author, 'Ann Lee');
 });
 
 test('import skips existing, ambiguous, missing identity, duplicates, and rows past the limit', async () => {

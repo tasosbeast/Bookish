@@ -20,6 +20,7 @@ import {
   createImportPrismaClient,
   importCatalogWorks,
 } from '../../scripts/catalog/import.js';
+import { sealLanguageCheckedArtifact } from '../../scripts/catalog/language-check.js';
 
 const execFileAsync = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL('../../scripts/import-catalog.js', import.meta.url));
@@ -57,7 +58,7 @@ function byRank(left, right) {
 
 function enrichedArtifact(candidates, languageCheck = 'pending') {
   const sorted = [...candidates].sort(byRank);
-  return {
+  const artifact = {
     format: CATALOG_DISCOVER_FORMAT,
     version: CATALOG_DISCOVER_VERSION,
     snapshotId: 'fixture-snapshot',
@@ -80,6 +81,8 @@ function enrichedArtifact(candidates, languageCheck = 'pending') {
     },
     candidates: sorted,
   };
+  if (languageCheck !== 'passed') return artifact;
+  return sealLanguageCheckedArtifact(artifact);
 }
 
 function reportRow(candidate, status = 'new') {

@@ -1,8 +1,8 @@
 # Current Task
 
-Batched, idempotent import of new catalog works (`catalog:import`).
+Offline English-language check of enriched catalog candidates (`catalog:language-check`).
 
-The command reads a `catalog:dedup-check` JSONL report and the enriched artifact that produced it. It joins rows to candidates by `workKey` and requires the report to match that artifact's `snapshotId`. Only `status: new` rows are eligible. `existing` and `ambiguous` rows are skipped and counted. Candidates with no usable title or no `primaryAuthor` are skipped and counted. Non-Latin titles are skipped as `unsupported_script`. Non-books are skipped with `pilotDisqualificationReason` and do not consume the limit. Eligible rows are capped by `--limit` (default 500, maximum 10000) and inserted in batches of `--batch-size` (default 100). Dry-run is the default: it uses the dedup-check read-only client and `default_transaction_read_only`, prints a plan, and writes JSONL plus a summary that records `languageCheck`. `--apply` writes only when `languageCheck` is `passed`, unless `--allow-unchecked-language` is set, which prints a warning. Each batch is its own transaction, carries work keys and ISBNs seen in earlier batches, re-checks `openLibraryWorkKey` and ISBN, and inserts with `createMany` `skipDuplicates`. A failed batch rolls back; the process exits non-zero if any batch fails. Mapped fields are `title`, `author` from `primaryAuthor`, the lowest valid ISBN-13 or null, `openLibraryWorkKey`, the Open Library cover URL, and `publicationYear` when the candidate has a year the schema accepts.
+The command reads an enriched artifact and streams one local Open Library editions dump. It does not access PostgreSQL. For each candidate work key it records edition language keys such as `/languages/eng`. A work is kept when at least one edition is English. A work whose editions are all non-English is dropped with reason `non_english`. A work with no language data is dropped with reason `unknown_language` unless `--keep-unknown-language` is set. The input `snapshotId` is pinned. The output keeps the enriched shape, sets `languageCheck` to `passed`, and stores `languageCheckDigest`: a sha256 over that snapshot id, the sorted kept work keys and their languages, and the editions dump basename and size. `catalog:import --apply` requires `languageCheck` of `passed` and a digest it recomputes and matches. `--allow-unchecked-language` still overrides that gate and prints a warning.
 
 ## Recorded for later
 
@@ -11,7 +11,7 @@ The command reads a `catalog:dedup-check` JSONL report and the enriched artifact
 Later pipeline steps will select a "good" book only if it meets all of the following:
 
 - **Popularity:** a meaningful signal from Open Library ratings plus reading-log counts, which the works index stores. Thresholds and weighting will be set in the scoring task.
-- **English only:** at least one English edition, decided from the editions dump, not from works.
+- **English only:** at least one English edition, decided by `catalog:language-check` from the editions dump, not from works.
 - **Cover required:** the selected edition or work has an Open Library cover.
 
 Existing rules still apply: non-books rejected via `pilotDisqualificationReason`, ISBN-13 edition identity, controlled genre mapping, no fabricated metadata.
@@ -21,9 +21,11 @@ Existing rules still apply: non-books rejected via `pilotDisqualificationReason`
 1. Candidate scoring and selection (`catalog:discover --limit N`) — done
 2. Read-only dedup against the database — done
 3. A resolved-artifact bridge — not implemented
-4. A batched, idempotent `--dry-run`/`--apply` import — current task
+4. A batched, idempotent `--dry-run`/`--apply` import — done
 5. Offline enrich from discover to dedup-check (`catalog:enrich`) — done
+6. Offline English-language check (`catalog:language-check`) — current task
 
+catalog:import is done (#36, merged as 19f07b2).
 catalog:enrich is done (#35, merged as aee1a45).
 catalog:dedup-check is done (#34, merged as 3e86b39).
 catalog:discover is done (#33, merged as 563cdba).

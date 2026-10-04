@@ -6,6 +6,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import generated from '../../src/generated/prisma/index.js';
 import { CatalogContractError } from './contracts.js';
 import { validateDiscoverArtifact } from './discover.js';
+import { enrichedArtifactForValidation } from './language-check.js';
 import { normalizeIsbn10ToIsbn13, normalizeIsbn13 } from './normalize.js';
 import { workIdentity } from './work-identity.js';
 import { writeFileAtomic } from './atomic-write.js';
@@ -187,7 +188,7 @@ export async function checkCatalogDuplicates(db, candidates) {
 }
 
 function stripCandidateEnrichment(candidate) {
-  const { isbns: _isbns, isbn: _isbn, primaryAuthor: _primaryAuthor, ...core } = candidate;
+  const { isbns: _isbns, isbn: _isbn, primaryAuthor: _primaryAuthor, languages: _languages, ...core } = candidate;
   return core;
 }
 
@@ -205,9 +206,10 @@ export async function loadDiscoverCandidates(inputPath) {
   if (!Array.isArray(artifact.candidates)) {
     throw new CatalogContractError('invalid_discover_artifact', 'Discover artifact candidates must be an array');
   }
+  const view = enrichedArtifactForValidation(artifact);
   validateDiscoverArtifact({
-    ...artifact,
-    candidates: artifact.candidates.map(stripCandidateEnrichment),
+    ...view,
+    candidates: view.candidates.map(stripCandidateEnrichment),
   });
   return artifact.candidates;
 }
