@@ -22,14 +22,17 @@ import {
   CATALOG_IMPORT_TITLE_MAX_LENGTH,
   catalogImportSummaryPath,
   candidateImportSkipReason,
+  computeReportDigestMatch,
   createImportPrismaClient,
   importCatalogWorks,
+  joinReportToEnriched,
+  loadWorksImportSources,
   lowestImportIsbn,
   mapCandidateToBook,
   parseCatalogWorksImportArgs,
   writeCatalogImportReport,
 } from '../scripts/catalog/import.js';
-import { sealLanguageCheckedArtifact } from '../scripts/catalog/language-check.js';
+import { sealLanguageCheckedArtifact } from './catalog/language-check-helpers.js';
 
 const execFileAsync = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL('../scripts/import-catalog.js', import.meta.url));
@@ -106,6 +109,12 @@ function reportRow(candidate, status = 'new', extra = {}) {
   };
 }
 
+function dedupReportRows(rows, artifact) {
+  const digest = artifact?.languageCheckDigest;
+  if (!digest) return rows;
+  return rows.map(row => ({ ...row, languageCheckDigest: digest }));
+}
+
 function key(index) {
   return `/works/OL${String(2000000 + index)}W`;
 }
@@ -118,7 +127,7 @@ function skipCounts(overrides = {}) {
   return Object.fromEntries(CATALOG_IMPORT_SKIP_REASONS.map(reason => [reason, overrides[reason] ?? 0]));
 }
 
-test('mapCandidateToBook stores the lowest ISBN-13, primary author, cover, and a schema-valid year', () => {
+test('mapCandidateToBook stores the lowest ISBN-13, primary author, and cover', () => {
   const higher = isbnAt(20);
   const lower = isbnAt(10);
   const from10 = normalizeIsbn10ToIsbn13('0306406152');
@@ -130,7 +139,6 @@ test('mapCandidateToBook stores the lowest ISBN-13, primary author, cover, and a
     primaryAuthor: '  Octavia Butler  ',
     isbns: [higher, lower],
     coverIds: [42, 7],
-    publicationYear: 1979,
   });
   assert.equal(mapped.skip, undefined);
   assert.deepEqual(mapped.book, {
@@ -139,18 +147,15 @@ test('mapCandidateToBook stores the lowest ISBN-13, primary author, cover, and a
     isbn: [lower, higher].sort()[0],
     openLibraryWorkKey: '/works/OL42W',
     coverImageUrl: 'https://covers.openlibrary.org/b/id/42-L.jpg?default=false',
-    publicationYear: 1979,
   });
-  const withoutYear = mapCandidateToBook({
+  const withoutIsbn = mapCandidateToBook({
     workKey: '/works/OL43W',
     title: 'Kindred',
     primaryAuthor: 'Octavia Butler',
     isbns: [],
     coverIds: [1],
-    publicationYear: 0,
   });
-  assert.equal(withoutYear.book.isbn, null);
-  assert.equal(Object.hasOwn(withoutYear.book, 'publicationYear'), false);
+  assert.equal(withoutIsbn.book.isbn, null);
   assert.equal(candidateImportSkipReason({ title: '!!!', primaryAuthor: 'Octavia Butler' }), 'missing_title');
   assert.equal(candidateImportSkipReason({ title: 'Kindred', primaryAuthor: '!!!' }), 'missing_author');
   assert.equal(candidateImportSkipReason({ title: 'Kindred', primaryAuthor: null }), 'missing_author');
@@ -217,7 +222,7 @@ test('import skips existing, ambiguous, missing identity, duplicates, and rows p
     enrichedCandidate({ workKey: key(9), title: 'Over Limit', isbns: [isbnAt(35)] }),
   ];
   const artifact = enrichedArtifact(candidates, SNAPSHOT_ID, 'passed');
-  const reportRows = [
+  const reportRows = dedupReportRows([
     reportRow(candidates[0], 'existing'),
     reportRow(candidates[1], 'ambiguous', { matchedBy: 'isbn', matchedBookIds: ['a', 'b'] }),
     reportRow(candidates[2]),
@@ -227,7 +232,7 @@ test('import skips existing, ambiguous, missing identity, duplicates, and rows p
     reportRow(candidates[6]),
     reportRow(candidates[7]),
     reportRow(candidates[8]),
-  ];
+  ], artifact);
   const confirmation = new Map([
     ['/works/OL1W', { id: 'pre-isbn', openLibraryWorkKey: '/works/OL1W', isbn: isbn2 }],
     [key(7), { id: 'pre-key', openLibraryWorkKey: key(7), isbn: isbnAt(99) }],
@@ -346,6 +351,7 @@ test('dry-run plans batches without write calls and records zero inserts', async
   assert.equal(summary.mode, 'dry-run');
   assert.equal(summary.snapshotId, SNAPSHOT_ID);
   assert.equal(summary.languageCheck, 'pending');
+  assert.equal(summary.digestValid, false);
   assert.equal(summary.report, outputPath);
   assert.equal(summary.limit, 4);
   assert.equal(summary.batchSize, 2);
@@ -361,6 +367,7 @@ test('dry-run plans batches without write calls and records zero inserts', async
   assert.equal(summaryFile.inserted, 0);
   assert.equal(summaryFile.planned, 4);
   assert.equal(summaryFile.languageCheck, 'pending');
+  assert.equal(summaryFile.digestValid, false);
   assert.equal(summaryFile.report, outputPath);
 });
 
@@ -382,6 +389,44 @@ test('a repeated ISBN inside one batch is skipped before insert', async () => {
   assert.equal(summary.skipped.duplicate_isbn, 1);
   assert.deepEqual(rows.map(row => row.action), ['plan', 'skip']);
   assert.equal(rows[1].reason, 'duplicate_isbn');
+});
+
+test('--fail-fast stops after the first failed batch', async () => {
+  const candidates = [1, 2, 3].map(index => enrichedCandidate({
+    workKey: key(120 + index),
+    title: `Fail Fast ${index}`,
+    isbns: [isbnAt(120 + index)],
+  }));
+  let findManyCalls = 0;
+  const db = {
+    book: {
+      findMany: async () => {
+        findManyCalls += 1;
+        if (findManyCalls === 2) throw new Error('injected batch failure');
+        return [];
+      },
+    },
+  };
+  const artifact = enrichedArtifact(candidates, SNAPSHOT_ID, 'passed');
+  const { summary, rows, exitCode } = await importCatalogWorks({
+    db,
+    reportRows: dedupReportRows(candidates.map(candidate => reportRow(candidate)), artifact),
+    artifact,
+    apply: false,
+    limit: 3,
+    batchSize: 1,
+    failFast: true,
+  });
+  assert.equal(findManyCalls, 2);
+  assert.equal(exitCode, 1);
+  assert.equal(summary.planned, 1);
+  assert.equal(summary.failed, 1);
+  assert.equal(summary.skipped.not_attempted, 1);
+  assert.deepEqual(rows.map(row => [row.action, row.reason]), [
+    ['plan', null],
+    ['fail', 'batch_failed'],
+    ['skip', 'not_attempted'],
+  ]);
 });
 
 test('a failed batch is recorded and later batches still run', async () => {
@@ -409,10 +454,11 @@ test('a failed batch is recorded and later batches still run', async () => {
       });
     },
   };
+  const artifact = enrichedArtifact(candidates, SNAPSHOT_ID, 'passed');
   const { summary, rows, exitCode } = await importCatalogWorks({
     db,
-    reportRows: candidates.map(candidate => reportRow(candidate)),
-    artifact: enrichedArtifact(candidates, SNAPSHOT_ID, 'passed'),
+    reportRows: dedupReportRows(candidates.map(candidate => reportRow(candidate)), artifact),
+    artifact,
     apply: true,
     limit: 3,
     batchSize: 1,
@@ -460,6 +506,8 @@ test('writeCatalogImportReport keeps the previous summary when validation fails'
     mode: 'dry-run',
     snapshotId: SNAPSHOT_ID,
     languageCheck: 'pending',
+    digestValid: false,
+    reportDigestMatch: 'missing',
     limit: 1,
     batchSize: 1,
     batches: 1,
@@ -587,7 +635,7 @@ test('dry-run and apply count a later-batch duplicate ISBN the same way', async 
     isbns: [shared],
   }));
   const artifact = enrichedArtifact(candidates, SNAPSHOT_ID, 'passed');
-  const reportRows = candidates.map(candidate => reportRow(candidate));
+  const reportRows = dedupReportRows(candidates.map(candidate => reportRow(candidate)), artifact);
   const dry = await importCatalogWorks({
     db: trackingDb(),
     reportRows,
@@ -612,6 +660,189 @@ test('dry-run and apply count a later-batch duplicate ISBN the same way', async 
   assert.deepEqual(dry.rows.map(row => row.reason), applied.rows.map(row => row.reason));
   assert.equal(dry.rows.at(-1).action, 'skip');
   assert.equal(applied.rows.at(-1).action, 'skip');
+});
+
+test('apply reports the real language-check validation error', async () => {
+  const candidate = enrichedCandidate({ workKey: key(145), title: 'Invalid Check', isbns: [isbnAt(145)] });
+  const artifact = enrichedArtifact([candidate], SNAPSHOT_ID, 'passed');
+  artifact.languageCheckEnrichedInputSha256 = 'not-a-digest';
+  await assert.rejects(
+    () => importCatalogWorks({
+      db: { book: { findMany: async () => [] } },
+      reportRows: dedupReportRows([reportRow(candidate)], artifact),
+      artifact,
+      apply: true,
+    }),
+    error => error instanceof Error
+      && error.message.includes('language check validation failed')
+      && error.message.includes('languageCheckEnrichedInputSha256 must be a sha256 hex digest')
+      && error.message.includes('Re-run catalog:language-check'),
+  );
+});
+
+test('apply refuses when dedup report languageCheckDigest does not match the artifact', async () => {
+  const candidate = enrichedCandidate({ workKey: key(146), title: 'Digest Mismatch', isbns: [isbnAt(146)] });
+  const artifact = enrichedArtifact([candidate], SNAPSHOT_ID, 'passed');
+  const mismatched = reportRow(candidate);
+  mismatched.languageCheckDigest = `${artifact.languageCheckDigest.slice(0, -1)}0`;
+  await assert.rejects(
+    () => importCatalogWorks({
+      db: { book: { findMany: async () => [] } },
+      reportRows: [mismatched],
+      artifact,
+      apply: true,
+    }),
+    error => error instanceof Error
+      && error.message.includes('dedup report line 1 languageCheckDigest does not match')
+      && error.message.includes('Re-run catalog:language-check and catalog:dedup-check'),
+  );
+});
+
+test('apply refuses when dedup report predates PR #38 with no languageCheckDigest', async () => {
+  const candidate = enrichedCandidate({ workKey: key(147), title: 'Predates Digest', isbns: [isbnAt(147)] });
+  const artifact = enrichedArtifact([candidate], SNAPSHOT_ID, 'passed');
+  await assert.rejects(
+    () => importCatalogWorks({
+      db: { book: { findMany: async () => [] } },
+      reportRows: [reportRow(candidate)],
+      artifact,
+      apply: true,
+    }),
+    error => error instanceof Error
+      && error.message.includes('predates PR #38')
+      && error.message.includes('Re-run catalog:dedup-check')
+      && !error.message.includes('does not match'),
+  );
+});
+
+test('computeReportDigestMatch and dry-run summary report matching, missing, and mismatched digests', async () => {
+  const candidate = enrichedCandidate({ workKey: key(148), title: 'Report Digest', isbns: [isbnAt(148)] });
+  const artifact = enrichedArtifact([candidate], SNAPSHOT_ID, 'passed');
+  const matchingRows = dedupReportRows([reportRow(candidate)], artifact);
+  assert.equal(computeReportDigestMatch(matchingRows, artifact), true);
+  const missingRows = [reportRow(candidate)];
+  assert.equal(computeReportDigestMatch(missingRows, artifact), 'missing');
+  const mismatched = reportRow(candidate);
+  mismatched.languageCheckDigest = `${artifact.languageCheckDigest.slice(0, -1)}0`;
+  assert.equal(computeReportDigestMatch([mismatched], artifact), false);
+
+  const matching = await importCatalogWorks({
+    db: { book: { findMany: async () => [] } },
+    reportRows: matchingRows,
+    artifact,
+    apply: false,
+  });
+  assert.equal(matching.summary.reportDigestMatch, true);
+
+  const missing = await importCatalogWorks({
+    db: { book: { findMany: async () => [] } },
+    reportRows: missingRows,
+    artifact,
+    apply: false,
+  });
+  assert.equal(missing.summary.reportDigestMatch, 'missing');
+
+  const mismatch = await importCatalogWorks({
+    db: { book: { findMany: async () => [] } },
+    reportRows: [mismatched],
+    artifact,
+    apply: false,
+  });
+  assert.equal(mismatch.summary.reportDigestMatch, false);
+});
+
+test('confirmInserted labels a skipped createMany row by duplicate work key', async () => {
+  const workKey = key(170);
+  const candidate = enrichedCandidate({ workKey, title: 'Concurrent Key', isbns: [isbnAt(170)] });
+  const existing = {
+    id: 'existing-id',
+    openLibraryWorkKey: workKey,
+    isbn: isbnAt(171),
+  };
+  const db = {
+    $transaction: async work => work({
+      book: {
+        findMany: async ({ where } = {}) => {
+          if (where?.id?.in) return [];
+          if (where?.OR) {
+            return where.OR.some(clause => clause.openLibraryWorkKey?.in?.includes(workKey))
+              ? [existing]
+              : [];
+          }
+          return [];
+        },
+        createMany: async () => ({ count: 0 }),
+      },
+    }),
+  };
+  const artifact = enrichedArtifact([candidate], SNAPSHOT_ID, 'passed');
+  const { summary, rows } = await importCatalogWorks({
+    db,
+    reportRows: dedupReportRows([reportRow(candidate)], artifact),
+    artifact,
+    apply: true,
+  });
+  assert.equal(summary.inserted, 0);
+  assert.equal(summary.skipped.duplicate_work_key, 1);
+  assert.equal(summary.skipped.duplicate_isbn, 0);
+  assert.equal(rows[0].reason, 'duplicate_work_key');
+});
+
+test('loadWorksImportSources returns a join reused by importCatalogWorks', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const candidate = enrichedCandidate({ workKey: key(171), title: 'Join Once', isbns: [isbnAt(171)] });
+  const artifactPath = join(directory, 'enriched.json');
+  const reportPath = join(directory, 'report.jsonl');
+  await fs.writeFile(artifactPath, `${JSON.stringify(enrichedArtifact([candidate]))}\n`);
+  await fs.writeFile(reportPath, `${JSON.stringify(reportRow(candidate))}\n`);
+  const sources = await loadWorksImportSources(reportPath, artifactPath);
+  assert.deepEqual(sources.join, joinReportToEnriched(sources.reportRows, sources.artifact));
+  const { summary } = await importCatalogWorks({
+    db: { book: { findMany: async () => [] } },
+    reportRows: sources.reportRows,
+    artifact: sources.artifact,
+    join: sources.join,
+    apply: false,
+  });
+  assert.equal(summary.planned, 1);
+});
+
+test('dry-run reports digestValid for passed and tampered language-checked artifacts', async () => {
+  const candidate = enrichedCandidate({ workKey: key(139), title: 'Digest Check', isbns: [isbnAt(139)] });
+  const passedArtifact = enrichedArtifact([candidate], SNAPSHOT_ID, 'passed');
+  const passed = await importCatalogWorks({
+    db: { book: { findMany: async () => [] } },
+    reportRows: dedupReportRows([reportRow(candidate)], passedArtifact),
+    artifact: passedArtifact,
+    apply: false,
+  });
+  assert.equal(passed.summary.languageCheck, 'passed');
+  assert.equal(passed.summary.digestValid, true);
+  assert.equal(passed.summary.reportDigestMatch, true);
+  const tampered = structuredClone(passedArtifact);
+  tampered.candidates[0].languages = ['/languages/fre'];
+  const invalid = await importCatalogWorks({
+    db: { book: { findMany: async () => [] } },
+    reportRows: dedupReportRows([reportRow(candidate)], passedArtifact),
+    artifact: tampered,
+    apply: false,
+  });
+  assert.equal(invalid.summary.languageCheck, 'passed');
+  assert.equal(invalid.summary.digestValid, false);
+  assert.equal(invalid.summary.reportDigestMatch, true);
+  assert.match(invalid.summary.languageCheckError, /must include \/languages\/eng/);
+  const staleDigest = structuredClone(passedArtifact);
+  staleDigest.languageCheckDigest = `${staleDigest.languageCheckDigest.slice(0, -1)}0`;
+  const stale = await importCatalogWorks({
+    db: { book: { findMany: async () => [] } },
+    reportRows: dedupReportRows([reportRow(candidate)], passedArtifact),
+    artifact: staleDigest,
+    apply: false,
+  });
+  assert.equal(stale.summary.digestValid, false);
+  assert.equal(stale.summary.reportDigestMatch, false);
+  assert.match(stale.summary.languageCheckError, /languageCheckDigest does not match/);
 });
 
 test('apply refuses an unchecked language and dry-run reports it', async () => {
@@ -646,6 +877,7 @@ test('apply refuses an unchecked language and dry-run reports it', async () => {
     apply: false,
   });
   assert.equal(dry.summary.languageCheck, 'pending');
+  assert.equal(dry.summary.digestValid, false);
   assert.equal(dry.summary.planned, 1);
   assert.deepEqual(calls, ['findMany']);
 });
@@ -657,30 +889,36 @@ test('--allow-unchecked-language permits apply and prints a warning', async () =
   const original = console.error;
   console.error = (...parts) => { warnings.push(parts.map(String).join(' ')); };
   try {
+    const pendingArtifact = enrichedArtifact([candidate]);
     const overridden = await importCatalogWorks({
       db: trackingDb(),
       reportRows: [reportRow(candidate)],
-      artifact: enrichedArtifact([candidate]),
+      artifact: pendingArtifact,
       apply: true,
       allowUncheckedLanguage: true,
     });
     assert.equal(overridden.summary.inserted, 1);
     assert.equal(overridden.summary.languageCheck, 'pending');
+    assert.equal(overridden.summary.digestValid, false);
     const quiet = [];
     console.error = (...parts) => { quiet.push(parts.map(String).join(' ')); };
+    const passedArtifact = enrichedArtifact([checked], SNAPSHOT_ID, 'passed');
     const passed = await importCatalogWorks({
       db: trackingDb(),
-      reportRows: [reportRow(checked)],
-      artifact: enrichedArtifact([checked], SNAPSHOT_ID, 'passed'),
+      reportRows: dedupReportRows([reportRow(checked)], passedArtifact),
+      artifact: passedArtifact,
       apply: true,
     });
     assert.equal(passed.summary.inserted, 1);
     assert.equal(passed.summary.languageCheck, 'passed');
+    assert.equal(passed.summary.digestValid, true);
     assert.deepEqual(quiet, []);
   } finally {
     console.error = original;
   }
   assert.match(warnings.join('\n'), /WARNING: --allow-unchecked-language/);
+  assert.match(warnings.join('\n'), /digestValid false/);
+  assert.match(warnings.join('\n'), /reportDigestMatch "missing"/);
 });
 
 test('non-books are skipped with pilotDisqualificationReason and do not consume the limit', async () => {
@@ -699,6 +937,35 @@ test('non-books are skipped with pilotDisqualificationReason and do not consume 
   assert.equal(summary.skipped.audiobook, 1);
   assert.equal(summary.skipped.limit, 0);
   assert.equal(summary.planned, 1);
+});
+
+test('catalog:import dry-run warns when reportDigestMatch is missing or false', { skip: !process.env.TEST_DATABASE_URL }, async () => {
+  const directory = await temporaryDirectory();
+  const candidate = enrichedCandidate({ workKey: key(172), title: 'Digest Warning', isbns: [isbnAt(172)] });
+  const artifact = enrichedArtifact([candidate], SNAPSHOT_ID, 'passed');
+  const artifactPath = join(directory, 'enriched.json');
+  const reportPath = join(directory, 'report.jsonl');
+  const outputPath = join(directory, 'out.jsonl');
+  await fs.writeFile(artifactPath, `${JSON.stringify(artifact)}\n`);
+  await fs.writeFile(reportPath, `${JSON.stringify(reportRow(candidate))}\n`);
+  const missing = await execFileAsync(process.execPath, [
+    SCRIPT, '--report', reportPath, '--enriched', artifactPath, '--output', outputPath,
+  ], { env: { ...process.env, DATABASE_URL: process.env.TEST_DATABASE_URL } });
+  const missingSummary = JSON.parse(missing.stdout.trim());
+  assert.equal(missingSummary.reportDigestMatch, 'missing');
+  assert.match(missing.stderr, /predates PR #38/);
+  assert.match(missing.stderr, /Re-run catalog:dedup-check/);
+
+  const mismatched = reportRow(candidate);
+  mismatched.languageCheckDigest = `${artifact.languageCheckDigest.slice(0, -1)}0`;
+  await fs.writeFile(reportPath, `${JSON.stringify(mismatched)}\n`);
+  const mismatch = await execFileAsync(process.execPath, [
+    SCRIPT, '--report', reportPath, '--enriched', artifactPath, '--output', join(directory, 'out-mismatch.jsonl'),
+  ], { env: { ...process.env, DATABASE_URL: process.env.TEST_DATABASE_URL } });
+  const mismatchSummary = JSON.parse(mismatch.stdout.trim());
+  assert.equal(mismatchSummary.reportDigestMatch, false);
+  assert.match(mismatch.stderr, /does not match the language-checked artifact/);
+  assert.match(mismatch.stderr, /Re-run catalog:language-check and catalog:dedup-check/);
 });
 
 test('catalog:import refuses --apply until languageCheck is passed', async () => {

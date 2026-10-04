@@ -51,8 +51,14 @@ export function pilotDisqualificationReason(candidate) {
   }
 
   // 5. Calendar. Titles need a product cue; a bare "calendar" matches novels such as Calendar Girl.
-  const calendarTitle = /\b(?:(?:wall|desk|engagement|pocket)[\s-]+calendars?|\d{4}[\s-]+calendars?|calendars?[\s-]+\d{4})\b/;
-  if (/\bcalendar\b/.test(format) || calendarTitle.test(title)) {
+  const yearRange = String.raw`\d{4}(?:[-–]\d{4})?`;
+  const calendarSuffix = String.raw`(?:\s*[:;(]|$)`;
+  const calendarProduct = /\b(?:advent|wall|desk|engagement|pocket|perpetual|daily|page-a-day|day-to-day)[\s-]+calendars?\b/.test(title)
+    || new RegExp(String.raw`\b${yearRange}[\s-]+(?:wall[\s-]+|desk[\s-]+)?calendars?${calendarSuffix}`).test(title)
+    || new RegExp(String.raw`\bcalendars?[\s-]+${yearRange}${calendarSuffix}`).test(title);
+  const calendarTitle = calendarProduct
+    && !(/\badvent[\s-]+calendars?\b/.test(title) && /\([^)]*\bnovel\b[^)]*\)/.test(title));
+  if (/\bcalendar\b/.test(format) || calendarTitle) {
     return 'calendar';
   }
 

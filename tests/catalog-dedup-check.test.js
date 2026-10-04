@@ -316,6 +316,37 @@ test('createReadOnlyDbInterface exposes only findMany and disconnect', () => {
   assert.equal(readOnly.$extends, undefined);
 });
 
+test('runCatalogDedupCheck carries languageCheckDigest into each report row', async () => {
+  const directory = await temporaryDirectory();
+  const inputPath = join(directory, 'checked.json');
+  const outputPath = join(directory, 'report.jsonl');
+  const digest = 'a'.repeat(64);
+  const artifact = {
+    ...discoverArtifact([discoverCandidate()]),
+    languageCheck: 'passed',
+    languageCheckDigest: digest,
+    languageCheckEditions: { basename: 'editions.txt.gz', bytes: 1 },
+    languageCheckEnrichedInputSha256: 'b'.repeat(64),
+    languageCheckKeepUnknownLanguage: false,
+    candidates: [{
+      ...discoverCandidate(),
+      isbns: [],
+      primaryAuthor: 'Fixture Author',
+      languages: ['/languages/eng'],
+    }],
+  };
+  await fs.writeFile(inputPath, `${JSON.stringify(artifact)}\n`, 'utf8');
+  const { results } = await runCatalogDedupCheck({
+    db: createMockDb(),
+    inputPath,
+    outputPath,
+  });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].languageCheckDigest, digest);
+  const lines = await readDedupReport(outputPath);
+  assert.equal(lines[0].languageCheckDigest, digest);
+});
+
 test('runCatalogDedupCheck writes JSONL and prints summary counts', async () => {
   const directory = await temporaryDirectory();
   const inputPath = join(directory, 'discover.json');

@@ -1,6 +1,17 @@
 import { randomUUID } from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
 import * as fs from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
+
+export async function assertOutputDirectoryWritable(outputPath, { label = 'Output' } = {}) {
+  const directory = dirname(resolve(outputPath));
+  try {
+    await fs.mkdir(directory, { recursive: true });
+    await fs.access(directory, fsConstants.W_OK);
+  } catch {
+    throw new Error(`${label} directory is not writable: ${directory}`);
+  }
+}
 
 export async function writeFileAtomic(path, content, {
   fsImpl = fs,

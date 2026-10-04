@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -159,13 +160,14 @@ async function writeClassificationFixture(directory) {
   return { inputPath, editionsPath };
 }
 
-function reportRows(candidates) {
+function reportRows(candidates, languageCheckDigest = null) {
   return candidates.map(candidate => ({
     workKey: candidate.workKey,
     title: candidate.title,
     status: 'new',
     matchedBookIds: [],
     matchedBy: null,
+    ...(languageCheckDigest ? { languageCheckDigest } : {}),
   }));
 }
 
@@ -215,6 +217,10 @@ test('language check keeps English and mixed works and drops the rest', async (t
   assert.equal(result.languageCheckDigest, languageCheckDigestForArtifact(result.artifact));
   assert.equal(result.editionsBasename, 'ol_dump_editions_fixture.txt.gz');
   assert.equal(result.editionsBytes, (await fs.stat(editionsPath)).size);
+  const enrichedRaw = await fs.readFile(inputPath, 'utf8');
+  const expectedInputSha256 = createHash('sha256').update(enrichedRaw).digest('hex');
+  assert.equal(result.artifact.languageCheckEnrichedInputSha256, expectedInputSha256);
+  assert.equal(result.artifact.languageCheckKeepUnknownLanguage, false);
   const written = JSON.parse(await fs.readFile(outputPath, 'utf8'));
   validateLanguageCheckedArtifact(written, { snapshotId: SNAPSHOT_ID });
   const loaded = await loadDiscoverCandidates(outputPath);
@@ -226,7 +232,35 @@ test('language check keeps English and mixed works and drops the rest', async (t
     languageCheckEditions: { ...written.languageCheckEditions, bytes: written.languageCheckEditions.bytes + 1 },
   };
   assert.notEqual(languageCheckDigestForArtifact(resized), written.languageCheckDigest);
+  const retagged = {
+    ...written,
+    languageCheckKeepUnknownLanguage: true,
+    languageCheckDigest: languageCheckDigestForArtifact({
+      ...written,
+      languageCheckKeepUnknownLanguage: true,
+    }),
+  };
+  assert.notEqual(languageCheckDigestForArtifact(retagged), written.languageCheckDigest);
   assert.deepEqual((await fs.readdir(directory)).filter(name => name.includes('.tmp') || name.includes('.bak')), []);
+});
+
+test('language check verifies the output directory is writable before scanning the editions dump', { skip: process.getuid?.() === 0 }, async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const { inputPath, editionsPath } = await writeClassificationFixture(directory);
+  const locked = join(directory, 'locked');
+  await fs.mkdir(locked);
+  await fs.chmod(locked, 0o000);
+  const outputPath = join(locked, 'checked.json');
+  try {
+    await assert.rejects(
+      () => checkCatalogLanguages({ inputPath, editionsPath, outputPath }),
+      error => error instanceof Error
+        && error.message.includes(`Language-check output directory is not writable: ${locked}`),
+    );
+  } finally {
+    await fs.chmod(locked, 0o755);
+  }
 });
 
 test('--keep-unknown-language keeps works with no language data and still drops non-English works', async (t) => {
@@ -250,6 +284,7 @@ test('--keep-unknown-language keeps works with no language data and still drops 
   assert.equal(result.droppedUnknownLanguage, 0);
   assert.equal(result.keptUnknownLanguage, 2);
   assert.equal(result.artifact.counts.selected, 4);
+  assert.equal(result.artifact.languageCheckKeepUnknownLanguage, true);
   validateLanguageCheckedArtifact(result.artifact, { snapshotId: SNAPSHOT_ID });
 });
 
@@ -300,7 +335,7 @@ test('import apply accepts a real language check and refuses a tampered language
   const { inputPath, editionsPath } = await writeClassificationFixture(directory);
   const outputPath = join(directory, 'checked.json');
   const { artifact } = await checkCatalogLanguages({ inputPath, editionsPath, outputPath });
-  const rows = reportRows(artifact.candidates);
+  const rows = reportRows(artifact.candidates, artifact.languageCheckDigest);
   const applied = await importCatalogWorks({
     db: applyDb(),
     reportRows: rows,
@@ -330,6 +365,19 @@ test('import apply accepts a real language check and refuses a tampered language
       && error.message.includes('not "passed"'),
   );
   const tamperedDigest = `${artifact.languageCheckDigest.slice(0, -1)}${artifact.languageCheckDigest.endsWith('a') ? 'b' : 'a'}`;
+  const tamperedRows = rows.map(row => ({ ...row, languageCheckDigest: tamperedDigest }));
+  await assert.rejects(
+    () => importCatalogWorks({
+      db: guarded,
+      reportRows: tamperedRows,
+      artifact,
+      apply: true,
+    }),
+    error => error instanceof Error
+      && error.message.includes('Refusing --apply')
+      && error.message.includes('dedup report line 1 languageCheckDigest does not match')
+      && error.message.includes('Re-run catalog:language-check and catalog:dedup-check'),
+  );
   await assert.rejects(
     () => importCatalogWorks({
       db: guarded,
@@ -338,8 +386,8 @@ test('import apply accepts a real language check and refuses a tampered language
       apply: true,
     }),
     error => error instanceof Error
-      && error.message.includes('Refusing --apply')
-      && error.message.includes('languageCheckDigest'),
+      && error.message.includes('language check validation failed')
+      && error.message.includes('languageCheckDigest does not match'),
   );
   const edited = structuredClone(artifact);
   edited.candidates[0].languages = ['/languages/fre'];
@@ -350,7 +398,9 @@ test('import apply accepts a real language check and refuses a tampered language
       artifact: edited,
       apply: true,
     }),
-    error => error instanceof Error && error.message.includes('languageCheckDigest'),
+    error => error instanceof Error
+      && error.message.includes('language check validation failed')
+      && error.message.includes('must include /languages/eng'),
   );
   assert.equal(calls, 0);
 
@@ -372,6 +422,7 @@ test('import apply accepts a real language check and refuses a tampered language
     console.error = original;
   }
   assert.match(warnings.join('\n'), /WARNING: --allow-unchecked-language/);
+  assert.match(warnings.join('\n'), /reportDigestMatch false/);
 });
 
 test('enrich, language-check, dedup-check, and import dry-run keep the English work', async (t) => {

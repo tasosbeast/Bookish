@@ -192,7 +192,7 @@ function stripCandidateEnrichment(candidate) {
   return core;
 }
 
-export async function loadDiscoverCandidates(inputPath) {
+export async function loadDiscoverArtifact(inputPath) {
   const resolved = resolve(inputPath);
   let artifact;
   try {
@@ -211,7 +211,11 @@ export async function loadDiscoverCandidates(inputPath) {
     ...view,
     candidates: view.candidates.map(stripCandidateEnrichment),
   });
-  return artifact.candidates;
+  return artifact;
+}
+
+export async function loadDiscoverCandidates(inputPath) {
+  return (await loadDiscoverArtifact(inputPath)).candidates;
 }
 
 export async function readDedupReport(inputPath) {
@@ -242,6 +246,13 @@ export function validateDedupReport(results, expected) {
         throw new CatalogContractError('invalid_dedup_report', `Dedup report line ${index + 1} does not match the expected ${field}`);
       }
     }
+    if (Object.hasOwn(source, 'languageCheckDigest')) {
+      if (written.languageCheckDigest !== source.languageCheckDigest) {
+        throw new CatalogContractError('invalid_dedup_report', `Dedup report line ${index + 1} does not match the expected languageCheckDigest`);
+      }
+    } else if (Object.hasOwn(written, 'languageCheckDigest')) {
+      throw new CatalogContractError('invalid_dedup_report', `Dedup report line ${index + 1} has an unexpected languageCheckDigest`);
+    }
     if (JSON.stringify(written.matchedBookIds) !== JSON.stringify(source.matchedBookIds)) {
       throw new CatalogContractError('invalid_dedup_report', `Dedup report line ${index + 1} does not match the expected matchedBookIds`);
     }
@@ -265,8 +276,12 @@ export async function writeDedupReport(outputPath, results) {
 }
 
 export async function runCatalogDedupCheck({ db, inputPath, outputPath }) {
-  const candidates = await loadDiscoverCandidates(inputPath);
-  const { results, summary } = await checkCatalogDuplicates(db, candidates);
-  await writeDedupReport(outputPath, results);
-  return { results, summary, outputPath: resolve(outputPath) };
+  const artifact = await loadDiscoverArtifact(inputPath);
+  const languageCheckDigest = typeof artifact.languageCheckDigest === 'string' ? artifact.languageCheckDigest : null;
+  const { results, summary } = await checkCatalogDuplicates(db, artifact.candidates);
+  const report = languageCheckDigest
+    ? results.map(result => ({ ...result, languageCheckDigest }))
+    : results;
+  await writeDedupReport(outputPath, report);
+  return { results: report, summary, outputPath: resolve(outputPath) };
 }

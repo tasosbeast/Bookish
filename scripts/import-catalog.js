@@ -1,8 +1,8 @@
 import 'dotenv/config';
+import { assertOutputDirectoryWritable } from './catalog/atomic-write.js';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {
-  assertOutputDirectoryWritable,
   createImportPrismaClient,
   importCatalogWorks,
   importResolvedCatalog,
@@ -19,6 +19,7 @@ function worksImportRequested(args) {
     || argument === '--limit'
     || argument === '--batch-size'
     || argument === '--allow-unchecked-language'
+    || argument === '--fail-fast'
   ));
 }
 
@@ -26,7 +27,7 @@ async function runWorksImport(args) {
   const options = parseCatalogWorksImportArgs(args);
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error('DATABASE_URL is required');
-  await assertOutputDirectoryWritable(options.output);
+  await assertOutputDirectoryWritable(options.output, { label: 'Import output' });
   const sources = await loadWorksImportSources(options.report, options.enriched);
   const db = createImportPrismaClient(databaseUrl, { apply: options.apply });
   try {
@@ -34,12 +35,22 @@ async function runWorksImport(args) {
       db,
       reportRows: sources.reportRows,
       artifact: sources.artifact,
+      join: sources.join,
       apply: options.apply,
       allowUncheckedLanguage: options.allowUncheckedLanguage,
+      failFast: options.failFast,
       limit: options.limit,
       batchSize: options.batchSize,
       outputPath: options.output,
     });
+    if (!options.apply && summary.languageCheckError) {
+      console.error(`languageCheckDigest is invalid: ${summary.languageCheckError}. Re-run catalog:language-check.`);
+    }
+    if (!options.apply && summary.reportDigestMatch === 'missing') {
+      console.error('Dedup report predates PR #38 and has no languageCheckDigest on its rows. Re-run catalog:dedup-check.');
+    } else if (!options.apply && summary.reportDigestMatch === false) {
+      console.error('Dedup report languageCheckDigest does not match the language-checked artifact. Re-run catalog:language-check and catalog:dedup-check.');
+    }
     console.log(JSON.stringify(summary));
     if (summary.failed) process.exitCode = 1;
   } finally {
