@@ -127,7 +127,11 @@ function assertIsbnList(isbns) {
 
 function assertPrimaryAuthor(value) {
   if (value === null) return;
-  if (typeof value !== 'string' || !value.trim()) {
+  if (typeof value !== 'string') {
+    fail('invalid_enriched_artifact', 'Enriched candidate primaryAuthor must be a name or null');
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
     fail('invalid_enriched_artifact', 'Enriched candidate primaryAuthor must be a name or null');
   }
 }
@@ -221,7 +225,7 @@ function addIsbn(entry, isbn, counts) {
 }
 
 function authorLookupBuildCommand(authorsIndex, snapshotId) {
-  return `npm run catalog:ol-author-lookup-build -- --index ${authorsIndex} --snapshot-id ${snapshotId}`;
+  return `npm run catalog:ol-author-lookup-build -- --index "${authorsIndex}" --snapshot-id ${snapshotId}`;
 }
 
 async function assertAuthorLookupDatabase(authorsIndex, snapshotId) {
@@ -248,7 +252,8 @@ async function assignPrimaryAuthors(entries, candidates, authorLookup) {
   for (const candidate of candidates) {
     const entry = entries.get(candidate.workKey);
     const name = names.get(candidate.authorKeys[0]);
-    entry.primaryAuthor = typeof name === 'string' && name.trim() ? name : null;
+    const trimmed = typeof name === 'string' ? name.trim().replace(/\s+/g, ' ') : '';
+    entry.primaryAuthor = trimmed || null;
     if (entry.primaryAuthor) worksWithAuthor += 1;
   }
   return worksWithAuthor;

@@ -1,10 +1,8 @@
 # Current Task
 
-Offline enrich of discover candidates (`catalog:enrich`).
+Batched, idempotent import of new catalog works (`catalog:import`).
 
-The command reads a discover artifact, streams one local Open Library editions dump, and writes the same artifact shape with `isbns` and `primaryAuthor` on each candidate. Candidates stay in a work-key map. The dump is not loaded into memory, and the command does not access PostgreSQL. ISBN-10 values convert to ISBN-13 and invalid checksums are dropped. Each work keeps the lowest 200 ISBN-13s, so the set does not depend on dump order. `primaryAuthor` comes from `lookup.sqlite` for the candidate's first author key, or null when that key is absent. The author index snapshotId must match the input artifact. The summary reports matched editions, works with ISBNs, works without ISBNs, works with an author, works whose ISBN list was truncated, bad checksums, and malformed rows. `catalog:dedup-check` accepts the enriched file.
-
-Acceptance: `npm run lint` with 0 warnings, `npm test`, integration tests, and `npm test --prefix frontend` green. No database access, migrations, or schema changes.
+The command reads a `catalog:dedup-check` JSONL report and the enriched artifact that produced it. It joins rows to candidates by `workKey` and requires the report to match that artifact's `snapshotId`. Only `status: new` rows are eligible. `existing` and `ambiguous` rows are skipped and counted. Candidates with no usable title or no `primaryAuthor` are skipped and counted. Non-Latin titles are skipped as `unsupported_script`. Non-books are skipped with `pilotDisqualificationReason` and do not consume the limit. Eligible rows are capped by `--limit` (default 500, maximum 10000) and inserted in batches of `--batch-size` (default 100). Dry-run is the default: it uses the dedup-check read-only client and `default_transaction_read_only`, prints a plan, and writes JSONL plus a summary that records `languageCheck`. `--apply` writes only when `languageCheck` is `passed`, unless `--allow-unchecked-language` is set, which prints a warning. Each batch is its own transaction, carries work keys and ISBNs seen in earlier batches, re-checks `openLibraryWorkKey` and ISBN, and inserts with `createMany` `skipDuplicates`. A failed batch rolls back; the process exits non-zero if any batch fails. Mapped fields are `title`, `author` from `primaryAuthor`, the lowest valid ISBN-13 or null, `openLibraryWorkKey`, the Open Library cover URL, and `publicationYear` when the candidate has a year the schema accepts.
 
 ## Recorded for later
 
@@ -18,14 +16,15 @@ Later pipeline steps will select a "good" book only if it meets all of the follo
 
 Existing rules still apply: non-books rejected via `pilotDisqualificationReason`, ISBN-13 edition identity, controlled genre mapping, no fabricated metadata.
 
-### Roadmap (in order; not implemented here)
+### Roadmap (in order)
 
-1. Candidate scoring and selection (`catalog:discover --limit N`)
-2. Read-only dedup against the database
-3. A resolved-artifact bridge
-4. A batched, idempotent `--dry-run`/`--apply` import
-5. Offline enrich from discover to dedup-check (`catalog:enrich`)
+1. Candidate scoring and selection (`catalog:discover --limit N`) — done
+2. Read-only dedup against the database — done
+3. A resolved-artifact bridge — not implemented
+4. A batched, idempotent `--dry-run`/`--apply` import — current task
+5. Offline enrich from discover to dedup-check (`catalog:enrich`) — done
 
+catalog:enrich is done (#35, merged as aee1a45).
 catalog:dedup-check is done (#34, merged as 3e86b39).
 catalog:discover is done (#33, merged as 563cdba).
 Book.openLibraryWorkKey is done (PR #32, merged as e1d281d).

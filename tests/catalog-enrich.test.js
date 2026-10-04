@@ -282,7 +282,7 @@ test('enrich leaves primaryAuthor null when the first author key is unknown', as
       works: [{ key: '/works/OL100W' }],
       isbn_13: [isbn13For(7)],
     }),
-    authors: [{ key: '/authors/OL1A', name: 'Jane Austen' }],
+    authors: [{ key: '/authors/OL1A', name: '  Jane   Austen  ' }],
   });
   const [unknown, known, empty] = result.artifact.candidates;
   assert.equal(unknown.primaryAuthor, null);
@@ -353,7 +353,7 @@ test('enrich rejects a directory passed as the discover input and leaves no outp
   assertNoTempFiles(await fs.readdir(directory));
 });
 
-test('enrich rejects an unreadable editions file and leaves no output', async (t) => {
+test('enrich rejects an unreadable editions file and leaves no output', { skip: process.getuid?.() === 0 }, async (t) => {
   const directory = await temporaryDirectory();
   t.after(async () => {
     await fs.chmod(join(directory, 'editions.txt'), 0o644).catch(() => {});
@@ -365,14 +365,15 @@ test('enrich rejects an unreadable editions file and leaves no output', async (t
   const previous = '{"keep":"previous"}\n';
   await fs.writeFile(inputPath, `${JSON.stringify(discoverArtifact([discoverCandidate()]))}\n`);
   await fs.writeFile(editionsPath, 'secret\n');
-  await fs.chmod(editionsPath, 0o000);
   await fs.writeFile(outputPath, previous);
+  const authorsIndexPath = await writeAuthorIndex(directory, [{ key: '/authors/OL1A', name: 'Jane Austen' }]);
+  await fs.chmod(editionsPath, 0o000);
 
   await assert.rejects(
     () => enrichCatalogCandidates({
       inputPath,
       editionsPath,
-      authorsIndexPath: directory,
+      authorsIndexPath,
       outputPath,
     }),
     error => error.code === 'invalid_argument' && /Unable to read editions dump/.test(error.message) && /EACCES/.test(error.message),
@@ -410,7 +411,7 @@ test('enrich requires lookup.sqlite instead of reading author shards', async (t)
       outputPath,
     }),
     error => error.code === 'invalid_author_index'
-      && error.message.includes(`npm run catalog:ol-author-lookup-build -- --index ${authorsIndexPath} --snapshot-id ${SNAPSHOT_ID}`),
+      && error.message.includes(`npm run catalog:ol-author-lookup-build -- --index "${authorsIndexPath}" --snapshot-id ${SNAPSHOT_ID}`),
   );
   assert.equal(await fs.readFile(outputPath, 'utf8'), previous);
   assertNoTempFiles(await fs.readdir(directory));
