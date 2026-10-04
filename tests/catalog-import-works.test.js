@@ -29,7 +29,7 @@ import {
   parseCatalogWorksImportArgs,
   writeCatalogImportReport,
 } from '../scripts/catalog/import.js';
-import { sealLanguageCheckedArtifact } from '../scripts/catalog/language-check.js';
+import { sealLanguageCheckedArtifact } from './catalog/language-check-helpers.js';
 
 const execFileAsync = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL('../scripts/import-catalog.js', import.meta.url));
@@ -118,7 +118,7 @@ function skipCounts(overrides = {}) {
   return Object.fromEntries(CATALOG_IMPORT_SKIP_REASONS.map(reason => [reason, overrides[reason] ?? 0]));
 }
 
-test('mapCandidateToBook stores the lowest ISBN-13, primary author, cover, and a schema-valid year', () => {
+test('mapCandidateToBook stores the lowest ISBN-13, primary author, and cover', () => {
   const higher = isbnAt(20);
   const lower = isbnAt(10);
   const from10 = normalizeIsbn10ToIsbn13('0306406152');
@@ -130,7 +130,6 @@ test('mapCandidateToBook stores the lowest ISBN-13, primary author, cover, and a
     primaryAuthor: '  Octavia Butler  ',
     isbns: [higher, lower],
     coverIds: [42, 7],
-    publicationYear: 1979,
   });
   assert.equal(mapped.skip, undefined);
   assert.deepEqual(mapped.book, {
@@ -139,18 +138,15 @@ test('mapCandidateToBook stores the lowest ISBN-13, primary author, cover, and a
     isbn: [lower, higher].sort()[0],
     openLibraryWorkKey: '/works/OL42W',
     coverImageUrl: 'https://covers.openlibrary.org/b/id/42-L.jpg?default=false',
-    publicationYear: 1979,
   });
-  const withoutYear = mapCandidateToBook({
+  const withoutIsbn = mapCandidateToBook({
     workKey: '/works/OL43W',
     title: 'Kindred',
     primaryAuthor: 'Octavia Butler',
     isbns: [],
     coverIds: [1],
-    publicationYear: 0,
   });
-  assert.equal(withoutYear.book.isbn, null);
-  assert.equal(Object.hasOwn(withoutYear.book, 'publicationYear'), false);
+  assert.equal(withoutIsbn.book.isbn, null);
   assert.equal(candidateImportSkipReason({ title: '!!!', primaryAuthor: 'Octavia Butler' }), 'missing_title');
   assert.equal(candidateImportSkipReason({ title: 'Kindred', primaryAuthor: '!!!' }), 'missing_author');
   assert.equal(candidateImportSkipReason({ title: 'Kindred', primaryAuthor: null }), 'missing_author');
@@ -346,6 +342,7 @@ test('dry-run plans batches without write calls and records zero inserts', async
   assert.equal(summary.mode, 'dry-run');
   assert.equal(summary.snapshotId, SNAPSHOT_ID);
   assert.equal(summary.languageCheck, 'pending');
+  assert.equal(summary.digestValid, false);
   assert.equal(summary.report, outputPath);
   assert.equal(summary.limit, 4);
   assert.equal(summary.batchSize, 2);
@@ -361,6 +358,7 @@ test('dry-run plans batches without write calls and records zero inserts', async
   assert.equal(summaryFile.inserted, 0);
   assert.equal(summaryFile.planned, 4);
   assert.equal(summaryFile.languageCheck, 'pending');
+  assert.equal(summaryFile.digestValid, false);
   assert.equal(summaryFile.report, outputPath);
 });
 
@@ -382,6 +380,38 @@ test('a repeated ISBN inside one batch is skipped before insert', async () => {
   assert.equal(summary.skipped.duplicate_isbn, 1);
   assert.deepEqual(rows.map(row => row.action), ['plan', 'skip']);
   assert.equal(rows[1].reason, 'duplicate_isbn');
+});
+
+test('--fail-fast stops after the first failed batch', async () => {
+  const candidates = [1, 2, 3].map(index => enrichedCandidate({
+    workKey: key(120 + index),
+    title: `Fail Fast ${index}`,
+    isbns: [isbnAt(120 + index)],
+  }));
+  let findManyCalls = 0;
+  const db = {
+    book: {
+      findMany: async () => {
+        findManyCalls += 1;
+        if (findManyCalls === 2) throw new Error('injected batch failure');
+        return [];
+      },
+    },
+  };
+  const { summary, rows, exitCode } = await importCatalogWorks({
+    db,
+    reportRows: candidates.map(candidate => reportRow(candidate)),
+    artifact: enrichedArtifact(candidates, SNAPSHOT_ID, 'passed'),
+    apply: false,
+    limit: 3,
+    batchSize: 1,
+    failFast: true,
+  });
+  assert.equal(findManyCalls, 2);
+  assert.equal(exitCode, 1);
+  assert.equal(summary.planned, 2);
+  assert.equal(summary.failed, 1);
+  assert.deepEqual(rows.map(row => row.action), ['plan', 'fail', 'plan']);
 });
 
 test('a failed batch is recorded and later batches still run', async () => {
@@ -460,6 +490,7 @@ test('writeCatalogImportReport keeps the previous summary when validation fails'
     mode: 'dry-run',
     snapshotId: SNAPSHOT_ID,
     languageCheck: 'pending',
+    digestValid: false,
     limit: 1,
     batchSize: 1,
     batches: 1,
@@ -614,6 +645,28 @@ test('dry-run and apply count a later-batch duplicate ISBN the same way', async 
   assert.equal(applied.rows.at(-1).action, 'skip');
 });
 
+test('dry-run reports digestValid for passed and tampered language-checked artifacts', async () => {
+  const candidate = enrichedCandidate({ workKey: key(139), title: 'Digest Check', isbns: [isbnAt(139)] });
+  const passed = await importCatalogWorks({
+    db: { book: { findMany: async () => [] } },
+    reportRows: [reportRow(candidate)],
+    artifact: enrichedArtifact([candidate], SNAPSHOT_ID, 'passed'),
+    apply: false,
+  });
+  assert.equal(passed.summary.languageCheck, 'passed');
+  assert.equal(passed.summary.digestValid, true);
+  const tampered = structuredClone(enrichedArtifact([candidate], SNAPSHOT_ID, 'passed'));
+  tampered.candidates[0].languages = ['/languages/fre'];
+  const invalid = await importCatalogWorks({
+    db: { book: { findMany: async () => [] } },
+    reportRows: [reportRow(candidate)],
+    artifact: tampered,
+    apply: false,
+  });
+  assert.equal(invalid.summary.languageCheck, 'passed');
+  assert.equal(invalid.summary.digestValid, false);
+});
+
 test('apply refuses an unchecked language and dry-run reports it', async () => {
   const candidate = enrichedCandidate({ workKey: key(140), title: 'Unchecked Language', isbns: [isbnAt(140)] });
   const calls = [];
@@ -646,6 +699,7 @@ test('apply refuses an unchecked language and dry-run reports it', async () => {
     apply: false,
   });
   assert.equal(dry.summary.languageCheck, 'pending');
+  assert.equal(dry.summary.digestValid, false);
   assert.equal(dry.summary.planned, 1);
   assert.deepEqual(calls, ['findMany']);
 });
@@ -666,6 +720,7 @@ test('--allow-unchecked-language permits apply and prints a warning', async () =
     });
     assert.equal(overridden.summary.inserted, 1);
     assert.equal(overridden.summary.languageCheck, 'pending');
+    assert.equal(overridden.summary.digestValid, false);
     const quiet = [];
     console.error = (...parts) => { quiet.push(parts.map(String).join(' ')); };
     const passed = await importCatalogWorks({
@@ -676,11 +731,13 @@ test('--allow-unchecked-language permits apply and prints a warning', async () =
     });
     assert.equal(passed.summary.inserted, 1);
     assert.equal(passed.summary.languageCheck, 'passed');
+    assert.equal(passed.summary.digestValid, true);
     assert.deepEqual(quiet, []);
   } finally {
     console.error = original;
   }
   assert.match(warnings.join('\n'), /WARNING: --allow-unchecked-language/);
+  assert.match(warnings.join('\n'), /digestValid false/);
 });
 
 test('non-books are skipped with pilotDisqualificationReason and do not consume the limit', async () => {

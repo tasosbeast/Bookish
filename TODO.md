@@ -1,8 +1,10 @@
 # Current Task
 
-Offline English-language check of enriched catalog candidates (`catalog:language-check`).
+Catalog pipeline cleanup ahead of the first real run.
 
-The command reads an enriched artifact and streams one local Open Library editions dump. It does not access PostgreSQL. For each candidate work key it records edition language keys such as `/languages/eng`. A work is kept when at least one edition is English. A work whose editions are all non-English is dropped with reason `non_english`. A work with no language data is dropped with reason `unknown_language` unless `--keep-unknown-language` is set. The input `snapshotId` is pinned. The output keeps the enriched shape, sets `languageCheck` to `passed`, and stores `languageCheckDigest`: a sha256 over that snapshot id, the sorted kept work keys and their languages, and the editions dump basename and size. `catalog:import --apply` requires `languageCheck` of `passed` and a digest it recomputes and matches. `--allow-unchecked-language` still overrides that gate and prints a warning.
+This PR tightens the offline catalog pipeline without touching production, migrations, or schema: language-check preflight and digest fields, import dry-run digest validation, safer batch confirmation, pilot calendar rules, and small dead-code removals.
+
+Acceptance: `npm run lint` with 0 warnings, `npm test`, integration tests, and `npm test --prefix frontend` green. No database access, migrations, or schema changes.
 
 ## Recorded for later
 
@@ -23,8 +25,9 @@ Existing rules still apply: non-books rejected via `pilotDisqualificationReason`
 3. A resolved-artifact bridge — not implemented
 4. A batched, idempotent `--dry-run`/`--apply` import — done
 5. Offline enrich from discover to dedup-check (`catalog:enrich`) — done
-6. Offline English-language check (`catalog:language-check`) — current task
+6. Offline English-language check (`catalog:language-check`) — done
 
+catalog:language-check is done (#37, merged as 989a1d2).
 catalog:import is done (#36, merged as 19f07b2).
 catalog:enrich is done (#35, merged as aee1a45).
 catalog:dedup-check is done (#34, merged as 3e86b39).

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -215,6 +216,10 @@ test('language check keeps English and mixed works and drops the rest', async (t
   assert.equal(result.languageCheckDigest, languageCheckDigestForArtifact(result.artifact));
   assert.equal(result.editionsBasename, 'ol_dump_editions_fixture.txt.gz');
   assert.equal(result.editionsBytes, (await fs.stat(editionsPath)).size);
+  const enrichedRaw = await fs.readFile(inputPath, 'utf8');
+  const expectedInputSha256 = createHash('sha256').update(enrichedRaw).digest('hex');
+  assert.equal(result.artifact.languageCheckEnrichedInputSha256, expectedInputSha256);
+  assert.equal(result.artifact.languageCheckKeepUnknownLanguage, false);
   const written = JSON.parse(await fs.readFile(outputPath, 'utf8'));
   validateLanguageCheckedArtifact(written, { snapshotId: SNAPSHOT_ID });
   const loaded = await loadDiscoverCandidates(outputPath);
@@ -226,7 +231,35 @@ test('language check keeps English and mixed works and drops the rest', async (t
     languageCheckEditions: { ...written.languageCheckEditions, bytes: written.languageCheckEditions.bytes + 1 },
   };
   assert.notEqual(languageCheckDigestForArtifact(resized), written.languageCheckDigest);
+  const retagged = {
+    ...written,
+    languageCheckKeepUnknownLanguage: true,
+    languageCheckDigest: languageCheckDigestForArtifact({
+      ...written,
+      languageCheckKeepUnknownLanguage: true,
+    }),
+  };
+  assert.notEqual(languageCheckDigestForArtifact(retagged), written.languageCheckDigest);
   assert.deepEqual((await fs.readdir(directory)).filter(name => name.includes('.tmp') || name.includes('.bak')), []);
+});
+
+test('language check verifies the output directory is writable before scanning the editions dump', { skip: process.getuid?.() === 0 }, async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const { inputPath, editionsPath } = await writeClassificationFixture(directory);
+  const locked = join(directory, 'locked');
+  await fs.mkdir(locked);
+  await fs.chmod(locked, 0o000);
+  const outputPath = join(locked, 'checked.json');
+  try {
+    await assert.rejects(
+      () => checkCatalogLanguages({ inputPath, editionsPath, outputPath }),
+      error => error instanceof Error
+        && error.message.includes(`Import output directory is not writable: ${locked}`),
+    );
+  } finally {
+    await fs.chmod(locked, 0o755);
+  }
 });
 
 test('--keep-unknown-language keeps works with no language data and still drops non-English works', async (t) => {
@@ -250,6 +283,7 @@ test('--keep-unknown-language keeps works with no language data and still drops 
   assert.equal(result.droppedUnknownLanguage, 0);
   assert.equal(result.keptUnknownLanguage, 2);
   assert.equal(result.artifact.counts.selected, 4);
+  assert.equal(result.artifact.languageCheckKeepUnknownLanguage, true);
   validateLanguageCheckedArtifact(result.artifact, { snapshotId: SNAPSHOT_ID });
 });
 

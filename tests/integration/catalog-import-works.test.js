@@ -20,7 +20,7 @@ import {
   createImportPrismaClient,
   importCatalogWorks,
 } from '../../scripts/catalog/import.js';
-import { sealLanguageCheckedArtifact } from '../../scripts/catalog/language-check.js';
+import { sealLanguageCheckedArtifact } from '../catalog/language-check-helpers.js';
 
 const execFileAsync = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL('../../scripts/import-catalog.js', import.meta.url));
