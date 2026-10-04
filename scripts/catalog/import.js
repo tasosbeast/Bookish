@@ -19,6 +19,7 @@ import {
   readDedupReport,
 } from './dedup-check.js';
 import { validateEnrichedArtifact } from './enrich.js';
+import { enrichedArtifactForValidation, validateLanguageCheckedArtifact } from './language-check.js';
 import { stableJson } from './external-sort.js';
 import { pilotDisqualificationReason } from './pilot-planner.js';
 import { workIdentity } from './work-identity.js';
@@ -159,7 +160,10 @@ function stripUnsafeCharacters(value) {
   let cleaned = '';
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
-    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) continue;
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
+      cleaned += ' ';
+      continue;
+    }
     if (code >= 0xd800 && code <= 0xdbff) {
       const next = value.charCodeAt(index + 1);
       if (next >= 0xdc00 && next <= 0xdfff) {
@@ -287,10 +291,7 @@ function validateReportRow(row, index, snapshotId) {
 }
 
 function artifactForJoin(artifact) {
-  if (plainObject(artifact) && artifact.languageCheck === 'passed') {
-    return { ...artifact, languageCheck: 'pending' };
-  }
-  return artifact;
+  return enrichedArtifactForValidation(artifact);
 }
 
 export function joinReportToEnriched(reportRows, artifact) {
@@ -573,11 +574,18 @@ export async function writeCatalogImportReport(outputPath, { rows, summary }) {
 function assertApplyLanguage(artifact, { apply, allowUncheckedLanguage }) {
   const languageCheck = artifact?.languageCheck ?? null;
   if (!apply) return languageCheck;
-  if (languageCheck !== 'passed' && !allowUncheckedLanguage) {
-    throw new Error(`Refusing --apply because languageCheck is ${JSON.stringify(languageCheck)}, not "passed". Pass --allow-unchecked-language to apply anyway.`);
-  }
   if (allowUncheckedLanguage) {
     console.error(`WARNING: --allow-unchecked-language is set. Applying catalog works with languageCheck ${JSON.stringify(languageCheck)} instead of requiring "passed".`);
+    return languageCheck;
+  }
+  if (languageCheck !== 'passed') {
+    throw new Error(`Refusing --apply because languageCheck is ${JSON.stringify(languageCheck)}, not "passed". Pass --allow-unchecked-language to apply anyway.`);
+  }
+  try {
+    validateLanguageCheckedArtifact(artifact, { snapshotId: artifact.snapshotId });
+  } catch (error) {
+    const detail = error?.message ?? String(error);
+    throw new Error(`Refusing --apply because languageCheckDigest does not match the artifact. A hand-edited language check cannot be applied. Pass --allow-unchecked-language to apply anyway. (${detail})`);
   }
   return languageCheck;
 }

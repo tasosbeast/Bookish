@@ -156,6 +156,15 @@ test('4. Large-print edition is rejected for the pilot', async t => {
 test('5. Non-book / boxed-set / merchandise formats are rejected', async t => {
   assert.equal(pilotDisqualificationReason({ format: 'Boxed Set', title: 'Book' }), 'boxed_set');
   assert.equal(pilotDisqualificationReason({ format: 'Calendar', title: 'Book Calendar' }), 'calendar');
+  assert.equal(pilotDisqualificationReason({ format: null, title: 'Calendar Girl' }), null);
+  assert.equal(pilotDisqualificationReason({ format: null, title: 'The Mayan Calendar' }), null);
+  assert.equal(pilotDisqualificationReason({ format: null, title: 'Book Calendar' }), null);
+  assert.equal(pilotDisqualificationReason({ format: null, title: '2026 Calendar' }), 'calendar');
+  assert.equal(pilotDisqualificationReason({ format: null, title: 'Calendar 1998' }), 'calendar');
+  assert.equal(pilotDisqualificationReason({ format: null, title: 'Wall Calendar' }), 'calendar');
+  assert.equal(pilotDisqualificationReason({ format: null, title: 'Desk Calendar' }), 'calendar');
+  assert.equal(pilotDisqualificationReason({ format: null, title: 'Engagement Calendar' }), 'calendar');
+  assert.equal(pilotDisqualificationReason({ format: null, title: 'Pocket Calendars' }), 'calendar');
   assert.equal(pilotDisqualificationReason({ format: 'Blank Book', title: 'Journal' }), 'journal');
   assert.equal(pilotDisqualificationReason({ format: 'Tarot Deck', title: 'Cards' }), 'cards');
   assert.equal(pilotDisqualificationReason({ format: 'Board Game', title: 'Game' }), 'non_book');
