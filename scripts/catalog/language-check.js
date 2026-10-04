@@ -6,6 +6,7 @@ import { writeFileAtomic } from './atomic-write.js';
 import { CatalogContractError } from './contracts.js';
 import { validateEnrichedArtifact } from './enrich.js';
 import { stableJson } from './external-sort.js';
+import { assertOutputDirectoryWritable } from './import.js';
 import { readOpenLibraryBulkRecords } from './open-library-bulk.js';
 import { SnapshotRecordError } from './snapshot-reader.js';
 
@@ -76,7 +77,8 @@ function compareWorkKey(left, right) {
   return 0;
 }
 
-// The digest covers the pinned snapshot, the editions dump identity, and the kept works.
+// The digest is an integrity check, not tamper-proofing: it covers the pinned snapshot,
+// enriched input hash, keepUnknownLanguage flag, editions dump identity, and kept works.
 export function languageCheckDigestForArtifact(artifact) {
   const editions = artifact?.languageCheckEditions;
   const works = (Array.isArray(artifact?.candidates) ? artifact.candidates : []).map(candidate => ({
@@ -85,33 +87,23 @@ export function languageCheckDigestForArtifact(artifact) {
   })).sort((left, right) => compareWorkKey(left.workKey, right.workKey));
   return createHash('sha256').update(stableJson({
     snapshotId: artifact?.snapshotId,
+    enrichedInputSha256: artifact?.languageCheckEnrichedInputSha256,
+    keepUnknownLanguage: artifact?.languageCheckKeepUnknownLanguage === true,
     editionsBasename: editions?.basename,
     editionsBytes: editions?.bytes,
     works,
   })).digest('hex');
 }
 
-export function sealLanguageCheckedArtifact(artifact, {
-  editionsBasename = 'ol_dump_editions_fixture.txt.gz',
-  editionsBytes = 1,
-} = {}) {
-  const candidates = artifact.candidates.map(candidate => ({
-    ...candidate,
-    languages: Array.isArray(candidate.languages) ? [...candidate.languages].sort() : [ENGLISH_LANGUAGE],
-  }));
-  const sealed = {
-    ...artifact,
-    languageCheck: 'passed',
-    languageCheckEditions: { basename: editionsBasename, bytes: editionsBytes },
-    counts: { ...artifact.counts, selected: candidates.length },
-    candidates,
-  };
-  return { ...sealed, languageCheckDigest: languageCheckDigestForArtifact(sealed) };
-}
-
 export function enrichedArtifactForValidation(artifact) {
   if (!plainObject(artifact)) return artifact;
-  const { languageCheckDigest: _digest, languageCheckEditions: _editions, ...rest } = artifact;
+  const {
+    languageCheckDigest: _digest,
+    languageCheckEditions: _editions,
+    languageCheckEnrichedInputSha256: _enrichedInputSha256,
+    languageCheckKeepUnknownLanguage: _keepUnknownLanguage,
+    ...rest
+  } = artifact;
   return {
     ...rest,
     languageCheck: rest.languageCheck === 'passed' ? 'pending' : rest.languageCheck,
@@ -159,6 +151,12 @@ export function validateLanguageCheckedArtifact(value, { snapshotId } = {}) {
     fail('invalid_language_check', 'Language-checked artifact snapshotId does not match the input snapshot');
   }
   assertEditionsIdentity(value.languageCheckEditions);
+  if (typeof value.languageCheckEnrichedInputSha256 !== 'string' || !DIGEST_HEX.test(value.languageCheckEnrichedInputSha256)) {
+    fail('invalid_language_check', 'languageCheckEnrichedInputSha256 must be a sha256 hex digest');
+  }
+  if (typeof value.languageCheckKeepUnknownLanguage !== 'boolean') {
+    fail('invalid_language_check', 'languageCheckKeepUnknownLanguage must be true or false');
+  }
   if (typeof value.languageCheckDigest !== 'string' || !DIGEST_HEX.test(value.languageCheckDigest)) {
     fail('invalid_language_check', 'languageCheckDigest must be a sha256 hex digest');
   }
@@ -189,13 +187,22 @@ export async function writeLanguageCheckedArtifactAtomically(outputPath, artifac
 }
 
 async function readEnrichedInput(inputPath) {
-  let artifact;
+  let raw;
   try {
-    artifact = JSON.parse(await fs.readFile(inputPath, 'utf8'));
+    raw = await fs.readFile(inputPath, 'utf8');
   } catch (cause) {
     fail('invalid_enriched_artifact', `Unable to read enriched input ${inputPath}: ${cause.message}`);
   }
-  return validateEnrichedArtifact(artifact);
+  let artifact;
+  try {
+    artifact = JSON.parse(raw);
+  } catch (cause) {
+    fail('invalid_enriched_artifact', `Unable to read enriched input ${inputPath}: ${cause.message}`);
+  }
+  return {
+    artifact: validateEnrichedArtifact(artifact),
+    enrichedInputSha256: createHash('sha256').update(raw).digest('hex'),
+  };
 }
 
 async function scanEditionLanguages(editionsPath, entries, counts) {
@@ -264,7 +271,8 @@ export async function checkCatalogLanguages({
   const output = requiredPath(outputPath, 'outputPath');
   await assertReadable(input, 'enriched input');
   const editionStat = await assertReadable(editions, 'editions dump');
-  const artifact = await readEnrichedInput(input);
+  await assertOutputDirectoryWritable(output);
+  const { artifact, enrichedInputSha256 } = await readEnrichedInput(input);
   const pinnedSnapshotId = artifact.snapshotId;
   if (snapshotId !== undefined && snapshotId !== pinnedSnapshotId) {
     fail('snapshot_mismatch', `Language check snapshotId does not match the enriched artifact snapshot ${pinnedSnapshotId}`);
@@ -278,6 +286,8 @@ export async function checkCatalogLanguages({
     ...artifact,
     languageCheck: 'passed',
     languageCheckEditions: { basename: basename(editions), bytes: editionStat.size },
+    languageCheckEnrichedInputSha256: enrichedInputSha256,
+    languageCheckKeepUnknownLanguage: keepUnknownLanguage,
     counts: { ...artifact.counts, selected: classified.kept.length },
     candidates: classified.kept,
   };
