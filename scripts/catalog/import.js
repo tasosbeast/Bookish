@@ -286,18 +286,36 @@ function validateReportRow(row, index, snapshotId) {
 }
 
 const RERUN_LANGUAGE_CHECK = 'Re-run catalog:language-check on the enriched artifact.';
+const RERUN_DEDUP_CHECK = 'Re-run catalog:dedup-check on the language-checked artifact.';
+const RERUN_LANGUAGE_AND_DEDUP = 'Re-run catalog:language-check and catalog:dedup-check.';
 
-function assertReportLanguageCheckDigest(reportRows, artifact, { apply, allowUncheckedLanguage }) {
-  if (!apply || allowUncheckedLanguage || artifact?.languageCheck !== 'passed') return;
-  const artifactDigest = artifact.languageCheckDigest;
-  if (typeof artifactDigest !== 'string' || !artifactDigest) {
-    throw new Error(`Refusing --apply because the language-checked artifact has no languageCheckDigest. ${RERUN_LANGUAGE_CHECK}`);
+function rowHasLanguageCheckDigest(row) {
+  return typeof row.languageCheckDigest === 'string' && row.languageCheckDigest.length > 0;
+}
+
+export function computeReportDigestMatch(reportRows, artifact) {
+  if (!reportRows.length) return true;
+  const rowsWithDigest = reportRows.filter(rowHasLanguageCheckDigest);
+  if (rowsWithDigest.length === 0) return 'missing';
+  if (rowsWithDigest.length !== reportRows.length) return false;
+  const artifactDigest = artifact?.languageCheckDigest;
+  if (typeof artifactDigest !== 'string' || !artifactDigest) return false;
+  return reportRows.every(row => row.languageCheckDigest === artifactDigest) ? true : false;
+}
+
+function assertReportDigestMatchForApply(reportRows, artifact, reportDigestMatch) {
+  if (reportDigestMatch === true) return;
+  if (reportDigestMatch === 'missing') {
+    throw new Error(
+      `Refusing --apply because the dedup report predates PR #38 and has no languageCheckDigest on its rows. ${RERUN_DEDUP_CHECK}`,
+    );
   }
+  const artifactDigest = artifact.languageCheckDigest;
   for (let index = 0; index < reportRows.length; index += 1) {
     const row = reportRows[index];
     if (row.languageCheckDigest !== artifactDigest) {
       throw new Error(
-        `Refusing --apply because dedup report line ${index + 1} languageCheckDigest does not match the language-checked artifact. Re-run catalog:language-check and catalog:dedup-check.`,
+        `Refusing --apply because dedup report line ${index + 1} languageCheckDigest does not match the language-checked artifact. ${RERUN_LANGUAGE_AND_DEDUP}`,
       );
     }
   }
@@ -496,6 +514,7 @@ export function buildImportSummary({
   languageCheck = null,
   digestValid = null,
   languageCheckError = null,
+  reportDigestMatch = null,
   report = null,
 }) {
   const skipped = Object.fromEntries(CATALOG_IMPORT_SKIP_REASONS.map(reason => [reason, 0]));
@@ -522,6 +541,7 @@ export function buildImportSummary({
     languageCheck,
     digestValid,
     languageCheckError,
+    reportDigestMatch,
     limit,
     batchSize,
     batches,
@@ -577,6 +597,7 @@ function assertReportConsistent(rows, summary) {
     languageCheck: summary.languageCheck ?? null,
     digestValid: summary.digestValid ?? null,
     languageCheckError: summary.languageCheckError ?? null,
+    reportDigestMatch: summary.reportDigestMatch ?? null,
     report: summary.report ?? null,
   });
   if (stableJson(rebuilt) !== stableJson(summary)) {
@@ -598,6 +619,7 @@ export async function writeCatalogImportReport(outputPath, { rows, summary }) {
     languageCheck: summary.languageCheck ?? null,
     digestValid: summary.digestValid ?? null,
     languageCheckError: summary.languageCheckError ?? null,
+    reportDigestMatch: summary.reportDigestMatch ?? null,
     report: summary.report ?? resolved,
   };
   // The summary is written after the JSONL report and names that report path.
@@ -625,7 +647,7 @@ export async function writeCatalogImportReport(outputPath, { rows, summary }) {
   return { outputPath: resolved, summaryPath };
 }
 
-function evaluateLanguageCheck(artifact, { apply, allowUncheckedLanguage }) {
+function evaluateLanguageCheck(artifact, { apply, allowUncheckedLanguage, reportDigestMatch }) {
   const languageCheck = artifact?.languageCheck ?? null;
   let digestValid = false;
   let languageCheckError = null;
@@ -641,7 +663,7 @@ function evaluateLanguageCheck(artifact, { apply, allowUncheckedLanguage }) {
   if (!apply) return { languageCheck, digestValid, languageCheckError };
   if (allowUncheckedLanguage) {
     console.error(
-      `WARNING: --allow-unchecked-language is set. Applying catalog works with languageCheck ${JSON.stringify(languageCheck)} and digestValid ${JSON.stringify(digestValid)} instead of requiring languageCheck "passed" with a matching digest.`,
+      `WARNING: --allow-unchecked-language is set. Applying catalog works with languageCheck ${JSON.stringify(languageCheck)}, digestValid ${JSON.stringify(digestValid)}, and reportDigestMatch ${JSON.stringify(reportDigestMatch)} instead of requiring languageCheck "passed" with matching digests.`,
     );
     return { languageCheck, digestValid, languageCheckError };
   }
@@ -673,8 +695,15 @@ export async function importCatalogWorks({
   const boundedLimit = importLimit(limit);
   const boundedBatch = importBatchSize(batchSize);
   const { snapshotId, joined } = join ?? joinReportToEnriched(reportRows, artifact);
-  assertReportLanguageCheckDigest(reportRows, artifact, { apply, allowUncheckedLanguage });
-  const { languageCheck, digestValid, languageCheckError } = evaluateLanguageCheck(artifact, { apply, allowUncheckedLanguage });
+  const reportDigestMatch = computeReportDigestMatch(reportRows, artifact);
+  const { languageCheck, digestValid, languageCheckError } = evaluateLanguageCheck(artifact, {
+    apply,
+    allowUncheckedLanguage,
+    reportDigestMatch,
+  });
+  if (apply && !allowUncheckedLanguage && languageCheck === 'passed' && digestValid) {
+    assertReportDigestMatchForApply(reportRows, artifact, reportDigestMatch);
+  }
   const resultsByKey = new Map();
   const selected = [];
   for (const { row, candidate } of joined) {
@@ -745,6 +774,7 @@ export async function importCatalogWorks({
     languageCheck,
     digestValid,
     languageCheckError,
+    reportDigestMatch,
     limit: boundedLimit,
     batchSize: boundedBatch,
     batches: batches.length,

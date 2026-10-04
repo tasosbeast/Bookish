@@ -365,6 +365,19 @@ test('import apply accepts a real language check and refuses a tampered language
       && error.message.includes('not "passed"'),
   );
   const tamperedDigest = `${artifact.languageCheckDigest.slice(0, -1)}${artifact.languageCheckDigest.endsWith('a') ? 'b' : 'a'}`;
+  const tamperedRows = rows.map(row => ({ ...row, languageCheckDigest: tamperedDigest }));
+  await assert.rejects(
+    () => importCatalogWorks({
+      db: guarded,
+      reportRows: tamperedRows,
+      artifact,
+      apply: true,
+    }),
+    error => error instanceof Error
+      && error.message.includes('Refusing --apply')
+      && error.message.includes('dedup report line 1 languageCheckDigest does not match')
+      && error.message.includes('Re-run catalog:language-check and catalog:dedup-check'),
+  );
   await assert.rejects(
     () => importCatalogWorks({
       db: guarded,
@@ -373,9 +386,8 @@ test('import apply accepts a real language check and refuses a tampered language
       apply: true,
     }),
     error => error instanceof Error
-      && error.message.includes('Refusing --apply')
-      && error.message.includes('dedup report line 1 languageCheckDigest does not match')
-      && error.message.includes('Re-run catalog:language-check and catalog:dedup-check'),
+      && error.message.includes('language check validation failed')
+      && error.message.includes('languageCheckDigest does not match'),
   );
   const edited = structuredClone(artifact);
   edited.candidates[0].languages = ['/languages/fre'];
@@ -410,6 +422,7 @@ test('import apply accepts a real language check and refuses a tampered language
     console.error = original;
   }
   assert.match(warnings.join('\n'), /WARNING: --allow-unchecked-language/);
+  assert.match(warnings.join('\n'), /reportDigestMatch false/);
 });
 
 test('enrich, language-check, dedup-check, and import dry-run keep the English work', async (t) => {

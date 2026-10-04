@@ -46,6 +46,11 @@ async function runWorksImport(args) {
     if (!options.apply && summary.languageCheckError) {
       console.error(`languageCheckDigest is invalid: ${summary.languageCheckError}. Re-run catalog:language-check.`);
     }
+    if (!options.apply && summary.reportDigestMatch === 'missing') {
+      console.error('Dedup report predates PR #38 and has no languageCheckDigest on its rows. Re-run catalog:dedup-check.');
+    } else if (!options.apply && summary.reportDigestMatch === false) {
+      console.error('Dedup report languageCheckDigest does not match the language-checked artifact. Re-run catalog:language-check and catalog:dedup-check.');
+    }
     console.log(JSON.stringify(summary));
     if (summary.failed) process.exitCode = 1;
   } finally {

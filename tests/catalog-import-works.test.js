@@ -22,6 +22,7 @@ import {
   CATALOG_IMPORT_TITLE_MAX_LENGTH,
   catalogImportSummaryPath,
   candidateImportSkipReason,
+  computeReportDigestMatch,
   createImportPrismaClient,
   importCatalogWorks,
   joinReportToEnriched,
@@ -506,6 +507,7 @@ test('writeCatalogImportReport keeps the previous summary when validation fails'
     snapshotId: SNAPSHOT_ID,
     languageCheck: 'pending',
     digestValid: false,
+    reportDigestMatch: 'missing',
     limit: 1,
     batchSize: 1,
     batches: 1,
@@ -696,6 +698,59 @@ test('apply refuses when dedup report languageCheckDigest does not match the art
   );
 });
 
+test('apply refuses when dedup report predates PR #38 with no languageCheckDigest', async () => {
+  const candidate = enrichedCandidate({ workKey: key(147), title: 'Predates Digest', isbns: [isbnAt(147)] });
+  const artifact = enrichedArtifact([candidate], SNAPSHOT_ID, 'passed');
+  await assert.rejects(
+    () => importCatalogWorks({
+      db: { book: { findMany: async () => [] } },
+      reportRows: [reportRow(candidate)],
+      artifact,
+      apply: true,
+    }),
+    error => error instanceof Error
+      && error.message.includes('predates PR #38')
+      && error.message.includes('Re-run catalog:dedup-check')
+      && !error.message.includes('does not match'),
+  );
+});
+
+test('computeReportDigestMatch and dry-run summary report matching, missing, and mismatched digests', async () => {
+  const candidate = enrichedCandidate({ workKey: key(148), title: 'Report Digest', isbns: [isbnAt(148)] });
+  const artifact = enrichedArtifact([candidate], SNAPSHOT_ID, 'passed');
+  const matchingRows = dedupReportRows([reportRow(candidate)], artifact);
+  assert.equal(computeReportDigestMatch(matchingRows, artifact), true);
+  const missingRows = [reportRow(candidate)];
+  assert.equal(computeReportDigestMatch(missingRows, artifact), 'missing');
+  const mismatched = reportRow(candidate);
+  mismatched.languageCheckDigest = `${artifact.languageCheckDigest.slice(0, -1)}0`;
+  assert.equal(computeReportDigestMatch([mismatched], artifact), false);
+
+  const matching = await importCatalogWorks({
+    db: { book: { findMany: async () => [] } },
+    reportRows: matchingRows,
+    artifact,
+    apply: false,
+  });
+  assert.equal(matching.summary.reportDigestMatch, true);
+
+  const missing = await importCatalogWorks({
+    db: { book: { findMany: async () => [] } },
+    reportRows: missingRows,
+    artifact,
+    apply: false,
+  });
+  assert.equal(missing.summary.reportDigestMatch, 'missing');
+
+  const mismatch = await importCatalogWorks({
+    db: { book: { findMany: async () => [] } },
+    reportRows: [mismatched],
+    artifact,
+    apply: false,
+  });
+  assert.equal(mismatch.summary.reportDigestMatch, false);
+});
+
 test('confirmInserted labels a skipped createMany row by duplicate work key', async () => {
   const workKey = key(170);
   const candidate = enrichedCandidate({ workKey, title: 'Concurrent Key', isbns: [isbnAt(170)] });
@@ -755,34 +810,38 @@ test('loadWorksImportSources returns a join reused by importCatalogWorks', async
 
 test('dry-run reports digestValid for passed and tampered language-checked artifacts', async () => {
   const candidate = enrichedCandidate({ workKey: key(139), title: 'Digest Check', isbns: [isbnAt(139)] });
+  const passedArtifact = enrichedArtifact([candidate], SNAPSHOT_ID, 'passed');
   const passed = await importCatalogWorks({
     db: { book: { findMany: async () => [] } },
-    reportRows: [reportRow(candidate)],
-    artifact: enrichedArtifact([candidate], SNAPSHOT_ID, 'passed'),
+    reportRows: dedupReportRows([reportRow(candidate)], passedArtifact),
+    artifact: passedArtifact,
     apply: false,
   });
   assert.equal(passed.summary.languageCheck, 'passed');
   assert.equal(passed.summary.digestValid, true);
-  const tampered = structuredClone(enrichedArtifact([candidate], SNAPSHOT_ID, 'passed'));
+  assert.equal(passed.summary.reportDigestMatch, true);
+  const tampered = structuredClone(passedArtifact);
   tampered.candidates[0].languages = ['/languages/fre'];
   const invalid = await importCatalogWorks({
     db: { book: { findMany: async () => [] } },
-    reportRows: [reportRow(candidate)],
+    reportRows: dedupReportRows([reportRow(candidate)], passedArtifact),
     artifact: tampered,
     apply: false,
   });
   assert.equal(invalid.summary.languageCheck, 'passed');
   assert.equal(invalid.summary.digestValid, false);
+  assert.equal(invalid.summary.reportDigestMatch, true);
   assert.match(invalid.summary.languageCheckError, /must include \/languages\/eng/);
-  const staleDigest = structuredClone(enrichedArtifact([candidate], SNAPSHOT_ID, 'passed'));
+  const staleDigest = structuredClone(passedArtifact);
   staleDigest.languageCheckDigest = `${staleDigest.languageCheckDigest.slice(0, -1)}0`;
   const stale = await importCatalogWorks({
     db: { book: { findMany: async () => [] } },
-    reportRows: [reportRow(candidate)],
+    reportRows: dedupReportRows([reportRow(candidate)], passedArtifact),
     artifact: staleDigest,
     apply: false,
   });
   assert.equal(stale.summary.digestValid, false);
+  assert.equal(stale.summary.reportDigestMatch, false);
   assert.match(stale.summary.languageCheckError, /languageCheckDigest does not match/);
 });
 
@@ -859,6 +918,7 @@ test('--allow-unchecked-language permits apply and prints a warning', async () =
   }
   assert.match(warnings.join('\n'), /WARNING: --allow-unchecked-language/);
   assert.match(warnings.join('\n'), /digestValid false/);
+  assert.match(warnings.join('\n'), /reportDigestMatch "missing"/);
 });
 
 test('non-books are skipped with pilotDisqualificationReason and do not consume the limit', async () => {
@@ -877,6 +937,35 @@ test('non-books are skipped with pilotDisqualificationReason and do not consume 
   assert.equal(summary.skipped.audiobook, 1);
   assert.equal(summary.skipped.limit, 0);
   assert.equal(summary.planned, 1);
+});
+
+test('catalog:import dry-run warns when reportDigestMatch is missing or false', { skip: !process.env.TEST_DATABASE_URL }, async () => {
+  const directory = await temporaryDirectory();
+  const candidate = enrichedCandidate({ workKey: key(172), title: 'Digest Warning', isbns: [isbnAt(172)] });
+  const artifact = enrichedArtifact([candidate], SNAPSHOT_ID, 'passed');
+  const artifactPath = join(directory, 'enriched.json');
+  const reportPath = join(directory, 'report.jsonl');
+  const outputPath = join(directory, 'out.jsonl');
+  await fs.writeFile(artifactPath, `${JSON.stringify(artifact)}\n`);
+  await fs.writeFile(reportPath, `${JSON.stringify(reportRow(candidate))}\n`);
+  const missing = await execFileAsync(process.execPath, [
+    SCRIPT, '--report', reportPath, '--enriched', artifactPath, '--output', outputPath,
+  ], { env: { ...process.env, DATABASE_URL: process.env.TEST_DATABASE_URL } });
+  const missingSummary = JSON.parse(missing.stdout.trim());
+  assert.equal(missingSummary.reportDigestMatch, 'missing');
+  assert.match(missing.stderr, /predates PR #38/);
+  assert.match(missing.stderr, /Re-run catalog:dedup-check/);
+
+  const mismatched = reportRow(candidate);
+  mismatched.languageCheckDigest = `${artifact.languageCheckDigest.slice(0, -1)}0`;
+  await fs.writeFile(reportPath, `${JSON.stringify(mismatched)}\n`);
+  const mismatch = await execFileAsync(process.execPath, [
+    SCRIPT, '--report', reportPath, '--enriched', artifactPath, '--output', join(directory, 'out-mismatch.jsonl'),
+  ], { env: { ...process.env, DATABASE_URL: process.env.TEST_DATABASE_URL } });
+  const mismatchSummary = JSON.parse(mismatch.stdout.trim());
+  assert.equal(mismatchSummary.reportDigestMatch, false);
+  assert.match(mismatch.stderr, /does not match the language-checked artifact/);
+  assert.match(mismatch.stderr, /Re-run catalog:language-check and catalog:dedup-check/);
 });
 
 test('catalog:import refuses --apply until languageCheck is passed', async () => {
