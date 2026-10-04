@@ -236,13 +236,6 @@ export function importCoverImageUrl(candidate) {
   return `https://covers.openlibrary.org/b/id/${cover}-L.jpg?default=false`;
 }
 
-export function importPublicationYear(candidate) {
-  if (!candidate || !Object.hasOwn(candidate, 'publicationYear') || candidate.publicationYear === null) return null;
-  const year = candidate.publicationYear;
-  if (!Number.isInteger(year) || year < 1 || year > 9999) return null;
-  return year;
-}
-
 export function candidateImportSkipReason(candidate) {
   const title = displayTitle(candidate?.title);
   if (!title) return 'missing_title';
@@ -253,23 +246,22 @@ export function candidateImportSkipReason(candidate) {
   const [titleKey, authorKey] = workIdentity({ title, author }).split('\u0000');
   if (!titleKey) return unsupportedScriptTitle(title) ? 'unsupported_script' : 'missing_title';
   if (!authorKey) return 'missing_author';
-  return 'missing_author';
+  return null;
 }
 
 export function mapCandidateToBook(candidate) {
   const skip = candidateImportSkipReason(candidate);
   if (skip) return { skip };
   if (!isValidOpenLibraryWorkKey(candidate.workKey)) importFail('invalid_dedup_report', 'Import candidate work key is invalid');
-  const publicationYear = importPublicationYear(candidate);
-  const book = {
-    title: displayTitle(candidate.title),
-    author: displayAuthor(candidate.primaryAuthor),
-    isbn: lowestImportIsbn(candidate),
-    openLibraryWorkKey: candidate.workKey,
-    coverImageUrl: importCoverImageUrl(candidate),
+  return {
+    book: {
+      title: displayTitle(candidate.title),
+      author: displayAuthor(candidate.primaryAuthor),
+      isbn: lowestImportIsbn(candidate),
+      openLibraryWorkKey: candidate.workKey,
+      coverImageUrl: importCoverImageUrl(candidate),
+    },
   };
-  if (publicationYear !== null) book.publicationYear = publicationYear;
-  return { book };
 }
 
 function validateReportRow(row, index, snapshotId) {
@@ -291,6 +283,7 @@ function validateReportRow(row, index, snapshotId) {
 }
 
 function artifactForJoin(artifact) {
+  // Language-checked artifacts store languageCheck as "passed"; enrich validation expects "pending".
   return enrichedArtifactForValidation(artifact);
 }
 
@@ -399,17 +392,25 @@ function toBookCreateData(book) {
   return data;
 }
 
-async function confirmInserted(tx, books) {
-  if (!books.length) return { inserted: [], skipped: [] };
+async function confirmInserted(tx, createData) {
+  if (!createData.length) return { inserted: [], skipped: [] };
   const found = await tx.book.findMany({
-    where: { openLibraryWorkKey: { in: books.map(book => book.openLibraryWorkKey) } },
-    select: { openLibraryWorkKey: true },
+    where: { id: { in: createData.map(row => row.id) } },
+    select: { id: true },
   });
-  const foundKeys = new Set(found.map(book => book.openLibraryWorkKey));
+  const foundIds = new Set(found.map(book => book.id));
   const inserted = [];
   const skipped = [];
-  for (const book of books) {
-    if (foundKeys.has(book.openLibraryWorkKey)) inserted.push(book);
+  for (const row of createData) {
+    const book = {
+      title: row.title,
+      author: row.author,
+      isbn: row.isbn,
+      openLibraryWorkKey: row.openLibraryWorkKey,
+      coverImageUrl: row.coverImageUrl,
+      publicationYear: row.publicationYear,
+    };
+    if (foundIds.has(row.id)) inserted.push(book);
     else skipped.push({ book, reason: 'duplicate_isbn' });
   }
   return { inserted, skipped };
@@ -425,14 +426,15 @@ async function runImportBatch({ db, batch, apply, afterBatchInsert, index, seen 
   return db.$transaction(async tx => {
     const existing = await findExistingBooks(tx, books);
     const classified = classifyBatch(books, existing, seen);
-    if (classified.insert.length) {
+    const createData = classified.insert.map(toBookCreateData);
+    if (createData.length) {
       await tx.book.createMany({
-        data: classified.insert.map(toBookCreateData),
+        data: createData,
         skipDuplicates: true,
       });
     }
     if (afterBatchInsert) await afterBatchInsert({ index, tx, books: classified.insert });
-    const confirmed = await confirmInserted(tx, classified.insert);
+    const confirmed = await confirmInserted(tx, createData);
     return {
       skipped: [...classified.skipped, ...confirmed.skipped],
       accepted: confirmed.inserted,
@@ -448,6 +450,7 @@ export function buildImportSummary({
   batchSize,
   batches,
   languageCheck = null,
+  digestValid = null,
   report = null,
 }) {
   const skipped = Object.fromEntries(CATALOG_IMPORT_SKIP_REASONS.map(reason => [reason, 0]));
@@ -472,6 +475,7 @@ export function buildImportSummary({
     mode,
     snapshotId,
     languageCheck,
+    digestValid,
     limit,
     batchSize,
     batches,
@@ -525,6 +529,7 @@ function assertReportConsistent(rows, summary) {
     batchSize: summary.batchSize,
     batches: summary.batches,
     languageCheck: summary.languageCheck ?? null,
+    digestValid: summary.digestValid ?? null,
     report: summary.report ?? null,
   });
   if (stableJson(rebuilt) !== stableJson(summary)) {
@@ -544,6 +549,7 @@ export async function writeCatalogImportReport(outputPath, { rows, summary }) {
   const recorded = {
     ...summary,
     languageCheck: summary.languageCheck ?? null,
+    digestValid: summary.digestValid ?? null,
     report: summary.report ?? resolved,
   };
   // The summary is written after the JSONL report and names that report path.
@@ -571,23 +577,31 @@ export async function writeCatalogImportReport(outputPath, { rows, summary }) {
   return { outputPath: resolved, summaryPath };
 }
 
-function assertApplyLanguage(artifact, { apply, allowUncheckedLanguage }) {
+function evaluateLanguageCheck(artifact, { apply, allowUncheckedLanguage }) {
   const languageCheck = artifact?.languageCheck ?? null;
-  if (!apply) return languageCheck;
+  let digestValid = false;
+  if (languageCheck === 'passed') {
+    try {
+      validateLanguageCheckedArtifact(artifact, { snapshotId: artifact.snapshotId });
+      digestValid = true;
+    } catch {
+      digestValid = false;
+    }
+  }
+  if (!apply) return { languageCheck, digestValid };
   if (allowUncheckedLanguage) {
-    console.error(`WARNING: --allow-unchecked-language is set. Applying catalog works with languageCheck ${JSON.stringify(languageCheck)} instead of requiring "passed".`);
-    return languageCheck;
+    console.error(
+      `WARNING: --allow-unchecked-language is set. Applying catalog works with languageCheck ${JSON.stringify(languageCheck)} and digestValid ${JSON.stringify(digestValid)} instead of requiring languageCheck "passed" with a matching digest.`,
+    );
+    return { languageCheck, digestValid };
   }
   if (languageCheck !== 'passed') {
     throw new Error(`Refusing --apply because languageCheck is ${JSON.stringify(languageCheck)}, not "passed". Pass --allow-unchecked-language to apply anyway.`);
   }
-  try {
-    validateLanguageCheckedArtifact(artifact, { snapshotId: artifact.snapshotId });
-  } catch (error) {
-    const detail = error?.message ?? String(error);
-    throw new Error(`Refusing --apply because languageCheckDigest does not match the artifact. A hand-edited language check cannot be applied. Pass --allow-unchecked-language to apply anyway. (${detail})`);
+  if (!digestValid) {
+    throw new Error('Refusing --apply because languageCheckDigest does not match the artifact. A hand-edited language check cannot be applied. Pass --allow-unchecked-language to apply anyway.');
   }
-  return languageCheck;
+  return { languageCheck, digestValid };
 }
 
 export async function importCatalogWorks({
@@ -596,6 +610,7 @@ export async function importCatalogWorks({
   artifact,
   apply = false,
   allowUncheckedLanguage = false,
+  failFast = false,
   limit = CATALOG_IMPORT_DEFAULT_LIMIT,
   batchSize = CATALOG_IMPORT_DEFAULT_BATCH_SIZE,
   outputPath = null,
@@ -603,10 +618,11 @@ export async function importCatalogWorks({
 } = {}) {
   if (typeof apply !== 'boolean') throw new TypeError('apply must be true or false');
   if (typeof allowUncheckedLanguage !== 'boolean') throw new TypeError('allowUncheckedLanguage must be true or false');
+  if (typeof failFast !== 'boolean') throw new TypeError('failFast must be true or false');
   const boundedLimit = importLimit(limit);
   const boundedBatch = importBatchSize(batchSize);
   const { snapshotId, joined } = joinReportToEnriched(reportRows, artifact);
-  const languageCheck = assertApplyLanguage(artifact, { apply, allowUncheckedLanguage });
+  const { languageCheck, digestValid } = evaluateLanguageCheck(artifact, { apply, allowUncheckedLanguage });
   const resultsByKey = new Map();
   const selected = [];
   for (const { row, candidate } of joined) {
@@ -656,6 +672,21 @@ export async function importCatalogWorks({
       for (const item of batch) {
         resultsByKey.set(item.workKey, resultRow(item.workKey, 'fail', 'batch_failed', message));
       }
+      if (failFast) break;
+    }
+  }
+  if (failFast) {
+    for (const item of selected) {
+      if (resultsByKey.has(item.workKey)) continue;
+      resultsByKey.set(
+        item.workKey,
+        resultRow(
+          item.workKey,
+          apply ? 'fail' : 'plan',
+          apply ? 'batch_failed' : null,
+          apply ? 'import stopped by --fail-fast' : null,
+        ),
+      );
     }
   }
   const rows = joined.map(({ row }) => {
@@ -668,6 +699,7 @@ export async function importCatalogWorks({
     mode: apply ? 'apply' : 'dry-run',
     snapshotId,
     languageCheck,
+    digestValid,
     limit: boundedLimit,
     batchSize: boundedBatch,
     batches: batches.length,
@@ -690,6 +722,7 @@ export function parseCatalogWorksImportArgs(args) {
     output: null,
     apply: false,
     allowUncheckedLanguage: false,
+    failFast: false,
     limit: CATALOG_IMPORT_DEFAULT_LIMIT,
     batchSize: CATALOG_IMPORT_DEFAULT_BATCH_SIZE,
   };
@@ -706,6 +739,12 @@ export function parseCatalogWorksImportArgs(args) {
       if (seen.has(argument)) throw new Error('--allow-unchecked-language was provided more than once');
       seen.add(argument);
       options.allowUncheckedLanguage = true;
+      continue;
+    }
+    if (argument === '--fail-fast') {
+      if (seen.has(argument)) throw new Error('--fail-fast was provided more than once');
+      seen.add(argument);
+      options.failFast = true;
       continue;
     }
     if (argument === '--dry-run' || argument === '--artifact') {

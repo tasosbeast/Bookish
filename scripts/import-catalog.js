@@ -19,6 +19,7 @@ function worksImportRequested(args) {
     || argument === '--limit'
     || argument === '--batch-size'
     || argument === '--allow-unchecked-language'
+    || argument === '--fail-fast'
   ));
 }
 
@@ -36,6 +37,7 @@ async function runWorksImport(args) {
       artifact: sources.artifact,
       apply: options.apply,
       allowUncheckedLanguage: options.allowUncheckedLanguage,
+      failFast: options.failFast,
       limit: options.limit,
       batchSize: options.batchSize,
       outputPath: options.output,
