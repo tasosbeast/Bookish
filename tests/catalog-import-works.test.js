@@ -24,6 +24,8 @@ import {
   candidateImportSkipReason,
   createImportPrismaClient,
   importCatalogWorks,
+  joinReportToEnriched,
+  loadWorksImportSources,
   lowestImportIsbn,
   mapCandidateToBook,
   parseCatalogWorksImportArgs,
@@ -643,6 +645,79 @@ test('dry-run and apply count a later-batch duplicate ISBN the same way', async 
   assert.deepEqual(dry.rows.map(row => row.reason), applied.rows.map(row => row.reason));
   assert.equal(dry.rows.at(-1).action, 'skip');
   assert.equal(applied.rows.at(-1).action, 'skip');
+});
+
+test('apply reports the real language-check validation error', async () => {
+  const candidate = enrichedCandidate({ workKey: key(145), title: 'Invalid Check', isbns: [isbnAt(145)] });
+  const artifact = enrichedArtifact([candidate], SNAPSHOT_ID, 'passed');
+  artifact.languageCheckEnrichedInputSha256 = 'not-a-digest';
+  await assert.rejects(
+    () => importCatalogWorks({
+      db: { book: { findMany: async () => [] } },
+      reportRows: [reportRow(candidate)],
+      artifact,
+      apply: true,
+    }),
+    error => error instanceof Error
+      && error.message.includes('language check validation failed')
+      && error.message.includes('languageCheckEnrichedInputSha256 must be a sha256 hex digest'),
+  );
+});
+
+test('confirmInserted labels a skipped createMany row by duplicate work key', async () => {
+  const workKey = key(170);
+  const candidate = enrichedCandidate({ workKey, title: 'Concurrent Key', isbns: [isbnAt(170)] });
+  const existing = {
+    id: 'existing-id',
+    openLibraryWorkKey: workKey,
+    isbn: isbnAt(171),
+  };
+  const db = {
+    $transaction: async work => work({
+      book: {
+        findMany: async ({ where } = {}) => {
+          if (where?.id?.in) return [];
+          if (where?.OR) {
+            return where.OR.some(clause => clause.openLibraryWorkKey?.in?.includes(workKey))
+              ? [existing]
+              : [];
+          }
+          return [];
+        },
+        createMany: async () => ({ count: 0 }),
+      },
+    }),
+  };
+  const { summary, rows } = await importCatalogWorks({
+    db,
+    reportRows: [reportRow(candidate)],
+    artifact: enrichedArtifact([candidate], SNAPSHOT_ID, 'passed'),
+    apply: true,
+  });
+  assert.equal(summary.inserted, 0);
+  assert.equal(summary.skipped.duplicate_work_key, 1);
+  assert.equal(summary.skipped.duplicate_isbn, 0);
+  assert.equal(rows[0].reason, 'duplicate_work_key');
+});
+
+test('loadWorksImportSources returns a join reused by importCatalogWorks', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const candidate = enrichedCandidate({ workKey: key(171), title: 'Join Once', isbns: [isbnAt(171)] });
+  const artifactPath = join(directory, 'enriched.json');
+  const reportPath = join(directory, 'report.jsonl');
+  await fs.writeFile(artifactPath, `${JSON.stringify(enrichedArtifact([candidate]))}\n`);
+  await fs.writeFile(reportPath, `${JSON.stringify(reportRow(candidate))}\n`);
+  const sources = await loadWorksImportSources(reportPath, artifactPath);
+  assert.deepEqual(sources.join, joinReportToEnriched(sources.reportRows, sources.artifact));
+  const { summary } = await importCatalogWorks({
+    db: { book: { findMany: async () => [] } },
+    reportRows: sources.reportRows,
+    artifact: sources.artifact,
+    join: sources.join,
+    apply: false,
+  });
+  assert.equal(summary.planned, 1);
 });
 
 test('dry-run reports digestValid for passed and tampered language-checked artifacts', async () => {

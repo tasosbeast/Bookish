@@ -35,6 +35,7 @@ async function runWorksImport(args) {
       db,
       reportRows: sources.reportRows,
       artifact: sources.artifact,
+      join: sources.join,
       apply: options.apply,
       allowUncheckedLanguage: options.allowUncheckedLanguage,
       failFast: options.failFast,

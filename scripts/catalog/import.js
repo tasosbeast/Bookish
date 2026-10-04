@@ -326,8 +326,8 @@ export async function loadWorksImportSources(reportPath, enrichedPath) {
   } catch (cause) {
     importFail('invalid_enriched_artifact', `Unable to read enriched artifact ${enriched}: ${cause.message}`);
   }
-  joinReportToEnriched(reportRows, artifact);
-  return { reportRows, artifact };
+  const join = joinReportToEnriched(reportRows, artifact);
+  return { reportRows, artifact, join };
 }
 
 function resultRow(workKey, action, reason = null, error = null) {
@@ -392,6 +392,12 @@ function toBookCreateData(book) {
   return data;
 }
 
+function skipReasonForUninserted(row, existingWorkKeys, existingIsbns) {
+  if (existingWorkKeys.has(row.openLibraryWorkKey)) return 'duplicate_work_key';
+  if (row.isbn && existingIsbns.has(row.isbn)) return 'duplicate_isbn';
+  return 'duplicate_work_key';
+}
+
 async function confirmInserted(tx, createData) {
   if (!createData.length) return { inserted: [], skipped: [] };
   const found = await tx.book.findMany({
@@ -399,6 +405,23 @@ async function confirmInserted(tx, createData) {
     select: { id: true },
   });
   const foundIds = new Set(found.map(book => book.id));
+  const uninserted = createData.filter(row => !foundIds.has(row.id));
+  const existingWorkKeys = new Set();
+  const existingIsbns = new Set();
+  if (uninserted.length) {
+    const workKeys = [...new Set(uninserted.map(row => row.openLibraryWorkKey))];
+    const isbns = [...new Set(uninserted.map(row => row.isbn).filter(isbn => typeof isbn === 'string' && ISBN13_FORMAT.test(isbn)))];
+    const or = [{ openLibraryWorkKey: { in: workKeys } }];
+    if (isbns.length) or.push({ isbn: { in: isbns } });
+    const existing = await tx.book.findMany({
+      where: { OR: or },
+      select: { openLibraryWorkKey: true, isbn: true },
+    });
+    for (const book of existing) {
+      if (isValidOpenLibraryWorkKey(book.openLibraryWorkKey)) existingWorkKeys.add(book.openLibraryWorkKey);
+      if (typeof book.isbn === 'string' && ISBN13_FORMAT.test(book.isbn)) existingIsbns.add(book.isbn);
+    }
+  }
   const inserted = [];
   const skipped = [];
   for (const row of createData) {
@@ -411,7 +434,7 @@ async function confirmInserted(tx, createData) {
       publicationYear: row.publicationYear,
     };
     if (foundIds.has(row.id)) inserted.push(book);
-    else skipped.push({ book, reason: 'duplicate_isbn' });
+    else skipped.push({ book, reason: skipReasonForUninserted(row, existingWorkKeys, existingIsbns) });
   }
   return { inserted, skipped };
 }
@@ -580,12 +603,14 @@ export async function writeCatalogImportReport(outputPath, { rows, summary }) {
 function evaluateLanguageCheck(artifact, { apply, allowUncheckedLanguage }) {
   const languageCheck = artifact?.languageCheck ?? null;
   let digestValid = false;
+  let languageCheckError = null;
   if (languageCheck === 'passed') {
     try {
       validateLanguageCheckedArtifact(artifact, { snapshotId: artifact.snapshotId });
       digestValid = true;
-    } catch {
+    } catch (error) {
       digestValid = false;
+      languageCheckError = error?.message ?? String(error);
     }
   }
   if (!apply) return { languageCheck, digestValid };
@@ -599,7 +624,7 @@ function evaluateLanguageCheck(artifact, { apply, allowUncheckedLanguage }) {
     throw new Error(`Refusing --apply because languageCheck is ${JSON.stringify(languageCheck)}, not "passed". Pass --allow-unchecked-language to apply anyway.`);
   }
   if (!digestValid) {
-    throw new Error('Refusing --apply because languageCheckDigest does not match the artifact. A hand-edited language check cannot be applied. Pass --allow-unchecked-language to apply anyway.');
+    throw new Error(`Refusing --apply because language check validation failed: ${languageCheckError}. Pass --allow-unchecked-language to apply anyway.`);
   }
   return { languageCheck, digestValid };
 }
@@ -615,13 +640,14 @@ export async function importCatalogWorks({
   batchSize = CATALOG_IMPORT_DEFAULT_BATCH_SIZE,
   outputPath = null,
   afterBatchInsert = null,
+  join = null,
 } = {}) {
   if (typeof apply !== 'boolean') throw new TypeError('apply must be true or false');
   if (typeof allowUncheckedLanguage !== 'boolean') throw new TypeError('allowUncheckedLanguage must be true or false');
   if (typeof failFast !== 'boolean') throw new TypeError('failFast must be true or false');
   const boundedLimit = importLimit(limit);
   const boundedBatch = importBatchSize(batchSize);
-  const { snapshotId, joined } = joinReportToEnriched(reportRows, artifact);
+  const { snapshotId, joined } = join ?? joinReportToEnriched(reportRows, artifact);
   const { languageCheck, digestValid } = evaluateLanguageCheck(artifact, { apply, allowUncheckedLanguage });
   const resultsByKey = new Map();
   const selected = [];

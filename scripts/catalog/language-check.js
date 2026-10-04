@@ -175,7 +175,7 @@ export function validateLanguageCheckedArtifact(value, { snapshotId } = {}) {
 export async function writeLanguageCheckedArtifactAtomically(outputPath, artifact, { snapshotId } = {}) {
   const serialized = `${stableJson(artifact)}\n`;
   await writeFileAtomic(outputPath, serialized, {
-    mode: 0o644,
+    mode: 0o600,
     validate: async content => {
       let parsed;
       try { parsed = JSON.parse(content); }

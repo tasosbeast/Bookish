@@ -373,7 +373,8 @@ test('import apply accepts a real language check and refuses a tampered language
     }),
     error => error instanceof Error
       && error.message.includes('Refusing --apply')
-      && error.message.includes('languageCheckDigest'),
+      && error.message.includes('language check validation failed')
+      && error.message.includes('languageCheckDigest does not match'),
   );
   const edited = structuredClone(artifact);
   edited.candidates[0].languages = ['/languages/fre'];
@@ -384,7 +385,9 @@ test('import apply accepts a real language check and refuses a tampered language
       artifact: edited,
       apply: true,
     }),
-    error => error instanceof Error && error.message.includes('languageCheckDigest'),
+    error => error instanceof Error
+      && error.message.includes('language check validation failed')
+      && error.message.includes('must include /languages/eng'),
   );
   assert.equal(calls, 0);
 

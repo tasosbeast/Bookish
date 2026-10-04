@@ -1,8 +1,8 @@
 # Current Task
 
-Catalog pipeline cleanup ahead of the first real run.
+Resolved-artifact bridge.
 
-This PR tightens the offline catalog pipeline without touching production, migrations, or schema: language-check preflight and digest fields, import dry-run digest validation, safer batch confirmation, pilot calendar rules, and small dead-code removals.
+The remaining roadmap item is a bridge from the language-checked / dedup-checked works import path to the existing resolved-artifact importer. Next up after that lands: the first real pipeline run (enrich → language-check → dedup-check → import dry-run) on production Open Library data.
 
 Acceptance: `npm run lint` with 0 warnings, `npm test`, integration tests, and `npm test --prefix frontend` green. No database access, migrations, or schema changes.
 
@@ -22,11 +22,12 @@ Existing rules still apply: non-books rejected via `pilotDisqualificationReason`
 
 1. Candidate scoring and selection (`catalog:discover --limit N`) — done
 2. Read-only dedup against the database — done
-3. A resolved-artifact bridge — not implemented
+3. A resolved-artifact bridge — current task
 4. A batched, idempotent `--dry-run`/`--apply` import — done
 5. Offline enrich from discover to dedup-check (`catalog:enrich`) — done
 6. Offline English-language check (`catalog:language-check`) — done
 
+Catalog pipeline cleanup is done (PR #38).
 catalog:language-check is done (#37, merged as 989a1d2).
 catalog:import is done (#36, merged as 19f07b2).
 catalog:enrich is done (#35, merged as aee1a45).
