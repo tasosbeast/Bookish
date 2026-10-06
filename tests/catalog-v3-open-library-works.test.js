@@ -94,21 +94,21 @@ test('works index stores fields, deterministic duplicates, ratings, shelves, and
       rejectedByReason: { malformed_row: 3, invalid_json: 1, wrong_type: 1, missing_title: 2 },
     },
     ratings: {
-      input: 14,
+      input: 16,
       accepted: 4,
-      rejected: 9,
+      rejected: 11,
       orphans: 1,
-      rejectedByReason: { malformed_row: 4, non_integer: 3, out_of_range: 2 },
+      rejectedByReason: { malformed_row: 6, non_integer: 3, out_of_range: 2 },
     },
     readingLog: {
-      input: 12,
+      input: 14,
       accepted: 6,
-      rejected: 5,
+      rejected: 7,
       orphans: 1,
-      rejectedByReason: { malformed_row: 3, unknown_shelf: 2 },
+      rejectedByReason: { malformed_row: 5, unknown_shelf: 2 },
     },
   });
-  assert.equal(progress.length, 15 + 1 + 14 + 3 + 12 + 3);
+  assert.equal(progress.length, 15 + 2 + 16 + 3 + 14 + 3);
   assert.ok(progress.validating >= 1);
   assert.deepEqual(progress.at(-1), result.statistics);
   const metadata = JSON.parse(await fs.readFile(join(outputPath, 'index.json'), 'utf8'));
@@ -415,6 +415,26 @@ test('works index CLI prints a JSON summary and rejects missing or unknown argum
     ]),
     error => error.code === 1 && error.stderr.includes('--cache-mb must be a plain decimal integer'),
   );
+});
+
+test('truncated gzip input surfaces zlib error and leaves no building directory', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const outputPath = join(directory, 'works-index');
+  const worksPath = join(directory, 'truncated.txt.gz');
+  await fs.writeFile(worksPath, gzipSync('partial content').subarray(0, 8));
+  await assert.rejects(
+    buildOpenLibraryWorkIndex({
+      worksPath,
+      ratingsPath: fileURLToPath(RATINGS),
+      readingLogPath: fileURLToPath(READING_LOG),
+      outputPath,
+      snapshotId: SNAPSHOT_ID,
+      generatedAt: GENERATED_AT,
+    }),
+    error => /Z_BUF_ERROR|unexpected end of file|incorrect data check/i.test(error.message),
+  );
+  assert.equal((await fs.readdir(directory)).some(name => name.includes('.building-')), false);
 });
 
 test('staged works merge and aggregated signals match legacy reference output on fixtures', async (t) => {

@@ -19,7 +19,7 @@ const DEFAULT_CACHE_MB = 1024;
 const MIN_CACHE_MB = 64;
 const MAX_CACHE_MB = 16384;
 const PROGRESS_TIME_MS = 30_000;
-const BUILDING_DIRECTORY_PATTERN = /^.+\.building-(\d+)-(\d+)$/;
+const STALE_BUILDING_GRACE_MS = 10 * 60 * 1000;
 const WORK_KEY_PATTERN = /^\/works\/OL[0-9]+W$/;
 const EDITION_KEY_PATTERN = /^\/books\/OL[0-9]+M$/;
 const SIGNAL_DATE_PATTERN = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
@@ -70,7 +70,9 @@ function bumpBy(object, key, amount) {
 }
 
 function flatString(value) {
-  return typeof value === 'string' ? `${value.trim()}` : '';
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  return trimmed.length < 13 ? trimmed : (` ${trimmed}`).slice(1);
 }
 
 export function parseCacheMegabytes(value, name = 'cacheMb') {
@@ -130,14 +132,30 @@ async function cleanupStaleBuildingDirectories(outputPath, warn = message => pro
   }
   for (const entry of entries) {
     if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
-    const match = entry.name.match(BUILDING_DIRECTORY_PATTERN);
+    const match = entry.name.slice(prefix.length).match(/^(\d+)-(\d+)$/);
     if (!match) continue;
     const pid = Number(match[1]);
-    if (isProcessRunning(pid)) continue;
     const stalePath = join(parent, entry.name);
-    const size = await directorySize(stalePath);
-    warn(`[warn] removing stale build directory ${stalePath} (${formatBytes(size)}); pid ${pid} is not running`);
-    await fs.rm(stalePath, { recursive: true, force: true });
+    let staleStats;
+    try {
+      staleStats = await fs.stat(stalePath);
+    } catch (cause) {
+      if (cause.code === 'ENOENT') continue;
+      warn(`[warn] unable to inspect build directory ${stalePath}: ${cause.message}`);
+      continue;
+    }
+    if (Date.now() - staleStats.mtimeMs < STALE_BUILDING_GRACE_MS) continue;
+    if (isProcessRunning(pid)) {
+      warn(`[warn] skipping build directory ${stalePath}; pid ${pid} is still running`);
+      continue;
+    }
+    try {
+      const size = await directorySize(stalePath);
+      warn(`[warn] removing stale build directory ${stalePath} (${formatBytes(size)}); pid ${pid} is not running`);
+      await fs.rm(stalePath, { recursive: true, force: true });
+    } catch (cause) {
+      warn(`[warn] unable to remove stale build directory ${stalePath}: ${cause.message}`);
+    }
   }
 }
 
@@ -192,17 +210,8 @@ async function assertReadableInput(inputPath) {
 async function* readSignalRows(path) {
   const lines = createInterface({ input: inputStream(path), crlfDelay: Infinity });
   for await (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const fields = [];
-    let start = 0;
-    for (let index = 0; index <= trimmed.length; index += 1) {
-      if (index === trimmed.length || trimmed[index] === '\t') {
-        fields.push(flatString(trimmed.slice(start, index)));
-        start = index + 1;
-      }
-    }
-    yield fields;
+    if (!line.trim()) continue;
+    yield line.split('\t').map(flatString);
   }
 }
 
@@ -508,18 +517,25 @@ async function createStageDatabase(stagePath) {
   stageDatabase.close();
 }
 
-async function loadWorks({ database, stagePath, worksPath, statistics, batch, progress }) {
+async function loadWorks({ database, stagePath, worksPath, statistics, batch, progress, cacheSizeKiB }) {
   await createStageDatabase(stagePath);
-  database.exec(`ATTACH DATABASE '${sqliteEscapePath(stagePath)}' AS stage`);
-  const insertStage = database.prepare(`
-    INSERT INTO stage.works_stage (
-      key, revision, line_number, title, subtitle, author_keys, subjects, cover_ids,
-      first_publish_date, description
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  setProgressPhase(progress, 'works');
-  batch.begin();
+  let attached = false;
   try {
+    database.exec(`ATTACH DATABASE '${sqliteEscapePath(stagePath)}' AS stage`);
+    attached = true;
+    database.exec(`
+      PRAGMA stage.journal_mode = OFF;
+      PRAGMA stage.synchronous = OFF;
+      PRAGMA stage.cache_size = ${cacheSizeKiB};
+    `);
+    const insertStage = database.prepare(`
+      INSERT INTO stage.works_stage (
+        key, revision, line_number, title, subtitle, author_keys, subjects, cover_ids,
+        first_publish_date, description
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    setProgressPhase(progress, 'works');
+    batch.begin();
     for await (const record of readOpenLibraryBulkRecords(worksPath)) {
       bump(statistics.works, 'input');
       try {
@@ -562,6 +578,7 @@ async function loadWorks({ database, stagePath, worksPath, statistics, batch, pr
     }
     batch.commit();
     setProgressPhase(progress, 'works-merge');
+    noteProgress(progress);
     const stagedCount = database.prepare('SELECT COUNT(*) AS count FROM stage.works_stage').get().count;
     batch.begin();
     database.exec(`
@@ -593,8 +610,13 @@ async function loadWorks({ database, stagePath, worksPath, statistics, batch, pr
     statistics.works.duplicates = stagedCount - accepted;
     noteProgress(progress);
   } finally {
-    database.exec('DETACH DATABASE stage');
-    await fs.rm(stagePath, { force: true });
+    try {
+      batch.rollback();
+      if (attached) database.exec('DETACH DATABASE stage');
+    } catch {
+      // Stage cleanup is best-effort so the original build error is preserved.
+    }
+    await fs.rm(stagePath, { force: true }).catch(() => {});
   }
 }
 
@@ -845,6 +867,18 @@ async function loadReadingLog({ database, readingLogPath, statistics, batch, pro
   batch.commit();
 }
 
+const DEFAULT_WORK_INDEX_LOADERS = {
+  loadWorks,
+  loadRatings,
+  loadReadingLog,
+};
+
+const REFERENCE_WORK_INDEX_LOADERS = {
+  loadWorks: loadWorksInline,
+  loadRatings: loadRatingsRowWise,
+  loadReadingLog: loadReadingLogRowWise,
+};
+
 async function buildOpenLibraryWorkIndexCore({
   worksPath,
   ratingsPath,
@@ -856,12 +890,7 @@ async function buildOpenLibraryWorkIndexCore({
   progressInterval = DEFAULT_PROGRESS_INTERVAL,
   cacheMb = DEFAULT_CACHE_MB,
   onProgress = null,
-  loaders = {
-    loadWorks,
-    loadRatings,
-    loadReadingLog,
-  },
-}) {
+}, loaders = DEFAULT_WORK_INDEX_LOADERS) {
   snapshotId = text(snapshotId);
   if (!snapshotId) fail('invalid_argument', 'snapshotId is required');
   if (!worksPath || !ratingsPath || !readingLogPath || !outputPath) fail('invalid_argument', 'worksPath, ratingsPath, readingLogPath, and outputPath are required');
@@ -898,6 +927,12 @@ async function buildOpenLibraryWorkIndexCore({
     commit() {
       if (!transactionOpen) return;
       database.exec('COMMIT;');
+      transactionOpen = false;
+      pending = 0;
+    },
+    rollback() {
+      if (!transactionOpen) return;
+      try { database.exec('ROLLBACK;'); } catch { /* rollback is best-effort */ }
       transactionOpen = false;
       pending = 0;
     },
@@ -946,7 +981,7 @@ async function buildOpenLibraryWorkIndexCore({
       ) WITHOUT ROWID;
       PRAGMA user_version = ${OPEN_LIBRARY_WORK_INDEX_VERSION};
     `);
-    const phase = { database, statistics, batch, progress, stagePath };
+    const phase = { database, statistics, batch, progress, stagePath, cacheSizeKiB };
     await loaders.loadWorks({ ...phase, worksPath });
     await loaders.loadRatings({ ...phase, ratingsPath });
     await loaders.loadReadingLog({ ...phase, readingLogPath });
@@ -1007,14 +1042,7 @@ export async function buildOpenLibraryWorkIndex(options) {
 }
 
 export async function buildReferenceOpenLibraryWorkIndex(options) {
-  return buildOpenLibraryWorkIndexCore({
-    ...options,
-    loaders: {
-      loadWorks: loadWorksInline,
-      loadRatings: loadRatingsRowWise,
-      loadReadingLog: loadReadingLogRowWise,
-    },
-  });
+  return buildOpenLibraryWorkIndexCore(options, REFERENCE_WORK_INDEX_LOADERS);
 }
 
 export async function createOpenLibraryWorkLookup({ indexPath, snapshotId }) {
