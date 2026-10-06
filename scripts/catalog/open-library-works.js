@@ -20,6 +20,7 @@ const MIN_CACHE_MB = 64;
 const MAX_CACHE_MB = 16384;
 const PROGRESS_TIME_MS = 30_000;
 const STALE_BUILDING_GRACE_MS = 10 * 60 * 1000;
+const STAGE_CACHE_SIZE_KIB = -65536;
 const WORK_KEY_PATTERN = /^\/works\/OL[0-9]+W$/;
 const EDITION_KEY_PATTERN = /^\/books\/OL[0-9]+M$/;
 const SIGNAL_DATE_PATTERN = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
@@ -120,6 +121,17 @@ async function directorySize(path) {
   return total;
 }
 
+async function directoryNewestMtime(path) {
+  let newest = 0;
+  const entries = await fs.readdir(path, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = join(path, entry.name);
+    if (entry.isDirectory()) newest = Math.max(newest, await directoryNewestMtime(entryPath));
+    else if (entry.isFile()) newest = Math.max(newest, (await fs.stat(entryPath)).mtimeMs);
+  }
+  return newest;
+}
+
 async function cleanupStaleBuildingDirectories(outputPath, warn = message => process.stderr.write(`${message}\n`)) {
   const parent = dirname(outputPath);
   const prefix = `${basename(outputPath)}.building-`;
@@ -136,23 +148,23 @@ async function cleanupStaleBuildingDirectories(outputPath, warn = message => pro
     if (!match) continue;
     const pid = Number(match[1]);
     const stalePath = join(parent, entry.name);
-    let staleStats;
+    let newestMtime = 0;
     try {
-      staleStats = await fs.stat(stalePath);
+      newestMtime = await directoryNewestMtime(stalePath);
     } catch (cause) {
       if (cause.code === 'ENOENT') continue;
       warn(`[warn] unable to inspect build directory ${stalePath}: ${cause.message}`);
       continue;
     }
-    if (Date.now() - staleStats.mtimeMs < STALE_BUILDING_GRACE_MS) continue;
+    if (Date.now() - newestMtime < STALE_BUILDING_GRACE_MS) continue;
     if (isProcessRunning(pid)) {
       warn(`[warn] skipping build directory ${stalePath}; pid ${pid} is still running`);
       continue;
     }
     try {
       const size = await directorySize(stalePath);
-      warn(`[warn] removing stale build directory ${stalePath} (${formatBytes(size)}); pid ${pid} is not running`);
       await fs.rm(stalePath, { recursive: true, force: true });
+      warn(`[warn] removed stale build directory ${stalePath} (${formatBytes(size)}); pid ${pid} is not running`);
     } catch (cause) {
       warn(`[warn] unable to remove stale build directory ${stalePath}: ${cause.message}`);
     }
@@ -472,13 +484,18 @@ function setProgressPhase(ctx, phase) {
   ctx.phase = phase;
   ctx.rows = 0;
   ctx.phaseStartMs = Date.now();
+  ctx.reportPhase = true;
 }
 
 function noteProgress(ctx) {
   ctx.rows += 1;
   if (typeof ctx.onProgress !== 'function') return;
   const now = Date.now();
-  if (ctx.rows % ctx.progressInterval !== 0 && now - ctx.lastReportMs < PROGRESS_TIME_MS) return;
+  const due = ctx.reportPhase
+    || ctx.rows % ctx.progressInterval === 0
+    || now - ctx.lastReportMs >= PROGRESS_TIME_MS;
+  ctx.reportPhase = false;
+  if (!due) return;
   ctx.lastReportMs = now;
   const phaseElapsedMs = Math.max(now - ctx.phaseStartMs, 1);
   ctx.onProgress(JSON.parse(stableJson(ctx.statistics)), ctx.phase, {
@@ -517,7 +534,7 @@ async function createStageDatabase(stagePath) {
   stageDatabase.close();
 }
 
-async function loadWorks({ database, stagePath, worksPath, statistics, batch, progress, cacheSizeKiB }) {
+async function loadWorks({ database, stagePath, worksPath, statistics, batch, progress }) {
   await createStageDatabase(stagePath);
   let attached = false;
   try {
@@ -526,7 +543,7 @@ async function loadWorks({ database, stagePath, worksPath, statistics, batch, pr
     database.exec(`
       PRAGMA stage.journal_mode = OFF;
       PRAGMA stage.synchronous = OFF;
-      PRAGMA stage.cache_size = ${cacheSizeKiB};
+      PRAGMA stage.cache_size = ${STAGE_CACHE_SIZE_KIB};
     `);
     const insertStage = database.prepare(`
       INSERT INTO stage.works_stage (
@@ -873,13 +890,13 @@ const DEFAULT_WORK_INDEX_LOADERS = {
   loadReadingLog,
 };
 
-const REFERENCE_WORK_INDEX_LOADERS = {
+export const REFERENCE_WORK_INDEX_LOADERS = {
   loadWorks: loadWorksInline,
   loadRatings: loadRatingsRowWise,
   loadReadingLog: loadReadingLogRowWise,
 };
 
-async function buildOpenLibraryWorkIndexCore({
+export async function buildOpenLibraryWorkIndexCore({
   worksPath,
   ratingsPath,
   readingLogPath,
@@ -981,7 +998,7 @@ async function buildOpenLibraryWorkIndexCore({
       ) WITHOUT ROWID;
       PRAGMA user_version = ${OPEN_LIBRARY_WORK_INDEX_VERSION};
     `);
-    const phase = { database, statistics, batch, progress, stagePath, cacheSizeKiB };
+    const phase = { database, statistics, batch, progress, stagePath };
     await loaders.loadWorks({ ...phase, worksPath });
     await loaders.loadRatings({ ...phase, ratingsPath });
     await loaders.loadReadingLog({ ...phase, readingLogPath });
@@ -1039,10 +1056,6 @@ async function buildOpenLibraryWorkIndexCore({
 
 export async function buildOpenLibraryWorkIndex(options) {
   return buildOpenLibraryWorkIndexCore(options);
-}
-
-export async function buildReferenceOpenLibraryWorkIndex(options) {
-  return buildOpenLibraryWorkIndexCore(options, REFERENCE_WORK_INDEX_LOADERS);
 }
 
 export async function createOpenLibraryWorkLookup({ indexPath, snapshotId }) {
