@@ -2,7 +2,7 @@ import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { createGunzip } from 'node:zlib';
 import { createInterface } from 'node:readline';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { CatalogContractError } from './contracts.js';
 import { OPEN_LIBRARY_BULK_SOURCE, readOpenLibraryBulkRecords } from './open-library-bulk.js';
 import { SnapshotRecordError } from './snapshot-reader.js';
@@ -12,11 +12,14 @@ export const OPEN_LIBRARY_WORK_INDEX_VERSION = 1;
 export const OPEN_LIBRARY_WORK_INDEX_FORMAT = 'bookish-open-library-work-index';
 
 const WORK_INDEX_FILE = 'works.sqlite';
+const STAGE_DB_FILE = 'works-stage.sqlite';
 const DEFAULT_BATCH_SIZE = 10_000;
 const DEFAULT_PROGRESS_INTERVAL = 500_000;
 const DEFAULT_CACHE_MB = 1024;
 const MIN_CACHE_MB = 64;
+const MAX_CACHE_MB = 16384;
 const PROGRESS_TIME_MS = 30_000;
+const BUILDING_DIRECTORY_PATTERN = /^.+\.building-(\d+)-(\d+)$/;
 const WORK_KEY_PATTERN = /^\/works\/OL[0-9]+W$/;
 const EDITION_KEY_PATTERN = /^\/books\/OL[0-9]+M$/;
 const SIGNAL_DATE_PATTERN = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
@@ -66,9 +69,76 @@ function bumpBy(object, key, amount) {
   object[key] = value;
 }
 
-function cacheMegabytes(value, name = 'cacheMb') {
-  if (!Number.isSafeInteger(value) || value < MIN_CACHE_MB) fail('invalid_argument', `${name} must be an integer >= ${MIN_CACHE_MB}`);
-  return value;
+function flatString(value) {
+  return typeof value === 'string' ? `${value.trim()}` : '';
+}
+
+export function parseCacheMegabytes(value, name = 'cacheMb') {
+  const text = typeof value === 'number' ? String(value) : value;
+  if (typeof text !== 'string' || !/^[0-9]+$/.test(text)) {
+    fail('invalid_argument', `${name} must be a plain decimal integer`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < MIN_CACHE_MB || parsed > MAX_CACHE_MB) {
+    fail('invalid_argument', `${name} must be an integer from ${MIN_CACHE_MB} through ${MAX_CACHE_MB}`);
+  }
+  return parsed;
+}
+
+function sqliteEscapePath(path) {
+  return path.replace(/'/g, "''");
+}
+
+function isProcessRunning(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  if (pid === process.pid) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
+function formatBytes(bytes) {
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+async function directorySize(path) {
+  let total = 0;
+  const entries = await fs.readdir(path, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = join(path, entry.name);
+    if (entry.isDirectory()) total += await directorySize(entryPath);
+    else if (entry.isFile()) total += (await fs.stat(entryPath)).size;
+  }
+  return total;
+}
+
+async function cleanupStaleBuildingDirectories(outputPath, warn = message => process.stderr.write(`${message}\n`)) {
+  const parent = dirname(outputPath);
+  const prefix = `${basename(outputPath)}.building-`;
+  let entries;
+  try {
+    entries = await fs.readdir(parent, { withFileTypes: true });
+  } catch (cause) {
+    if (cause.code === 'ENOENT') return;
+    throw cause;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
+    const match = entry.name.match(BUILDING_DIRECTORY_PATTERN);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    if (isProcessRunning(pid)) continue;
+    const stalePath = join(parent, entry.name);
+    const size = await directorySize(stalePath);
+    warn(`[warn] removing stale build directory ${stalePath} (${formatBytes(size)}); pid ${pid} is not running`);
+    await fs.rm(stalePath, { recursive: true, force: true });
+  }
 }
 
 function emptyStatistics() {
@@ -122,8 +192,17 @@ async function assertReadableInput(inputPath) {
 async function* readSignalRows(path) {
   const lines = createInterface({ input: inputStream(path), crlfDelay: Infinity });
   for await (const line of lines) {
-    if (!line.trim()) continue;
-    yield line.split('\t').map(field => field.trim());
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const fields = [];
+    let start = 0;
+    for (let index = 0; index <= trimmed.length; index += 1) {
+      if (index === trimmed.length || trimmed[index] === '\t') {
+        fields.push(flatString(trimmed.slice(start, index)));
+        start = index + 1;
+      }
+    }
+    yield fields;
   }
 }
 
@@ -160,7 +239,10 @@ function parseRevision(value) {
 
 function signalShape(fields) {
   if (fields.length !== 4) return null;
-  const [workKey, editionKey, value, date] = fields;
+  const workKey = flatString(fields[0]);
+  const editionKey = flatString(fields[1]);
+  const value = flatString(fields[2]);
+  const date = flatString(fields[3]);
   if (!WORK_KEY_PATTERN.test(workKey)) return null;
   if (editionKey !== ABSENT_EDITION_KEY && !EDITION_KEY_PATTERN.test(editionKey)) return null;
   if (!SIGNAL_DATE_PATTERN.test(date)) return null;
@@ -402,7 +484,121 @@ function emptyReadingLogCounts() {
   return { want_to_read_count: 0, currently_reading_count: 0, already_read_count: 0 };
 }
 
-async function loadWorks({ database, worksPath, statistics, batch, progress }) {
+async function createStageDatabase(stagePath) {
+  const { DatabaseSync } = await sqlite();
+  const stageDatabase = new DatabaseSync(stagePath);
+  stageDatabase.exec(`
+    PRAGMA journal_mode = OFF;
+    PRAGMA synchronous = OFF;
+    PRAGMA temp_store = FILE;
+    PRAGMA mmap_size = 0;
+    CREATE TABLE works_stage (
+      key TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      line_number INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      subtitle TEXT,
+      author_keys TEXT NOT NULL,
+      subjects TEXT NOT NULL,
+      cover_ids TEXT NOT NULL,
+      first_publish_date TEXT,
+      description TEXT
+    );
+  `);
+  stageDatabase.close();
+}
+
+async function loadWorks({ database, stagePath, worksPath, statistics, batch, progress }) {
+  await createStageDatabase(stagePath);
+  database.exec(`ATTACH DATABASE '${sqliteEscapePath(stagePath)}' AS stage`);
+  const insertStage = database.prepare(`
+    INSERT INTO stage.works_stage (
+      key, revision, line_number, title, subtitle, author_keys, subjects, cover_ids,
+      first_publish_date, description
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  setProgressPhase(progress, 'works');
+  batch.begin();
+  try {
+    for await (const record of readOpenLibraryBulkRecords(worksPath)) {
+      bump(statistics.works, 'input');
+      try {
+        if (record instanceof SnapshotRecordError) {
+          reject(statistics.works, record.code === 'invalid_json' ? 'invalid_json' : 'malformed_row');
+          continue;
+        }
+        if (record.type !== '/type/work') {
+          reject(statistics.works, 'wrong_type');
+          continue;
+        }
+        const key = text(record.key);
+        const revision = parseRevision(record.revision);
+        const lineNumber = record.lineNumber;
+        if (!plainObject(record.data) || !key || !WORK_KEY_PATTERN.test(key) || revision === null || !Number.isSafeInteger(lineNumber)) {
+          reject(statistics.works, 'malformed_row');
+          continue;
+        }
+        const title = text(record.data.title);
+        if (!title) {
+          reject(statistics.works, 'missing_title');
+          continue;
+        }
+        insertStage.run(
+          key,
+          revision,
+          lineNumber,
+          title,
+          text(record.data.subtitle),
+          JSON.stringify(authorKeys(record.data.authors)),
+          JSON.stringify(subjects(record.data.subjects)),
+          JSON.stringify(coverIds(record.data.covers)),
+          text(record.data.first_publish_date),
+          description(record.data.description),
+        );
+        batch.write();
+      } finally {
+        noteProgress(progress);
+      }
+    }
+    batch.commit();
+    setProgressPhase(progress, 'works-merge');
+    const stagedCount = database.prepare('SELECT COUNT(*) AS count FROM stage.works_stage').get().count;
+    batch.begin();
+    database.exec(`
+      INSERT INTO works (
+        key, revision, line_number, title, subtitle, author_keys, subjects, cover_ids,
+        first_publish_date, description, ratings_count, ratings_sum,
+        want_to_read_count, currently_reading_count, already_read_count
+      )
+      SELECT key, revision, line_number, title, subtitle, author_keys, subjects, cover_ids,
+             first_publish_date, description, 0, 0, 0, 0, 0
+        FROM stage.works_stage
+       ORDER BY key, revision, line_number
+      ON CONFLICT(key) DO UPDATE SET
+        revision = excluded.revision,
+        line_number = excluded.line_number,
+        title = excluded.title,
+        subtitle = excluded.subtitle,
+        author_keys = excluded.author_keys,
+        subjects = excluded.subjects,
+        cover_ids = excluded.cover_ids,
+        first_publish_date = excluded.first_publish_date,
+        description = excluded.description
+      WHERE excluded.revision > works.revision
+         OR (excluded.revision = works.revision AND excluded.line_number > works.line_number)
+    `);
+    batch.commit();
+    const accepted = database.prepare('SELECT COUNT(*) AS count FROM works').get().count;
+    statistics.works.accepted = accepted;
+    statistics.works.duplicates = stagedCount - accepted;
+    noteProgress(progress);
+  } finally {
+    database.exec('DETACH DATABASE stage');
+    await fs.rm(stagePath, { force: true });
+  }
+}
+
+async function loadWorksInline({ database, worksPath, statistics, batch, progress }) {
   const findWork = database.prepare('SELECT key FROM works WHERE key = ?');
   const upsertWork = database.prepare(`
     INSERT INTO works (
@@ -525,10 +721,11 @@ async function loadRatings({ database, ratingsPath, statistics, batch, progress 
         reject(statistics.ratings, rating.reason);
         continue;
       }
-      let aggregate = aggregates.get(shape.workKey);
+      const workKey = shape.workKey;
+      let aggregate = aggregates.get(workKey);
       if (!aggregate) {
         aggregate = { count: 0, sum: 0 };
-        aggregates.set(shape.workKey, aggregate);
+        aggregates.set(workKey, aggregate);
       }
       aggregate.count += 1;
       aggregate.sum += rating.rating;
@@ -612,10 +809,11 @@ async function loadReadingLog({ database, readingLogPath, statistics, batch, pro
         reject(statistics.readingLog, 'unknown_shelf');
         continue;
       }
-      let aggregate = aggregates.get(shape.workKey);
+      const workKey = shape.workKey;
+      let aggregate = aggregates.get(workKey);
       if (!aggregate) {
         aggregate = emptyReadingLogCounts();
-        aggregates.set(shape.workKey, aggregate);
+        aggregates.set(workKey, aggregate);
       }
       aggregate[column] += 1;
     } finally {
@@ -647,7 +845,7 @@ async function loadReadingLog({ database, readingLogPath, statistics, batch, pro
   batch.commit();
 }
 
-export async function buildOpenLibraryWorkIndex({
+async function buildOpenLibraryWorkIndexCore({
   worksPath,
   ratingsPath,
   readingLogPath,
@@ -657,8 +855,12 @@ export async function buildOpenLibraryWorkIndex({
   batchSize = DEFAULT_BATCH_SIZE,
   progressInterval = DEFAULT_PROGRESS_INTERVAL,
   cacheMb = DEFAULT_CACHE_MB,
-  signalApplyMode = 'aggregated',
   onProgress = null,
+  loaders = {
+    loadWorks,
+    loadRatings,
+    loadReadingLog,
+  },
 }) {
   snapshotId = text(snapshotId);
   if (!snapshotId) fail('invalid_argument', 'snapshotId is required');
@@ -666,10 +868,7 @@ export async function buildOpenLibraryWorkIndex({
   if (typeof generatedAt !== 'string' || Number.isNaN(Date.parse(generatedAt))) fail('invalid_argument', 'generatedAt must be an ISO timestamp');
   batchSize = positiveInteger(batchSize, 'batchSize');
   progressInterval = positiveInteger(progressInterval, 'progressInterval');
-  cacheMb = cacheMegabytes(cacheMb);
-  if (signalApplyMode !== 'aggregated' && signalApplyMode !== 'row-wise') {
-    fail('invalid_argument', 'signalApplyMode must be "aggregated" or "row-wise"');
-  }
+  cacheMb = parseCacheMegabytes(cacheMb);
   outputPath = resolve(outputPath);
   worksPath = resolve(worksPath);
   ratingsPath = resolve(ratingsPath);
@@ -678,7 +877,7 @@ export async function buildOpenLibraryWorkIndex({
   const statistics = emptyStatistics();
   const progress = createProgressContext({ statistics, progressInterval, onProgress, phase: 'works' });
   const cacheSizeKiB = -cacheMb * 1024;
-  const mmapSizeBytes = cacheMb * 1024 * 1024;
+  const stagePath = join(tempPath, STAGE_DB_FILE);
   const { DatabaseSync } = await sqlite();
   let database = null;
   let transactionOpen = false;
@@ -705,6 +904,7 @@ export async function buildOpenLibraryWorkIndex({
   };
   try {
     await fs.mkdir(dirname(outputPath), { recursive: true });
+    await cleanupStaleBuildingDirectories(outputPath);
     await assertReadableInput(worksPath);
     await assertReadableInput(ratingsPath);
     await assertReadableInput(readingLogPath);
@@ -716,7 +916,7 @@ export async function buildOpenLibraryWorkIndex({
       PRAGMA synchronous = OFF;
       PRAGMA temp_store = FILE;
       PRAGMA cache_size = ${cacheSizeKiB};
-      PRAGMA mmap_size = ${mmapSizeBytes};
+      PRAGMA mmap_size = 0;
       PRAGMA locking_mode = EXCLUSIVE;
       CREATE TABLE metadata (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -746,15 +946,10 @@ export async function buildOpenLibraryWorkIndex({
       ) WITHOUT ROWID;
       PRAGMA user_version = ${OPEN_LIBRARY_WORK_INDEX_VERSION};
     `);
-    const phase = { database, statistics, batch, progress };
-    await loadWorks({ ...phase, worksPath });
-    if (signalApplyMode === 'row-wise') {
-      await loadRatingsRowWise({ ...phase, ratingsPath });
-      await loadReadingLogRowWise({ ...phase, readingLogPath });
-    } else {
-      await loadRatings({ ...phase, ratingsPath });
-      await loadReadingLog({ ...phase, readingLogPath });
-    }
+    const phase = { database, statistics, batch, progress, stagePath };
+    await loaders.loadWorks({ ...phase, worksPath });
+    await loaders.loadRatings({ ...phase, ratingsPath });
+    await loaders.loadReadingLog({ ...phase, readingLogPath });
     database.exec('PRAGMA locking_mode = NORMAL; PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; BEGIN IMMEDIATE;');
     transactionOpen = true;
     database.prepare(`
@@ -805,6 +1000,21 @@ export async function buildOpenLibraryWorkIndex({
     await fs.rm(tempPath, { recursive: true, force: true }).catch(() => {});
     throw cause;
   }
+}
+
+export async function buildOpenLibraryWorkIndex(options) {
+  return buildOpenLibraryWorkIndexCore(options);
+}
+
+export async function buildReferenceOpenLibraryWorkIndex(options) {
+  return buildOpenLibraryWorkIndexCore({
+    ...options,
+    loaders: {
+      loadWorks: loadWorksInline,
+      loadRatings: loadRatingsRowWise,
+      loadReadingLog: loadReadingLogRowWise,
+    },
+  });
 }
 
 export async function createOpenLibraryWorkLookup({ indexPath, snapshotId }) {

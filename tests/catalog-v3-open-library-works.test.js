@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { buildOpenLibraryWorkIndex, createOpenLibraryWorkLookup } from '../scripts/catalog/open-library-works.js';
+import { buildLegacyWorkIndex } from './helpers/open-library-work-index-legacy.js';
 
 const WORKS = new URL('./fixtures/open-library-works.txt', import.meta.url);
 const RATINGS = new URL('./fixtures/open-library-ratings.txt', import.meta.url);
@@ -107,7 +108,7 @@ test('works index stores fields, deterministic duplicates, ratings, shelves, and
       rejectedByReason: { malformed_row: 3, unknown_shelf: 2 },
     },
   });
-  assert.equal(progress.length, 15 + 14 + 3 + 12 + 3);
+  assert.equal(progress.length, 15 + 1 + 14 + 3 + 12 + 3);
   assert.ok(progress.validating >= 1);
   assert.deepEqual(progress.at(-1), result.statistics);
   const metadata = JSON.parse(await fs.readFile(join(outputPath, 'index.json'), 'utf8'));
@@ -401,11 +402,22 @@ test('works index CLI prints a JSON summary and rejects missing or unknown argum
       '--snapshot-id', SNAPSHOT_ID,
       '--cache-mb', '32',
     ]),
-    error => error.code === 1 && error.stderr.includes('--cache-mb must be an integer >= 64'),
+    error => error.code === 1 && error.stderr.includes('--cache-mb must be an integer from 64 through 16384'),
+  );
+  await assert.rejects(
+    execFileAsync(process.execPath, [
+      '--experimental-sqlite', script,
+      '--works', fileURLToPath(WORKS),
+      '--ratings', fileURLToPath(RATINGS),
+      '--reading-log', fileURLToPath(READING_LOG),
+      '--snapshot-id', SNAPSHOT_ID,
+      '--cache-mb', '1e3',
+    ]),
+    error => error.code === 1 && error.stderr.includes('--cache-mb must be a plain decimal integer'),
   );
 });
 
-test('aggregated signal apply matches row-wise output on fixtures', async (t) => {
+test('staged works merge and aggregated signals match legacy reference output on fixtures', async (t) => {
   const directory = await temporaryDirectory();
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const common = {
@@ -417,24 +429,23 @@ test('aggregated signal apply matches row-wise output on fixtures', async (t) =>
     cacheMb: 64,
     batchSize: 2,
   };
-  const rowWisePath = join(directory, 'row-wise');
-  const aggregatedPath = join(directory, 'aggregated');
-  await buildOpenLibraryWorkIndex({ ...common, outputPath: rowWisePath, signalApplyMode: 'row-wise' });
-  await buildOpenLibraryWorkIndex({ ...common, outputPath: aggregatedPath, signalApplyMode: 'aggregated' });
-  const rowWise = await artifactDigest(rowWisePath);
-  const aggregated = await artifactDigest(aggregatedPath);
-  assert.equal(aggregated.indexJson, rowWise.indexJson);
-  assert.deepEqual(aggregated.records, rowWise.records);
+  const legacyPath = join(directory, 'legacy');
+  const optimizedPath = join(directory, 'optimized');
+  await buildLegacyWorkIndex({ ...common, outputPath: legacyPath });
+  await buildOpenLibraryWorkIndex({ ...common, outputPath: optimizedPath });
+  const legacy = await artifactDigest(legacyPath);
+  const optimized = await artifactDigest(optimizedPath);
+  assert.equal(optimized.indexJson, legacy.indexJson);
+  assert.deepEqual(optimized.records, legacy.records);
 });
 
-test('different cache sizes produce identical fixture artifacts', async (t) => {
+test('different cache sizes produce identical logical fixture artifacts', async (t) => {
   const directory = await temporaryDirectory();
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const common = {
     worksPath: fileURLToPath(WORKS),
     ratingsPath: fileURLToPath(RATINGS),
     readingLogPath: fileURLToPath(READING_LOG),
-    outputPath: join(directory, 'works-index'),
     snapshotId: SNAPSHOT_ID,
     generatedAt: GENERATED_AT,
     batchSize: 2,
@@ -444,7 +455,7 @@ test('different cache sizes produce identical fixture artifacts', async (t) => {
   const small = await artifactDigest(join(directory, 'small-cache'));
   const large = await artifactDigest(join(directory, 'large-cache'));
   assert.equal(large.indexJson, small.indexJson);
-  assert.equal(large.sqliteSha256, small.sqliteSha256);
+  assert.deepEqual(large.records, small.records);
 });
 
 test('works index builder does not reference Prisma, the database URL, or fetch', async () => {

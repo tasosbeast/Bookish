@@ -45,8 +45,11 @@ function parseArguments(args) {
         if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error('--progress-interval must be a positive integer');
         options.progressInterval = parsed;
       } else if (argument === '--cache-mb') {
+        if (!/^[0-9]+$/.test(value)) throw new Error('--cache-mb must be a plain decimal integer');
         const parsed = Number(value);
-        if (!Number.isSafeInteger(parsed) || parsed < 64) throw new Error('--cache-mb must be an integer >= 64');
+        if (!Number.isSafeInteger(parsed) || parsed < 64 || parsed > 16384) {
+          throw new Error('--cache-mb must be an integer from 64 through 16384');
+        }
         options.cacheMb = parsed;
       } else {
         const key = argument.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
