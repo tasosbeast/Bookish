@@ -1,5 +1,6 @@
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { gzipSync } from 'node:zlib';
@@ -31,6 +32,21 @@ function zeroReadingLog() {
 
 async function temporaryDirectory() {
   return fs.mkdtemp(join(tmpdir(), 'bookish-ol-works-'));
+}
+
+async function artifactDigest(outputPath) {
+  const indexJson = await fs.readFile(join(outputPath, 'index.json'), 'utf8');
+  const sqlite = await fs.readFile(join(outputPath, 'works.sqlite'));
+  const lookup = await createOpenLibraryWorkLookup({ indexPath: outputPath, snapshotId: SNAPSHOT_ID });
+  const records = [];
+  lookup.forEachWork(row => records.push(lookup.get(row.key)));
+  lookup.close();
+  records.sort((left, right) => left.workKey.localeCompare(right.workKey));
+  return {
+    indexJson,
+    sqliteSha256: createHash('sha256').update(sqlite).digest('hex'),
+    records,
+  };
 }
 
 async function buildFixture(directory, options = {}) {
@@ -91,7 +107,7 @@ test('works index stores fields, deterministic duplicates, ratings, shelves, and
       rejectedByReason: { malformed_row: 3, unknown_shelf: 2 },
     },
   });
-  assert.equal(progress.length, 15 + 14 + 12);
+  assert.equal(progress.length, 15 + 14 + 3 + 12 + 3);
   assert.ok(progress.validating >= 1);
   assert.deepEqual(progress.at(-1), result.statistics);
   const metadata = JSON.parse(await fs.readFile(join(outputPath, 'index.json'), 'utf8'));
@@ -376,6 +392,59 @@ test('works index CLI prints a JSON summary and rejects missing or unknown argum
     ]),
     error => error.code === 1 && error.stderr.includes('--batch-size must be a positive integer'),
   );
+  await assert.rejects(
+    execFileAsync(process.execPath, [
+      '--experimental-sqlite', script,
+      '--works', fileURLToPath(WORKS),
+      '--ratings', fileURLToPath(RATINGS),
+      '--reading-log', fileURLToPath(READING_LOG),
+      '--snapshot-id', SNAPSHOT_ID,
+      '--cache-mb', '32',
+    ]),
+    error => error.code === 1 && error.stderr.includes('--cache-mb must be an integer >= 64'),
+  );
+});
+
+test('aggregated signal apply matches row-wise output on fixtures', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const common = {
+    worksPath: fileURLToPath(WORKS),
+    ratingsPath: fileURLToPath(RATINGS),
+    readingLogPath: fileURLToPath(READING_LOG),
+    snapshotId: SNAPSHOT_ID,
+    generatedAt: GENERATED_AT,
+    cacheMb: 64,
+    batchSize: 2,
+  };
+  const rowWisePath = join(directory, 'row-wise');
+  const aggregatedPath = join(directory, 'aggregated');
+  await buildOpenLibraryWorkIndex({ ...common, outputPath: rowWisePath, signalApplyMode: 'row-wise' });
+  await buildOpenLibraryWorkIndex({ ...common, outputPath: aggregatedPath, signalApplyMode: 'aggregated' });
+  const rowWise = await artifactDigest(rowWisePath);
+  const aggregated = await artifactDigest(aggregatedPath);
+  assert.equal(aggregated.indexJson, rowWise.indexJson);
+  assert.deepEqual(aggregated.records, rowWise.records);
+});
+
+test('different cache sizes produce identical fixture artifacts', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const common = {
+    worksPath: fileURLToPath(WORKS),
+    ratingsPath: fileURLToPath(RATINGS),
+    readingLogPath: fileURLToPath(READING_LOG),
+    outputPath: join(directory, 'works-index'),
+    snapshotId: SNAPSHOT_ID,
+    generatedAt: GENERATED_AT,
+    batchSize: 2,
+  };
+  await buildOpenLibraryWorkIndex({ ...common, outputPath: join(directory, 'small-cache'), cacheMb: 64 });
+  await buildOpenLibraryWorkIndex({ ...common, outputPath: join(directory, 'large-cache'), cacheMb: 1024 });
+  const small = await artifactDigest(join(directory, 'small-cache'));
+  const large = await artifactDigest(join(directory, 'large-cache'));
+  assert.equal(large.indexJson, small.indexJson);
+  assert.equal(large.sqliteSha256, small.sqliteSha256);
 });
 
 test('works index builder does not reference Prisma, the database URL, or fetch', async () => {

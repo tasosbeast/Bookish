@@ -143,6 +143,8 @@ npm run catalog:ol-work-index-build -- --works path/to/ol_dump_works.txt.gz --ra
 
 The builder reads only those local files. It writes a validated SQLite database and `index.json` under `scripts/catalog-cache/open-library-works` (override with `--output`). It does not download dumps, contact providers, or access PostgreSQL.
 
+Run the build on an internal SSD, not a USB HDD. Keep the PC awake for the full run. On a typical NVMe SSD with the default `--cache-mb 1024`, expect roughly 30–60 minutes for a 4 GB gzipped works dump plus ratings and reading-log files (previously 5+ hours with a 32 MB page cache). Progress prints to stderr every 500,000 rows or about every 30 seconds. `--cache-mb` defaults to 1024 (minimum 64); it tunes SQLite page cache and mmap size only and does not appear in `index.json`.
+
 Rank candidates from that index with `catalog:discover`. The command reads the local works index only and writes a validated JSON artifact. It records `languageCheck` as `pending` because English editions are decided later from the editions dump. The score is `((bayesian - 1) / 4) * ln(1 + weightedReaders + ratingsCount)`. `bayesian` is the average pulled toward 20 prior ratings at 3.5. `weightedReaders` is `1 * alreadyRead + 0.75 * currentlyReading + 0.25 * wantToRead`. A work with no ratings and no shelf counts scores 0 and is rejected as `no_signal`. Ties break by work key.
 
 ```powershell

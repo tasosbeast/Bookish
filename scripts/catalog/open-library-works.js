@@ -14,6 +14,9 @@ export const OPEN_LIBRARY_WORK_INDEX_FORMAT = 'bookish-open-library-work-index';
 const WORK_INDEX_FILE = 'works.sqlite';
 const DEFAULT_BATCH_SIZE = 10_000;
 const DEFAULT_PROGRESS_INTERVAL = 500_000;
+const DEFAULT_CACHE_MB = 1024;
+const MIN_CACHE_MB = 64;
+const PROGRESS_TIME_MS = 30_000;
 const WORK_KEY_PATTERN = /^\/works\/OL[0-9]+W$/;
 const EDITION_KEY_PATTERN = /^\/books\/OL[0-9]+M$/;
 const SIGNAL_DATE_PATTERN = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
@@ -55,6 +58,17 @@ function bump(object, key) {
   const value = object[key] + 1;
   if (!Number.isSafeInteger(value)) fail('invalid_work_index', `Statistic ${key} exceeded a safe integer`);
   object[key] = value;
+}
+
+function bumpBy(object, key, amount) {
+  const value = object[key] + amount;
+  if (!Number.isSafeInteger(value)) fail('invalid_work_index', `Statistic ${key} exceeded a safe integer`);
+  object[key] = value;
+}
+
+function cacheMegabytes(value, name = 'cacheMb') {
+  if (!Number.isSafeInteger(value) || value < MIN_CACHE_MB) fail('invalid_argument', `${name} must be an integer >= ${MIN_CACHE_MB}`);
+  return value;
 }
 
 function emptyStatistics() {
@@ -261,7 +275,7 @@ function databaseMetadata(database) {
   });
 }
 
-function assertDatabaseMatches(database, metadata, { scanRows, progressInterval = 0, onProgress = null }) {
+function assertDatabaseMatches(database, metadata, { scanRows, progress = null }) {
   const integrity = database.prepare('PRAGMA integrity_check').all();
   if (integrity.length !== 1 || integrity[0].integrity_check !== 'ok') fail('invalid_work_index', 'Work index failed SQLite integrity validation');
   const stored = databaseMetadata(database);
@@ -276,7 +290,10 @@ function assertDatabaseMatches(database, metadata, { scanRows, progressInterval 
   if (totals.ratings !== metadata.statistics.ratings.accepted) fail('invalid_work_index', 'Rating counts do not match metadata');
   if (totals.reading_log !== metadata.statistics.readingLog.accepted) fail('invalid_work_index', 'Reading-log counts do not match metadata');
   if (!scanRows) return;
-  if (typeof onProgress === 'function') onProgress(JSON.parse(stableJson(metadata.statistics)), 'validating');
+  if (progress) {
+    setProgressPhase(progress, 'validating');
+    noteProgress(progress);
+  }
   let works = 0;
   let ratings = 0;
   let readingLog = 0;
@@ -303,9 +320,7 @@ function assertDatabaseMatches(database, metadata, { scanRows, progressInterval 
     }
     ratings += row.ratings_count;
     readingLog += row.want_to_read_count + row.currently_reading_count + row.already_read_count;
-    if (typeof onProgress === 'function' && progressInterval && works % progressInterval === 0) {
-      onProgress(JSON.parse(stableJson(metadata.statistics)), 'validating');
-    }
+    if (progress) noteProgress(progress);
   }
   if (works !== metadata.statistics.works.accepted || ratings !== metadata.statistics.ratings.accepted || readingLog !== metadata.statistics.readingLog.accepted) {
     fail('invalid_work_index', 'Scanned work aggregates do not match metadata');
@@ -348,12 +363,46 @@ async function replaceDirectory(tempPath, outputPath) {
   if (moved) await fs.rm(backup, { recursive: true, force: true });
 }
 
-function noteProgress(statistics, progressInterval, onProgress, seen) {
-  if (typeof onProgress !== 'function' || seen % progressInterval !== 0) return;
-  onProgress(JSON.parse(stableJson(statistics)));
+function createProgressContext({ statistics, progressInterval, onProgress, phase }) {
+  const startMs = Date.now();
+  return {
+    statistics,
+    progressInterval,
+    onProgress,
+    phase,
+    rows: 0,
+    startMs,
+    phaseStartMs: startMs,
+    lastReportMs: startMs,
+  };
 }
 
-async function loadWorks({ database, worksPath, statistics, batch, progressInterval, onProgress, seen }) {
+function setProgressPhase(ctx, phase) {
+  ctx.phase = phase;
+  ctx.rows = 0;
+  ctx.phaseStartMs = Date.now();
+}
+
+function noteProgress(ctx) {
+  ctx.rows += 1;
+  if (typeof ctx.onProgress !== 'function') return;
+  const now = Date.now();
+  if (ctx.rows % ctx.progressInterval !== 0 && now - ctx.lastReportMs < PROGRESS_TIME_MS) return;
+  ctx.lastReportMs = now;
+  const phaseElapsedMs = Math.max(now - ctx.phaseStartMs, 1);
+  ctx.onProgress(JSON.parse(stableJson(ctx.statistics)), ctx.phase, {
+    phaseRows: ctx.rows,
+    elapsedMs: now - ctx.startMs,
+    phaseElapsedMs,
+    rate: ctx.rows / (phaseElapsedMs / 1000),
+  });
+}
+
+function emptyReadingLogCounts() {
+  return { want_to_read_count: 0, currently_reading_count: 0, already_read_count: 0 };
+}
+
+async function loadWorks({ database, worksPath, statistics, batch, progress }) {
   const findWork = database.prepare('SELECT key FROM works WHERE key = ?');
   const upsertWork = database.prepare(`
     INSERT INTO works (
@@ -374,10 +423,10 @@ async function loadWorks({ database, worksPath, statistics, batch, progressInter
     WHERE excluded.revision > works.revision
        OR (excluded.revision = works.revision AND excluded.line_number > works.line_number)
   `);
+  setProgressPhase(progress, 'works');
   batch.begin();
   for await (const record of readOpenLibraryBulkRecords(worksPath)) {
     bump(statistics.works, 'input');
-    seen.count += 1;
     try {
       if (record instanceof SnapshotRecordError) {
         reject(statistics.works, record.code === 'invalid_json' ? 'invalid_json' : 'malformed_row');
@@ -415,13 +464,13 @@ async function loadWorks({ database, worksPath, statistics, batch, progressInter
       bump(statistics.works, existing ? 'duplicates' : 'accepted');
       batch.write();
     } finally {
-      noteProgress(statistics, progressInterval, onProgress, seen.count);
+      noteProgress(progress);
     }
   }
   batch.commit();
 }
 
-async function loadRatings({ database, ratingsPath, statistics, batch, progressInterval, onProgress, seen }) {
+async function loadRatingsRowWise({ database, ratingsPath, statistics, batch, progress }) {
   const upsertRating = database.prepare(`
     INSERT INTO works (
       key, revision, line_number, title, author_keys, subjects, cover_ids,
@@ -435,10 +484,10 @@ async function loadRatings({ database, ratingsPath, statistics, batch, progressI
       ratings_count = excluded.ratings_count,
       ratings_sum = excluded.ratings_sum
   `);
+  setProgressPhase(progress, 'ratings');
   batch.begin();
   for await (const fields of readSignalRows(ratingsPath)) {
     bump(statistics.ratings, 'input');
-    seen.count += 1;
     try {
       const shape = signalShape(fields);
       if (!shape) {
@@ -454,13 +503,58 @@ async function loadRatings({ database, ratingsPath, statistics, batch, progressI
       bump(statistics.ratings, info.changes > 0 ? 'accepted' : 'orphans');
       batch.write();
     } finally {
-      noteProgress(statistics, progressInterval, onProgress, seen.count);
+      noteProgress(progress);
     }
   }
   batch.commit();
 }
 
-async function loadReadingLog({ database, readingLogPath, statistics, batch, progressInterval, onProgress, seen }) {
+async function loadRatings({ database, ratingsPath, statistics, batch, progress }) {
+  const aggregates = new Map();
+  setProgressPhase(progress, 'ratings');
+  for await (const fields of readSignalRows(ratingsPath)) {
+    bump(statistics.ratings, 'input');
+    try {
+      const shape = signalShape(fields);
+      if (!shape) {
+        reject(statistics.ratings, 'malformed_row');
+        continue;
+      }
+      const rating = ratingValue(shape.value);
+      if (rating.reason) {
+        reject(statistics.ratings, rating.reason);
+        continue;
+      }
+      let aggregate = aggregates.get(shape.workKey);
+      if (!aggregate) {
+        aggregate = { count: 0, sum: 0 };
+        aggregates.set(shape.workKey, aggregate);
+      }
+      aggregate.count += 1;
+      aggregate.sum += rating.rating;
+    } finally {
+      noteProgress(progress);
+    }
+  }
+  const applyRating = database.prepare(`
+    UPDATE works
+       SET ratings_count = ratings_count + ?,
+           ratings_sum = ratings_sum + ?
+     WHERE key = ?
+  `);
+  setProgressPhase(progress, 'ratings-apply');
+  batch.begin();
+  for (const workKey of [...aggregates.keys()].sort()) {
+    const aggregate = aggregates.get(workKey);
+    const info = applyRating.run(aggregate.count, aggregate.sum, workKey);
+    bumpBy(statistics.ratings, info.changes > 0 ? 'accepted' : 'orphans', aggregate.count);
+    batch.write();
+    noteProgress(progress);
+  }
+  batch.commit();
+}
+
+async function loadReadingLogRowWise({ database, readingLogPath, statistics, batch, progress }) {
   const upserts = new Map(READING_LOG_SHELVES.map(([shelf, column]) => [shelf, database.prepare(`
     INSERT INTO works (
       key, revision, line_number, title, author_keys, subjects, cover_ids,
@@ -476,10 +570,10 @@ async function loadReadingLog({ database, readingLogPath, statistics, batch, pro
     ON CONFLICT(key) DO UPDATE SET
       ${column} = excluded.${column}
   `)]));
+  setProgressPhase(progress, 'reading-log');
   batch.begin();
   for await (const fields of readSignalRows(readingLogPath)) {
     bump(statistics.readingLog, 'input');
-    seen.count += 1;
     try {
       const shape = signalShape(fields);
       if (!shape) {
@@ -495,8 +589,60 @@ async function loadReadingLog({ database, readingLogPath, statistics, batch, pro
       bump(statistics.readingLog, info.changes > 0 ? 'accepted' : 'orphans');
       batch.write();
     } finally {
-      noteProgress(statistics, progressInterval, onProgress, seen.count);
+      noteProgress(progress);
     }
+  }
+  batch.commit();
+}
+
+async function loadReadingLog({ database, readingLogPath, statistics, batch, progress }) {
+  const shelfColumns = new Map(READING_LOG_SHELVES);
+  const aggregates = new Map();
+  setProgressPhase(progress, 'reading-log');
+  for await (const fields of readSignalRows(readingLogPath)) {
+    bump(statistics.readingLog, 'input');
+    try {
+      const shape = signalShape(fields);
+      if (!shape) {
+        reject(statistics.readingLog, 'malformed_row');
+        continue;
+      }
+      const column = shelfColumns.get(shape.value);
+      if (!column) {
+        reject(statistics.readingLog, 'unknown_shelf');
+        continue;
+      }
+      let aggregate = aggregates.get(shape.workKey);
+      if (!aggregate) {
+        aggregate = emptyReadingLogCounts();
+        aggregates.set(shape.workKey, aggregate);
+      }
+      aggregate[column] += 1;
+    } finally {
+      noteProgress(progress);
+    }
+  }
+  const applyReadingLog = database.prepare(`
+    UPDATE works
+       SET want_to_read_count = want_to_read_count + ?,
+           currently_reading_count = currently_reading_count + ?,
+           already_read_count = already_read_count + ?
+     WHERE key = ?
+  `);
+  setProgressPhase(progress, 'reading-log-apply');
+  batch.begin();
+  for (const workKey of [...aggregates.keys()].sort()) {
+    const aggregate = aggregates.get(workKey);
+    const eventCount = aggregate.want_to_read_count + aggregate.currently_reading_count + aggregate.already_read_count;
+    const info = applyReadingLog.run(
+      aggregate.want_to_read_count,
+      aggregate.currently_reading_count,
+      aggregate.already_read_count,
+      workKey,
+    );
+    bumpBy(statistics.readingLog, info.changes > 0 ? 'accepted' : 'orphans', eventCount);
+    batch.write();
+    noteProgress(progress);
   }
   batch.commit();
 }
@@ -510,6 +656,8 @@ export async function buildOpenLibraryWorkIndex({
   generatedAt = new Date().toISOString(),
   batchSize = DEFAULT_BATCH_SIZE,
   progressInterval = DEFAULT_PROGRESS_INTERVAL,
+  cacheMb = DEFAULT_CACHE_MB,
+  signalApplyMode = 'aggregated',
   onProgress = null,
 }) {
   snapshotId = text(snapshotId);
@@ -518,13 +666,19 @@ export async function buildOpenLibraryWorkIndex({
   if (typeof generatedAt !== 'string' || Number.isNaN(Date.parse(generatedAt))) fail('invalid_argument', 'generatedAt must be an ISO timestamp');
   batchSize = positiveInteger(batchSize, 'batchSize');
   progressInterval = positiveInteger(progressInterval, 'progressInterval');
+  cacheMb = cacheMegabytes(cacheMb);
+  if (signalApplyMode !== 'aggregated' && signalApplyMode !== 'row-wise') {
+    fail('invalid_argument', 'signalApplyMode must be "aggregated" or "row-wise"');
+  }
   outputPath = resolve(outputPath);
   worksPath = resolve(worksPath);
   ratingsPath = resolve(ratingsPath);
   readingLogPath = resolve(readingLogPath);
   const tempPath = `${outputPath}.building-${process.pid}-${Date.now()}`;
   const statistics = emptyStatistics();
-  const seen = { count: 0 };
+  const progress = createProgressContext({ statistics, progressInterval, onProgress, phase: 'works' });
+  const cacheSizeKiB = -cacheMb * 1024;
+  const mmapSizeBytes = cacheMb * 1024 * 1024;
   const { DatabaseSync } = await sqlite();
   let database = null;
   let transactionOpen = false;
@@ -561,7 +715,8 @@ export async function buildOpenLibraryWorkIndex({
       PRAGMA journal_mode = OFF;
       PRAGMA synchronous = OFF;
       PRAGMA temp_store = FILE;
-      PRAGMA cache_size = -32768;
+      PRAGMA cache_size = ${cacheSizeKiB};
+      PRAGMA mmap_size = ${mmapSizeBytes};
       PRAGMA locking_mode = EXCLUSIVE;
       CREATE TABLE metadata (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -591,10 +746,15 @@ export async function buildOpenLibraryWorkIndex({
       ) WITHOUT ROWID;
       PRAGMA user_version = ${OPEN_LIBRARY_WORK_INDEX_VERSION};
     `);
-    const phase = { database, statistics, batch, progressInterval, onProgress, seen };
+    const phase = { database, statistics, batch, progress };
     await loadWorks({ ...phase, worksPath });
-    await loadRatings({ ...phase, ratingsPath });
-    await loadReadingLog({ ...phase, readingLogPath });
+    if (signalApplyMode === 'row-wise') {
+      await loadRatingsRowWise({ ...phase, ratingsPath });
+      await loadReadingLogRowWise({ ...phase, readingLogPath });
+    } else {
+      await loadRatings({ ...phase, ratingsPath });
+      await loadReadingLog({ ...phase, readingLogPath });
+    }
     database.exec('PRAGMA locking_mode = NORMAL; PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; BEGIN IMMEDIATE;');
     transactionOpen = true;
     database.prepare(`
@@ -629,7 +789,7 @@ export async function buildOpenLibraryWorkIndex({
     const written = await readWorkIndexMetadata(tempPath);
     const { DatabaseSync: ReadDatabase } = await sqlite();
     const validationDatabase = new ReadDatabase(join(tempPath, WORK_INDEX_FILE), { readOnly: true });
-    try { assertDatabaseMatches(validationDatabase, written, { scanRows: true, progressInterval, onProgress }); }
+    try { assertDatabaseMatches(validationDatabase, written, { scanRows: true, progress }); }
     finally { validationDatabase.close(); }
     await replaceDirectory(tempPath, outputPath);
     return { ...metadata, outputPath };

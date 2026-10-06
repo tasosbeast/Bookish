@@ -2,6 +2,8 @@
 
 Resolved-artifact bridge.
 
+`catalog:ol-work-index-build` speedups landed: `--cache-mb` (default 1024), in-memory ratings/reading-log aggregation, and stderr progress reporting.
+
 The remaining roadmap item is a bridge from the language-checked / dedup-checked works import path to the existing resolved-artifact importer. Next up after that lands: the first real pipeline run (enrich → language-check → dedup-check → import dry-run) on production Open Library data.
 
 Acceptance: `npm run lint` with 0 warnings, `npm test`, integration tests, and `npm test --prefix frontend` green. No database access, migrations, or schema changes.
