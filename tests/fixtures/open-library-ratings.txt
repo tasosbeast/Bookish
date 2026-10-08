@@ -12,3 +12,5 @@
 not-a-key	\N	5	2018-01-01
 /works/OL10W	/books/BAD	5	2018-01-01
 /works/OL10W	\N	5	2018/01/01
+	/works/OL10W	\N	5	2018-06-20
+/works/OL10W	\N	5	2018-06-20	

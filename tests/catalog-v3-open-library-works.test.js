@@ -1,5 +1,6 @@
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { gzipSync } from 'node:zlib';
@@ -8,6 +9,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { buildOpenLibraryWorkIndex, createOpenLibraryWorkLookup } from '../scripts/catalog/open-library-works.js';
+import { buildLegacyWorkIndex } from './helpers/open-library-work-index-legacy.js';
 
 const WORKS = new URL('./fixtures/open-library-works.txt', import.meta.url);
 const RATINGS = new URL('./fixtures/open-library-ratings.txt', import.meta.url);
@@ -31,6 +33,21 @@ function zeroReadingLog() {
 
 async function temporaryDirectory() {
   return fs.mkdtemp(join(tmpdir(), 'bookish-ol-works-'));
+}
+
+async function artifactDigest(outputPath) {
+  const indexJson = await fs.readFile(join(outputPath, 'index.json'), 'utf8');
+  const sqlite = await fs.readFile(join(outputPath, 'works.sqlite'));
+  const lookup = await createOpenLibraryWorkLookup({ indexPath: outputPath, snapshotId: SNAPSHOT_ID });
+  const records = [];
+  lookup.forEachWork(row => records.push(lookup.get(row.key)));
+  lookup.close();
+  records.sort((left, right) => left.workKey.localeCompare(right.workKey));
+  return {
+    indexJson,
+    sqliteSha256: createHash('sha256').update(sqlite).digest('hex'),
+    records,
+  };
 }
 
 async function buildFixture(directory, options = {}) {
@@ -77,21 +94,21 @@ test('works index stores fields, deterministic duplicates, ratings, shelves, and
       rejectedByReason: { malformed_row: 3, invalid_json: 1, wrong_type: 1, missing_title: 2 },
     },
     ratings: {
-      input: 14,
+      input: 16,
       accepted: 4,
-      rejected: 9,
+      rejected: 11,
       orphans: 1,
-      rejectedByReason: { malformed_row: 4, non_integer: 3, out_of_range: 2 },
+      rejectedByReason: { malformed_row: 6, non_integer: 3, out_of_range: 2 },
     },
     readingLog: {
-      input: 12,
+      input: 14,
       accepted: 6,
-      rejected: 5,
+      rejected: 7,
       orphans: 1,
-      rejectedByReason: { malformed_row: 3, unknown_shelf: 2 },
+      rejectedByReason: { malformed_row: 5, unknown_shelf: 2 },
     },
   });
-  assert.equal(progress.length, 15 + 14 + 12);
+  assert.equal(progress.length, 15 + 2 + 16 + 3 + 14 + 3);
   assert.ok(progress.validating >= 1);
   assert.deepEqual(progress.at(-1), result.statistics);
   const metadata = JSON.parse(await fs.readFile(join(outputPath, 'index.json'), 'utf8'));
@@ -376,6 +393,89 @@ test('works index CLI prints a JSON summary and rejects missing or unknown argum
     ]),
     error => error.code === 1 && error.stderr.includes('--batch-size must be a positive integer'),
   );
+  await assert.rejects(
+    execFileAsync(process.execPath, [
+      '--experimental-sqlite', script,
+      '--works', fileURLToPath(WORKS),
+      '--ratings', fileURLToPath(RATINGS),
+      '--reading-log', fileURLToPath(READING_LOG),
+      '--snapshot-id', SNAPSHOT_ID,
+      '--cache-mb', '32',
+    ]),
+    error => error.code === 1 && error.stderr.includes('--cache-mb must be an integer from 64 through 16384'),
+  );
+  await assert.rejects(
+    execFileAsync(process.execPath, [
+      '--experimental-sqlite', script,
+      '--works', fileURLToPath(WORKS),
+      '--ratings', fileURLToPath(RATINGS),
+      '--reading-log', fileURLToPath(READING_LOG),
+      '--snapshot-id', SNAPSHOT_ID,
+      '--cache-mb', '1e3',
+    ]),
+    error => error.code === 1 && error.stderr.includes('--cache-mb must be a plain decimal integer'),
+  );
+});
+
+test('truncated gzip input surfaces zlib error and leaves no building directory', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const outputPath = join(directory, 'works-index');
+  const worksPath = join(directory, 'truncated.txt.gz');
+  await fs.writeFile(worksPath, gzipSync('partial content').subarray(0, 8));
+  await assert.rejects(
+    buildOpenLibraryWorkIndex({
+      worksPath,
+      ratingsPath: fileURLToPath(RATINGS),
+      readingLogPath: fileURLToPath(READING_LOG),
+      outputPath,
+      snapshotId: SNAPSHOT_ID,
+      generatedAt: GENERATED_AT,
+    }),
+    error => /Z_BUF_ERROR|unexpected end of file|incorrect data check/i.test(error.message),
+  );
+  assert.equal((await fs.readdir(directory)).some(name => name.includes('.building-')), false);
+});
+
+test('staged works merge and aggregated signals match legacy reference output on fixtures', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const common = {
+    worksPath: fileURLToPath(WORKS),
+    ratingsPath: fileURLToPath(RATINGS),
+    readingLogPath: fileURLToPath(READING_LOG),
+    snapshotId: SNAPSHOT_ID,
+    generatedAt: GENERATED_AT,
+    cacheMb: 64,
+    batchSize: 2,
+  };
+  const legacyPath = join(directory, 'legacy');
+  const optimizedPath = join(directory, 'optimized');
+  await buildLegacyWorkIndex({ ...common, outputPath: legacyPath });
+  await buildOpenLibraryWorkIndex({ ...common, outputPath: optimizedPath });
+  const legacy = await artifactDigest(legacyPath);
+  const optimized = await artifactDigest(optimizedPath);
+  assert.equal(optimized.indexJson, legacy.indexJson);
+  assert.deepEqual(optimized.records, legacy.records);
+});
+
+test('different cache sizes produce identical logical fixture artifacts', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const common = {
+    worksPath: fileURLToPath(WORKS),
+    ratingsPath: fileURLToPath(RATINGS),
+    readingLogPath: fileURLToPath(READING_LOG),
+    snapshotId: SNAPSHOT_ID,
+    generatedAt: GENERATED_AT,
+    batchSize: 2,
+  };
+  await buildOpenLibraryWorkIndex({ ...common, outputPath: join(directory, 'small-cache'), cacheMb: 64 });
+  await buildOpenLibraryWorkIndex({ ...common, outputPath: join(directory, 'large-cache'), cacheMb: 1024 });
+  const small = await artifactDigest(join(directory, 'small-cache'));
+  const large = await artifactDigest(join(directory, 'large-cache'));
+  assert.equal(large.indexJson, small.indexJson);
+  assert.deepEqual(large.records, small.records);
 });
 
 test('works index builder does not reference Prisma, the database URL, or fetch', async () => {

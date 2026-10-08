@@ -2,7 +2,7 @@ import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { createGunzip } from 'node:zlib';
 import { createInterface } from 'node:readline';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { CatalogContractError } from './contracts.js';
 import { OPEN_LIBRARY_BULK_SOURCE, readOpenLibraryBulkRecords } from './open-library-bulk.js';
 import { SnapshotRecordError } from './snapshot-reader.js';
@@ -12,8 +12,15 @@ export const OPEN_LIBRARY_WORK_INDEX_VERSION = 1;
 export const OPEN_LIBRARY_WORK_INDEX_FORMAT = 'bookish-open-library-work-index';
 
 const WORK_INDEX_FILE = 'works.sqlite';
+const STAGE_DB_FILE = 'works-stage.sqlite';
 const DEFAULT_BATCH_SIZE = 10_000;
 const DEFAULT_PROGRESS_INTERVAL = 500_000;
+const DEFAULT_CACHE_MB = 1024;
+const MIN_CACHE_MB = 64;
+const MAX_CACHE_MB = 16384;
+const PROGRESS_TIME_MS = 30_000;
+const STALE_BUILDING_GRACE_MS = 10 * 60 * 1000;
+const STAGE_CACHE_SIZE_KIB = -65536;
 const WORK_KEY_PATTERN = /^\/works\/OL[0-9]+W$/;
 const EDITION_KEY_PATTERN = /^\/books\/OL[0-9]+M$/;
 const SIGNAL_DATE_PATTERN = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
@@ -55,6 +62,113 @@ function bump(object, key) {
   const value = object[key] + 1;
   if (!Number.isSafeInteger(value)) fail('invalid_work_index', `Statistic ${key} exceeded a safe integer`);
   object[key] = value;
+}
+
+function bumpBy(object, key, amount) {
+  const value = object[key] + amount;
+  if (!Number.isSafeInteger(value)) fail('invalid_work_index', `Statistic ${key} exceeded a safe integer`);
+  object[key] = value;
+}
+
+function flatString(value) {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  return trimmed.length < 13 ? trimmed : (` ${trimmed}`).slice(1);
+}
+
+export function parseCacheMegabytes(value, name = 'cacheMb') {
+  const text = typeof value === 'number' ? String(value) : value;
+  if (typeof text !== 'string' || !/^[0-9]+$/.test(text)) {
+    fail('invalid_argument', `${name} must be a plain decimal integer`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < MIN_CACHE_MB || parsed > MAX_CACHE_MB) {
+    fail('invalid_argument', `${name} must be an integer from ${MIN_CACHE_MB} through ${MAX_CACHE_MB}`);
+  }
+  return parsed;
+}
+
+function sqliteEscapePath(path) {
+  return path.replace(/'/g, "''");
+}
+
+function isProcessRunning(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  if (pid === process.pid) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
+function formatBytes(bytes) {
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+async function directorySize(path) {
+  let total = 0;
+  const entries = await fs.readdir(path, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = join(path, entry.name);
+    if (entry.isDirectory()) total += await directorySize(entryPath);
+    else if (entry.isFile()) total += (await fs.stat(entryPath)).size;
+  }
+  return total;
+}
+
+async function directoryNewestMtime(path) {
+  let newest = 0;
+  const entries = await fs.readdir(path, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = join(path, entry.name);
+    if (entry.isDirectory()) newest = Math.max(newest, await directoryNewestMtime(entryPath));
+    else if (entry.isFile()) newest = Math.max(newest, (await fs.stat(entryPath)).mtimeMs);
+  }
+  return newest;
+}
+
+async function cleanupStaleBuildingDirectories(outputPath, warn = message => process.stderr.write(`${message}\n`)) {
+  const parent = dirname(outputPath);
+  const prefix = `${basename(outputPath)}.building-`;
+  let entries;
+  try {
+    entries = await fs.readdir(parent, { withFileTypes: true });
+  } catch (cause) {
+    if (cause.code === 'ENOENT') return;
+    throw cause;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
+    const match = entry.name.slice(prefix.length).match(/^(\d+)-(\d+)$/);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    const stalePath = join(parent, entry.name);
+    let newestMtime = 0;
+    try {
+      newestMtime = await directoryNewestMtime(stalePath);
+    } catch (cause) {
+      if (cause.code === 'ENOENT') continue;
+      warn(`[warn] unable to inspect build directory ${stalePath}: ${cause.message}`);
+      continue;
+    }
+    if (Date.now() - newestMtime < STALE_BUILDING_GRACE_MS) continue;
+    if (isProcessRunning(pid)) {
+      warn(`[warn] skipping build directory ${stalePath}; pid ${pid} is still running`);
+      continue;
+    }
+    try {
+      const size = await directorySize(stalePath);
+      await fs.rm(stalePath, { recursive: true, force: true });
+      warn(`[warn] removed stale build directory ${stalePath} (${formatBytes(size)}); pid ${pid} is not running`);
+    } catch (cause) {
+      warn(`[warn] unable to remove stale build directory ${stalePath}: ${cause.message}`);
+    }
+  }
 }
 
 function emptyStatistics() {
@@ -109,7 +223,7 @@ async function* readSignalRows(path) {
   const lines = createInterface({ input: inputStream(path), crlfDelay: Infinity });
   for await (const line of lines) {
     if (!line.trim()) continue;
-    yield line.split('\t').map(field => field.trim());
+    yield line.split('\t').map(flatString);
   }
 }
 
@@ -146,7 +260,10 @@ function parseRevision(value) {
 
 function signalShape(fields) {
   if (fields.length !== 4) return null;
-  const [workKey, editionKey, value, date] = fields;
+  const workKey = flatString(fields[0]);
+  const editionKey = flatString(fields[1]);
+  const value = flatString(fields[2]);
+  const date = flatString(fields[3]);
   if (!WORK_KEY_PATTERN.test(workKey)) return null;
   if (editionKey !== ABSENT_EDITION_KEY && !EDITION_KEY_PATTERN.test(editionKey)) return null;
   if (!SIGNAL_DATE_PATTERN.test(date)) return null;
@@ -261,7 +378,7 @@ function databaseMetadata(database) {
   });
 }
 
-function assertDatabaseMatches(database, metadata, { scanRows, progressInterval = 0, onProgress = null }) {
+function assertDatabaseMatches(database, metadata, { scanRows, progress = null }) {
   const integrity = database.prepare('PRAGMA integrity_check').all();
   if (integrity.length !== 1 || integrity[0].integrity_check !== 'ok') fail('invalid_work_index', 'Work index failed SQLite integrity validation');
   const stored = databaseMetadata(database);
@@ -276,7 +393,10 @@ function assertDatabaseMatches(database, metadata, { scanRows, progressInterval 
   if (totals.ratings !== metadata.statistics.ratings.accepted) fail('invalid_work_index', 'Rating counts do not match metadata');
   if (totals.reading_log !== metadata.statistics.readingLog.accepted) fail('invalid_work_index', 'Reading-log counts do not match metadata');
   if (!scanRows) return;
-  if (typeof onProgress === 'function') onProgress(JSON.parse(stableJson(metadata.statistics)), 'validating');
+  if (progress) {
+    setProgressPhase(progress, 'validating');
+    noteProgress(progress);
+  }
   let works = 0;
   let ratings = 0;
   let readingLog = 0;
@@ -303,9 +423,7 @@ function assertDatabaseMatches(database, metadata, { scanRows, progressInterval 
     }
     ratings += row.ratings_count;
     readingLog += row.want_to_read_count + row.currently_reading_count + row.already_read_count;
-    if (typeof onProgress === 'function' && progressInterval && works % progressInterval === 0) {
-      onProgress(JSON.parse(stableJson(metadata.statistics)), 'validating');
-    }
+    if (progress) noteProgress(progress);
   }
   if (works !== metadata.statistics.works.accepted || ratings !== metadata.statistics.ratings.accepted || readingLog !== metadata.statistics.readingLog.accepted) {
     fail('invalid_work_index', 'Scanned work aggregates do not match metadata');
@@ -348,12 +466,178 @@ async function replaceDirectory(tempPath, outputPath) {
   if (moved) await fs.rm(backup, { recursive: true, force: true });
 }
 
-function noteProgress(statistics, progressInterval, onProgress, seen) {
-  if (typeof onProgress !== 'function' || seen % progressInterval !== 0) return;
-  onProgress(JSON.parse(stableJson(statistics)));
+function createProgressContext({ statistics, progressInterval, onProgress, phase }) {
+  const startMs = Date.now();
+  return {
+    statistics,
+    progressInterval,
+    onProgress,
+    phase,
+    rows: 0,
+    startMs,
+    phaseStartMs: startMs,
+    lastReportMs: startMs,
+  };
 }
 
-async function loadWorks({ database, worksPath, statistics, batch, progressInterval, onProgress, seen }) {
+function setProgressPhase(ctx, phase) {
+  ctx.phase = phase;
+  ctx.rows = 0;
+  ctx.phaseStartMs = Date.now();
+  ctx.reportPhase = true;
+}
+
+function noteProgress(ctx) {
+  ctx.rows += 1;
+  if (typeof ctx.onProgress !== 'function') return;
+  const now = Date.now();
+  const due = ctx.reportPhase
+    || ctx.rows % ctx.progressInterval === 0
+    || now - ctx.lastReportMs >= PROGRESS_TIME_MS;
+  ctx.reportPhase = false;
+  if (!due) return;
+  ctx.lastReportMs = now;
+  const phaseElapsedMs = Math.max(now - ctx.phaseStartMs, 1);
+  ctx.onProgress(JSON.parse(stableJson(ctx.statistics)), ctx.phase, {
+    phaseRows: ctx.rows,
+    elapsedMs: now - ctx.startMs,
+    phaseElapsedMs,
+    rate: ctx.rows / (phaseElapsedMs / 1000),
+  });
+}
+
+function emptyReadingLogCounts() {
+  return { want_to_read_count: 0, currently_reading_count: 0, already_read_count: 0 };
+}
+
+async function createStageDatabase(stagePath) {
+  const { DatabaseSync } = await sqlite();
+  const stageDatabase = new DatabaseSync(stagePath);
+  stageDatabase.exec(`
+    PRAGMA journal_mode = OFF;
+    PRAGMA synchronous = OFF;
+    PRAGMA temp_store = FILE;
+    PRAGMA mmap_size = 0;
+    CREATE TABLE works_stage (
+      key TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      line_number INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      subtitle TEXT,
+      author_keys TEXT NOT NULL,
+      subjects TEXT NOT NULL,
+      cover_ids TEXT NOT NULL,
+      first_publish_date TEXT,
+      description TEXT
+    );
+  `);
+  stageDatabase.close();
+}
+
+async function loadWorks({ database, stagePath, worksPath, statistics, batch, progress }) {
+  await createStageDatabase(stagePath);
+  let attached = false;
+  try {
+    database.exec(`ATTACH DATABASE '${sqliteEscapePath(stagePath)}' AS stage`);
+    attached = true;
+    database.exec(`
+      PRAGMA stage.journal_mode = OFF;
+      PRAGMA stage.synchronous = OFF;
+      PRAGMA stage.cache_size = ${STAGE_CACHE_SIZE_KIB};
+    `);
+    const insertStage = database.prepare(`
+      INSERT INTO stage.works_stage (
+        key, revision, line_number, title, subtitle, author_keys, subjects, cover_ids,
+        first_publish_date, description
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    setProgressPhase(progress, 'works');
+    batch.begin();
+    for await (const record of readOpenLibraryBulkRecords(worksPath)) {
+      bump(statistics.works, 'input');
+      try {
+        if (record instanceof SnapshotRecordError) {
+          reject(statistics.works, record.code === 'invalid_json' ? 'invalid_json' : 'malformed_row');
+          continue;
+        }
+        if (record.type !== '/type/work') {
+          reject(statistics.works, 'wrong_type');
+          continue;
+        }
+        const key = text(record.key);
+        const revision = parseRevision(record.revision);
+        const lineNumber = record.lineNumber;
+        if (!plainObject(record.data) || !key || !WORK_KEY_PATTERN.test(key) || revision === null || !Number.isSafeInteger(lineNumber)) {
+          reject(statistics.works, 'malformed_row');
+          continue;
+        }
+        const title = text(record.data.title);
+        if (!title) {
+          reject(statistics.works, 'missing_title');
+          continue;
+        }
+        insertStage.run(
+          key,
+          revision,
+          lineNumber,
+          title,
+          text(record.data.subtitle),
+          JSON.stringify(authorKeys(record.data.authors)),
+          JSON.stringify(subjects(record.data.subjects)),
+          JSON.stringify(coverIds(record.data.covers)),
+          text(record.data.first_publish_date),
+          description(record.data.description),
+        );
+        batch.write();
+      } finally {
+        noteProgress(progress);
+      }
+    }
+    batch.commit();
+    setProgressPhase(progress, 'works-merge');
+    noteProgress(progress);
+    const stagedCount = database.prepare('SELECT COUNT(*) AS count FROM stage.works_stage').get().count;
+    batch.begin();
+    database.exec(`
+      INSERT INTO works (
+        key, revision, line_number, title, subtitle, author_keys, subjects, cover_ids,
+        first_publish_date, description, ratings_count, ratings_sum,
+        want_to_read_count, currently_reading_count, already_read_count
+      )
+      SELECT key, revision, line_number, title, subtitle, author_keys, subjects, cover_ids,
+             first_publish_date, description, 0, 0, 0, 0, 0
+        FROM stage.works_stage
+       ORDER BY key, revision, line_number
+      ON CONFLICT(key) DO UPDATE SET
+        revision = excluded.revision,
+        line_number = excluded.line_number,
+        title = excluded.title,
+        subtitle = excluded.subtitle,
+        author_keys = excluded.author_keys,
+        subjects = excluded.subjects,
+        cover_ids = excluded.cover_ids,
+        first_publish_date = excluded.first_publish_date,
+        description = excluded.description
+      WHERE excluded.revision > works.revision
+         OR (excluded.revision = works.revision AND excluded.line_number > works.line_number)
+    `);
+    batch.commit();
+    const accepted = database.prepare('SELECT COUNT(*) AS count FROM works').get().count;
+    statistics.works.accepted = accepted;
+    statistics.works.duplicates = stagedCount - accepted;
+    noteProgress(progress);
+  } finally {
+    try {
+      batch.rollback();
+      if (attached) database.exec('DETACH DATABASE stage');
+    } catch {
+      // Stage cleanup is best-effort so the original build error is preserved.
+    }
+    await fs.rm(stagePath, { force: true }).catch(() => {});
+  }
+}
+
+async function loadWorksInline({ database, worksPath, statistics, batch, progress }) {
   const findWork = database.prepare('SELECT key FROM works WHERE key = ?');
   const upsertWork = database.prepare(`
     INSERT INTO works (
@@ -374,10 +658,10 @@ async function loadWorks({ database, worksPath, statistics, batch, progressInter
     WHERE excluded.revision > works.revision
        OR (excluded.revision = works.revision AND excluded.line_number > works.line_number)
   `);
+  setProgressPhase(progress, 'works');
   batch.begin();
   for await (const record of readOpenLibraryBulkRecords(worksPath)) {
     bump(statistics.works, 'input');
-    seen.count += 1;
     try {
       if (record instanceof SnapshotRecordError) {
         reject(statistics.works, record.code === 'invalid_json' ? 'invalid_json' : 'malformed_row');
@@ -415,13 +699,13 @@ async function loadWorks({ database, worksPath, statistics, batch, progressInter
       bump(statistics.works, existing ? 'duplicates' : 'accepted');
       batch.write();
     } finally {
-      noteProgress(statistics, progressInterval, onProgress, seen.count);
+      noteProgress(progress);
     }
   }
   batch.commit();
 }
 
-async function loadRatings({ database, ratingsPath, statistics, batch, progressInterval, onProgress, seen }) {
+async function loadRatingsRowWise({ database, ratingsPath, statistics, batch, progress }) {
   const upsertRating = database.prepare(`
     INSERT INTO works (
       key, revision, line_number, title, author_keys, subjects, cover_ids,
@@ -435,10 +719,10 @@ async function loadRatings({ database, ratingsPath, statistics, batch, progressI
       ratings_count = excluded.ratings_count,
       ratings_sum = excluded.ratings_sum
   `);
+  setProgressPhase(progress, 'ratings');
   batch.begin();
   for await (const fields of readSignalRows(ratingsPath)) {
     bump(statistics.ratings, 'input');
-    seen.count += 1;
     try {
       const shape = signalShape(fields);
       if (!shape) {
@@ -454,13 +738,59 @@ async function loadRatings({ database, ratingsPath, statistics, batch, progressI
       bump(statistics.ratings, info.changes > 0 ? 'accepted' : 'orphans');
       batch.write();
     } finally {
-      noteProgress(statistics, progressInterval, onProgress, seen.count);
+      noteProgress(progress);
     }
   }
   batch.commit();
 }
 
-async function loadReadingLog({ database, readingLogPath, statistics, batch, progressInterval, onProgress, seen }) {
+async function loadRatings({ database, ratingsPath, statistics, batch, progress }) {
+  const aggregates = new Map();
+  setProgressPhase(progress, 'ratings');
+  for await (const fields of readSignalRows(ratingsPath)) {
+    bump(statistics.ratings, 'input');
+    try {
+      const shape = signalShape(fields);
+      if (!shape) {
+        reject(statistics.ratings, 'malformed_row');
+        continue;
+      }
+      const rating = ratingValue(shape.value);
+      if (rating.reason) {
+        reject(statistics.ratings, rating.reason);
+        continue;
+      }
+      const workKey = shape.workKey;
+      let aggregate = aggregates.get(workKey);
+      if (!aggregate) {
+        aggregate = { count: 0, sum: 0 };
+        aggregates.set(workKey, aggregate);
+      }
+      aggregate.count += 1;
+      aggregate.sum += rating.rating;
+    } finally {
+      noteProgress(progress);
+    }
+  }
+  const applyRating = database.prepare(`
+    UPDATE works
+       SET ratings_count = ratings_count + ?,
+           ratings_sum = ratings_sum + ?
+     WHERE key = ?
+  `);
+  setProgressPhase(progress, 'ratings-apply');
+  batch.begin();
+  for (const workKey of [...aggregates.keys()].sort()) {
+    const aggregate = aggregates.get(workKey);
+    const info = applyRating.run(aggregate.count, aggregate.sum, workKey);
+    bumpBy(statistics.ratings, info.changes > 0 ? 'accepted' : 'orphans', aggregate.count);
+    batch.write();
+    noteProgress(progress);
+  }
+  batch.commit();
+}
+
+async function loadReadingLogRowWise({ database, readingLogPath, statistics, batch, progress }) {
   const upserts = new Map(READING_LOG_SHELVES.map(([shelf, column]) => [shelf, database.prepare(`
     INSERT INTO works (
       key, revision, line_number, title, author_keys, subjects, cover_ids,
@@ -476,10 +806,10 @@ async function loadReadingLog({ database, readingLogPath, statistics, batch, pro
     ON CONFLICT(key) DO UPDATE SET
       ${column} = excluded.${column}
   `)]));
+  setProgressPhase(progress, 'reading-log');
   batch.begin();
   for await (const fields of readSignalRows(readingLogPath)) {
     bump(statistics.readingLog, 'input');
-    seen.count += 1;
     try {
       const shape = signalShape(fields);
       if (!shape) {
@@ -495,13 +825,78 @@ async function loadReadingLog({ database, readingLogPath, statistics, batch, pro
       bump(statistics.readingLog, info.changes > 0 ? 'accepted' : 'orphans');
       batch.write();
     } finally {
-      noteProgress(statistics, progressInterval, onProgress, seen.count);
+      noteProgress(progress);
     }
   }
   batch.commit();
 }
 
-export async function buildOpenLibraryWorkIndex({
+async function loadReadingLog({ database, readingLogPath, statistics, batch, progress }) {
+  const shelfColumns = new Map(READING_LOG_SHELVES);
+  const aggregates = new Map();
+  setProgressPhase(progress, 'reading-log');
+  for await (const fields of readSignalRows(readingLogPath)) {
+    bump(statistics.readingLog, 'input');
+    try {
+      const shape = signalShape(fields);
+      if (!shape) {
+        reject(statistics.readingLog, 'malformed_row');
+        continue;
+      }
+      const column = shelfColumns.get(shape.value);
+      if (!column) {
+        reject(statistics.readingLog, 'unknown_shelf');
+        continue;
+      }
+      const workKey = shape.workKey;
+      let aggregate = aggregates.get(workKey);
+      if (!aggregate) {
+        aggregate = emptyReadingLogCounts();
+        aggregates.set(workKey, aggregate);
+      }
+      aggregate[column] += 1;
+    } finally {
+      noteProgress(progress);
+    }
+  }
+  const applyReadingLog = database.prepare(`
+    UPDATE works
+       SET want_to_read_count = want_to_read_count + ?,
+           currently_reading_count = currently_reading_count + ?,
+           already_read_count = already_read_count + ?
+     WHERE key = ?
+  `);
+  setProgressPhase(progress, 'reading-log-apply');
+  batch.begin();
+  for (const workKey of [...aggregates.keys()].sort()) {
+    const aggregate = aggregates.get(workKey);
+    const eventCount = aggregate.want_to_read_count + aggregate.currently_reading_count + aggregate.already_read_count;
+    const info = applyReadingLog.run(
+      aggregate.want_to_read_count,
+      aggregate.currently_reading_count,
+      aggregate.already_read_count,
+      workKey,
+    );
+    bumpBy(statistics.readingLog, info.changes > 0 ? 'accepted' : 'orphans', eventCount);
+    batch.write();
+    noteProgress(progress);
+  }
+  batch.commit();
+}
+
+const DEFAULT_WORK_INDEX_LOADERS = {
+  loadWorks,
+  loadRatings,
+  loadReadingLog,
+};
+
+export const REFERENCE_WORK_INDEX_LOADERS = {
+  loadWorks: loadWorksInline,
+  loadRatings: loadRatingsRowWise,
+  loadReadingLog: loadReadingLogRowWise,
+};
+
+export async function buildOpenLibraryWorkIndexCore({
   worksPath,
   ratingsPath,
   readingLogPath,
@@ -510,21 +905,25 @@ export async function buildOpenLibraryWorkIndex({
   generatedAt = new Date().toISOString(),
   batchSize = DEFAULT_BATCH_SIZE,
   progressInterval = DEFAULT_PROGRESS_INTERVAL,
+  cacheMb = DEFAULT_CACHE_MB,
   onProgress = null,
-}) {
+}, loaders = DEFAULT_WORK_INDEX_LOADERS) {
   snapshotId = text(snapshotId);
   if (!snapshotId) fail('invalid_argument', 'snapshotId is required');
   if (!worksPath || !ratingsPath || !readingLogPath || !outputPath) fail('invalid_argument', 'worksPath, ratingsPath, readingLogPath, and outputPath are required');
   if (typeof generatedAt !== 'string' || Number.isNaN(Date.parse(generatedAt))) fail('invalid_argument', 'generatedAt must be an ISO timestamp');
   batchSize = positiveInteger(batchSize, 'batchSize');
   progressInterval = positiveInteger(progressInterval, 'progressInterval');
+  cacheMb = parseCacheMegabytes(cacheMb);
   outputPath = resolve(outputPath);
   worksPath = resolve(worksPath);
   ratingsPath = resolve(ratingsPath);
   readingLogPath = resolve(readingLogPath);
   const tempPath = `${outputPath}.building-${process.pid}-${Date.now()}`;
   const statistics = emptyStatistics();
-  const seen = { count: 0 };
+  const progress = createProgressContext({ statistics, progressInterval, onProgress, phase: 'works' });
+  const cacheSizeKiB = -cacheMb * 1024;
+  const stagePath = join(tempPath, STAGE_DB_FILE);
   const { DatabaseSync } = await sqlite();
   let database = null;
   let transactionOpen = false;
@@ -548,9 +947,16 @@ export async function buildOpenLibraryWorkIndex({
       transactionOpen = false;
       pending = 0;
     },
+    rollback() {
+      if (!transactionOpen) return;
+      try { database.exec('ROLLBACK;'); } catch { /* rollback is best-effort */ }
+      transactionOpen = false;
+      pending = 0;
+    },
   };
   try {
     await fs.mkdir(dirname(outputPath), { recursive: true });
+    await cleanupStaleBuildingDirectories(outputPath);
     await assertReadableInput(worksPath);
     await assertReadableInput(ratingsPath);
     await assertReadableInput(readingLogPath);
@@ -561,7 +967,8 @@ export async function buildOpenLibraryWorkIndex({
       PRAGMA journal_mode = OFF;
       PRAGMA synchronous = OFF;
       PRAGMA temp_store = FILE;
-      PRAGMA cache_size = -32768;
+      PRAGMA cache_size = ${cacheSizeKiB};
+      PRAGMA mmap_size = 0;
       PRAGMA locking_mode = EXCLUSIVE;
       CREATE TABLE metadata (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -591,10 +998,10 @@ export async function buildOpenLibraryWorkIndex({
       ) WITHOUT ROWID;
       PRAGMA user_version = ${OPEN_LIBRARY_WORK_INDEX_VERSION};
     `);
-    const phase = { database, statistics, batch, progressInterval, onProgress, seen };
-    await loadWorks({ ...phase, worksPath });
-    await loadRatings({ ...phase, ratingsPath });
-    await loadReadingLog({ ...phase, readingLogPath });
+    const phase = { database, statistics, batch, progress, stagePath };
+    await loaders.loadWorks({ ...phase, worksPath });
+    await loaders.loadRatings({ ...phase, ratingsPath });
+    await loaders.loadReadingLog({ ...phase, readingLogPath });
     database.exec('PRAGMA locking_mode = NORMAL; PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; BEGIN IMMEDIATE;');
     transactionOpen = true;
     database.prepare(`
@@ -629,7 +1036,7 @@ export async function buildOpenLibraryWorkIndex({
     const written = await readWorkIndexMetadata(tempPath);
     const { DatabaseSync: ReadDatabase } = await sqlite();
     const validationDatabase = new ReadDatabase(join(tempPath, WORK_INDEX_FILE), { readOnly: true });
-    try { assertDatabaseMatches(validationDatabase, written, { scanRows: true, progressInterval, onProgress }); }
+    try { assertDatabaseMatches(validationDatabase, written, { scanRows: true, progress }); }
     finally { validationDatabase.close(); }
     await replaceDirectory(tempPath, outputPath);
     return { ...metadata, outputPath };
@@ -645,6 +1052,10 @@ export async function buildOpenLibraryWorkIndex({
     await fs.rm(tempPath, { recursive: true, force: true }).catch(() => {});
     throw cause;
   }
+}
+
+export async function buildOpenLibraryWorkIndex(options) {
+  return buildOpenLibraryWorkIndexCore(options);
 }
 
 export async function createOpenLibraryWorkLookup({ indexPath, snapshotId }) {

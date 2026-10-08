@@ -1,6 +1,23 @@
 import { resolve } from 'node:path';
 import { buildOpenLibraryWorkIndex } from './catalog/open-library-works.js';
 
+function formatDuration(milliseconds) {
+  const totalSeconds = Math.max(Math.floor(milliseconds / 1000), 0);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function formatRate(rate) {
+  if (!Number.isFinite(rate) || rate <= 0) return '0/s';
+  if (rate >= 1_000_000) return `${(rate / 1_000_000).toFixed(2)}M/s`;
+  if (rate >= 1_000) return `${(rate / 1_000).toFixed(1)}k/s`;
+  return `${Math.round(rate)}/s`;
+}
+
 function parseArguments(args) {
   const options = {
     works: null,
@@ -10,10 +27,11 @@ function parseArguments(args) {
     snapshotId: null,
     batchSize: undefined,
     progressInterval: undefined,
+    cacheMb: undefined,
   };
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
-    if (['--works', '--ratings', '--reading-log', '--output', '--snapshot-id', '--batch-size', '--progress-interval'].includes(argument)) {
+    if (['--works', '--ratings', '--reading-log', '--output', '--snapshot-id', '--batch-size', '--progress-interval', '--cache-mb'].includes(argument)) {
       const value = args[++index];
       if (!value) throw new Error(`${argument} requires a value`);
       if (argument === '--snapshot-id') {
@@ -26,6 +44,13 @@ function parseArguments(args) {
         const parsed = Number(value);
         if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error('--progress-interval must be a positive integer');
         options.progressInterval = parsed;
+      } else if (argument === '--cache-mb') {
+        if (!/^[0-9]+$/.test(value)) throw new Error('--cache-mb must be a plain decimal integer');
+        const parsed = Number(value);
+        if (!Number.isSafeInteger(parsed) || parsed < 64 || parsed > 16384) {
+          throw new Error('--cache-mb must be an integer from 64 through 16384');
+        }
+        options.cacheMb = parsed;
       } else {
         const key = argument.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
         options[key] = resolve(value);
@@ -42,9 +67,11 @@ function parseArguments(args) {
 
 try {
   const options = parseArguments(process.argv.slice(2));
-  const onProgress = (statistics, phase) => {
-    const stage = phase === 'validating' ? 'validating | ' : '';
-    process.stderr.write(`[progress] ${stage}works ${statistics.works.input} | ratings ${statistics.ratings.input} | reading-log ${statistics.readingLog.input}\n`);
+  const onProgress = (statistics, phase, details = {}) => {
+    const phaseRows = details.phaseRows ?? 0;
+    const elapsed = formatDuration(details.elapsedMs ?? 0);
+    const rate = formatRate(details.rate ?? 0);
+    process.stderr.write(`[progress] phase=${phase} rows=${phaseRows} rate=${rate} elapsed=${elapsed} | works ${statistics.works.input} | ratings ${statistics.ratings.input} | reading-log ${statistics.readingLog.input}\n`);
   };
   const result = await buildOpenLibraryWorkIndex({
     worksPath: options.works,
@@ -54,6 +81,7 @@ try {
     snapshotId: options.snapshotId,
     batchSize: options.batchSize,
     progressInterval: options.progressInterval,
+    cacheMb: options.cacheMb,
     onProgress,
   });
   console.log(JSON.stringify(result));
