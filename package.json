@@ -33,6 +33,7 @@
     "catalog:dedup-check": "node scripts/catalog-dedup-check.js",
     "catalog:enrich": "node --experimental-sqlite scripts/catalog-enrich.js",
     "catalog:language-check": "node scripts/catalog-language-check.js",
+    "catalog:bridge": "node --experimental-sqlite scripts/catalog-bridge.js",
     "release:readiness": "node scripts/release-data-readiness.js",
     "release:prh-sync": "node scripts/sync-prh-releases.js",
     "test": "node --experimental-sqlite --import ./tests/setup.js --test --test-concurrency=1 tests/*.test.js",

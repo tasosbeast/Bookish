@@ -1,10 +1,10 @@
 # Current Task
 
-Resolved-artifact bridge.
+Resolved-artifact bridge (implemented; verification and review pending).
 
-The remaining roadmap item is a bridge from the language-checked / dedup-checked works import path to the existing resolved-artifact importer. Next up after that lands: the first real pipeline run (enrich → language-check → dedup-check → import dry-run) on production Open Library data.
+The offline `catalog:bridge` now selects verified English ISBN-13 editions from the language-checked / dedup-checked works path and writes validated v2 artifacts for the existing resolved importer. Next up after that lands: the first real pipeline run (enrich → language-check → dedup-check → bridge → resolved import dry-run) on production Open Library dump files. Database verification requires a separately authorized safe target; do not use production as a test database.
 
-Acceptance: `npm run lint` with 0 warnings, `npm test`, integration tests, and `npm test --prefix frontend` green. No database access, migrations, or schema changes.
+Bridge verification is recorded in its pull request. Acceptance remains `npm run lint` with 0 warnings, `npm test`, integration tests on a dedicated test database, and `npm test --prefix frontend` green. No migrations or schema changes.
 
 ## Recorded for later
 
@@ -22,12 +22,12 @@ Existing rules still apply: non-books rejected via `pilotDisqualificationReason`
 
 1. Candidate scoring and selection (`catalog:discover --limit N`) — done
 2. Read-only dedup against the database — done
-3. A resolved-artifact bridge — current task
+3. A resolved-artifact bridge — implemented, awaiting review
 4. A batched, idempotent `--dry-run`/`--apply` import — done
 5. Offline enrich from discover to dedup-check (`catalog:enrich`) — done
 6. Offline English-language check (`catalog:language-check`) — done
 
-Catalog pipeline cleanup is in review (PR #38).
+Catalog pipeline cleanup is done (PR #38, merged as 7caec6b).
 catalog:language-check is done (#37, merged as 989a1d2).
 catalog:import is done (#36, merged as 19f07b2).
 catalog:enrich is done (#35, merged as aee1a45).
