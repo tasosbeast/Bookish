@@ -174,6 +174,9 @@ function candidateEntries(candidates) {
     entries.set(candidate.workKey, {
       isbns: new Set(),
       highestIsbn: '',
+      englishIsbns: new Map(),
+      workTitle: candidate.title,
+      authorKeys: new Set(candidate.authorKeys),
       truncated: false,
       primaryAuthor: null,
     });
@@ -222,6 +225,59 @@ function addIsbn(entry, isbn, counts) {
   entry.isbns.add(isbn);
   entry.highestIsbn = highestIsbn(entry.isbns);
   noteTruncation(entry, counts);
+}
+
+// A bounded, deterministic priority queue of ISBNs from explicit English editions.
+// Edition-level completeness helps preserve usable contenders for bridge scoring;
+// ISBN string is only a deterministic tie-breaker.
+function englishEditionQuality(data, entry) {
+  let score = 0;
+  if (typeof data.title === 'string' && data.title.trim()) {
+    score += 1;
+    if (data.title.trim().toLowerCase().replace(/\s+/g, ' ')
+      === entry.workTitle.trim().toLowerCase().replace(/\s+/g, ' ')) score += 2;
+  }
+  if (Array.isArray(data.authors) && data.authors.some(a => entry.authorKeys.has(a?.key))) score += 4;
+  if (Array.isArray(data.covers) && data.covers.some(id => Number.isSafeInteger(id) && id > 0)) score += 2;
+  if (typeof data.publish_date === 'string' && /\b(?:1[5-9]\d\d|20\d\d|2100)\b/.test(data.publish_date)) score += 1;
+  return score;
+}
+
+function isHigherRanked(isbn, score, otherIsbn, otherScore) {
+  return score > otherScore || (score === otherScore && isbn < otherIsbn);
+}
+
+function addEnglishIsbn(entry, isbn, counts, score) {
+  const kept = entry.englishIsbns;
+  if (kept.has(isbn)) {
+    if (score > kept.get(isbn)) kept.set(isbn, score);
+    return;
+  }
+  if (kept.size < CATALOG_ENRICH_MAX_ISBNS) {
+    kept.set(isbn, score);
+    return;
+  }
+  noteTruncation(entry, counts);
+  let worstIsbn = null;
+  let worstScore = Infinity;
+  for (const [key, value] of kept) {
+    if (worstIsbn === null || isHigherRanked(worstIsbn, worstScore, key, value)) {
+      worstIsbn = key;
+      worstScore = value;
+    }
+  }
+  if (isHigherRanked(isbn, score, worstIsbn, worstScore)) {
+    kept.delete(worstIsbn);
+    kept.set(isbn, score);
+  }
+}
+
+function hasExplicitEnglishLanguage(languages) {
+  return Array.isArray(languages) && languages.some(item => {
+    const value = typeof item === 'string' ? item : item?.key;
+    return typeof value === 'string'
+      && value.trim().toLowerCase().replace(/^\/languages\//, '') === 'eng';
+  });
 }
 
 function authorLookupBuildCommand(authorsIndex, snapshotId) {
@@ -274,10 +330,14 @@ async function scanEditions(editionsPath, entries, counts, progressInterval, onP
       if (!matched.length) continue;
       bump(counts, 'matchedEditions');
       const isbns = isbn13Values(record.data);
+      const english = hasExplicitEnglishLanguage(record.data.languages);
       addCount(counts, 'badChecksums', isbns.invalid);
       for (const workKey of matched) {
         const entry = entries.get(workKey);
-        for (const isbn of isbns.values) addIsbn(entry, isbn, counts);
+        for (const isbn of isbns.values) {
+          addIsbn(entry, isbn, counts);
+          if (english) addEnglishIsbn(entry, isbn, counts, englishEditionQuality(record.data, entry));
+        }
       }
     } finally {
       noteProgress(counts, progressInterval, onProgress);
@@ -298,7 +358,7 @@ function enrichedArtifact(artifact, entries) {
       const entry = entries.get(candidate.workKey);
       return {
         ...candidate,
-        isbns: [...entry.isbns].sort(),
+        isbns: [...(entry.englishIsbns.size ? entry.englishIsbns.keys() : entry.isbns)].sort(),
         primaryAuthor: entry.primaryAuthor,
       };
     }),

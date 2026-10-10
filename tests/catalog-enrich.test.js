@@ -621,3 +621,64 @@ test('enrich source does not reference Prisma, the database URL, or fetch', asyn
     assert.equal(source.includes('fetch('), false);
   }
 });
+
+test('enrich prioritizes verified English ISBNs over lower non-English ISBNs under the 200 cap', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const other = Array.from({ length: 210 }, (_, index) => editionLine(`/books/OL${index + 1000}M`, {
+    works: [{ key: '/works/OL100W' }],
+    languages: [{ key: '/languages/spa' }],
+    isbn_13: [isbn13For(index + 1000)],
+  }));
+  const english = Array.from({ length: 3 }, (_, index) => editionLine(`/books/OL${index + 5000}M`, {
+    works: [{ key: '/works/OL100W' }],
+    languages: [{ key: '/languages/eng' }],
+    isbn_13: [isbn13For(index + 5000)],
+  }));
+  const authors = [{ key: '/authors/OL1A', name: 'Jane Austen' }];
+  const authorIndex = await writeAuthorIndex(directory, authors);
+  const run = (lines, label) => enrichFixture({
+    directory,
+    candidates: [discoverCandidate()],
+    editions: lines.join(''),
+    authorsIndexPath: authorIndex,
+    outputName: label + '.json',
+    editionsName: label + '.txt.gz',
+  });
+  const forward = await run([...other, ...english], 'mixed-forward');
+  const reverse = await run([...english, ...other].reverse(), 'mixed-reverse');
+  const expected = [isbn13For(5000), isbn13For(5001), isbn13For(5002)];
+  assert.deepEqual(forward.artifact.candidates[0].isbns, expected);
+  assert.deepEqual(reverse.artifact.candidates[0].isbns, expected);
+  assert.equal(forward.worksIsbnTruncated, 1);
+  assert.equal(reverse.worksIsbnTruncated, 1);
+});
+
+test('enrich quality-ranks English ISBNs before applying the 200 cap', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const ordinary = Array.from({ length: 200 }, (_, index) => editionLine(`/books/OL${index + 1000}M`, {
+    works: [{ key: '/works/OL100W' }],
+    languages: [{ key: '/languages/eng' }],
+    isbn_13: [isbn13For(index + 1000)],
+    title: 'Generic version',
+  }));
+  const highQuality = editionLine('/books/OLBESTM', {
+    works: [{ key: '/works/OL100W' }],
+    languages: [{ key: '/languages/eng' }],
+    isbn_13: [isbn13For(9000)],
+    title: 'Sample Work',
+    authors: [{ key: '/authors/OL1A' }],
+    publish_date: '2021',
+    covers: [1234],
+  });
+  const forward = await enrichFixture({
+    directory, candidates: [discoverCandidate({ title: 'Sample Work' })],
+    editions: [...ordinary, highQuality].join(''),
+    authors: [{ key: '/authors/OL1A', name: 'Jane Austen' }],
+  });
+  const chosen = forward.artifact.candidates[0].isbns;
+  assert.equal(chosen.length, 200);
+  assert.equal(chosen.includes(isbn13For(9000)), true);
+  assert.equal(chosen.includes(isbn13For(1199)), false);
+});
