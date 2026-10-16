@@ -622,7 +622,7 @@ test('enrich source does not reference Prisma, the database URL, or fetch', asyn
   }
 });
 
-test('enrich prioritizes verified English ISBNs over lower non-English ISBNs under the 200 cap', async (t) => {
+test('enrich prioritizes verified English ISBNs and fills remaining capacity with lowest other ISBNs', async (t) => {
   const directory = await temporaryDirectory();
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const other = Array.from({ length: 210 }, (_, index) => editionLine(`/books/OL${index + 1000}M`, {
@@ -647,7 +647,10 @@ test('enrich prioritizes verified English ISBNs over lower non-English ISBNs und
   });
   const forward = await run([...other, ...english], 'mixed-forward');
   const reverse = await run([...english, ...other].reverse(), 'mixed-reverse');
-  const expected = [isbn13For(5000), isbn13For(5001), isbn13For(5002)];
+  const expected = [
+    ...Array.from({ length: 197 }, (_, index) => isbn13For(index + 1000)),
+    isbn13For(5000), isbn13For(5001), isbn13For(5002),
+  ].sort();
   assert.deepEqual(forward.artifact.candidates[0].isbns, expected);
   assert.deepEqual(reverse.artifact.candidates[0].isbns, expected);
   assert.equal(forward.worksIsbnTruncated, 1);
@@ -681,4 +684,155 @@ test('enrich quality-ranks English ISBNs before applying the 200 cap', async (t)
   assert.equal(chosen.length, 200);
   assert.equal(chosen.includes(isbn13For(9000)), true);
   assert.equal(chosen.includes(isbn13For(1199)), false);
+});
+
+function englishEdition(key, isbnIndex, extra = {}) {
+  return editionLine(key, {
+    works: [{ key: '/works/OL100W' }],
+    languages: [{ key: '/languages/eng' }],
+    isbn_13: [isbn13For(isbnIndex)],
+    ...extra,
+  });
+}
+
+const ordinaryEnglish = () => Array.from({ length: 200 }, (_, index) => englishEdition(
+  `/books/OL${index + 1000}M`,
+  index + 1000,
+  { title: 'Generic version' },
+));
+const AUSTEN = [{ key: '/authors/OL1A', name: 'Jane Austen' }];
+
+test('enrich: English audiobooks and other disqualified editions cannot evict eligible English print editions', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const rich = { title: 'Sample Work', authors: [{ key: '/authors/OL1A' }], publish_date: '2021', covers: [1] };
+  const disqualified = [
+    englishEdition('/books/OLAUDIOM', 9000, { ...rich, physical_format: 'Audiobook' }),
+    englishEdition('/books/OLTITLEAUDIOM', 9001, { ...rich, title: 'Sample Work (audiobook)' }),
+    englishEdition('/books/OLSUBAUDIOM', 9002, { ...rich, subtitle: 'Spoken Word' }),
+  ];
+  const result = await enrichFixture({
+    directory,
+    candidates: [discoverCandidate({ title: 'Sample Work' })],
+    editions: [...ordinaryEnglish(), ...disqualified].join(''),
+    authors: AUSTEN,
+  });
+  const chosen = result.artifact.candidates[0].isbns;
+  assert.deepEqual(chosen, Array.from({ length: 200 }, (_, index) => isbn13For(index + 1000)));
+  for (const index of [9000, 9001, 9002]) assert.equal(chosen.includes(isbn13For(index)), false);
+});
+
+test('enrich: an English edition that is disqualified is still used when no eligible English edition exists', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const result = await enrichFixture({
+    directory,
+    candidates: [discoverCandidate()],
+    editions: [
+      englishEdition('/books/OLAUDIOM', 9000, { physical_format: 'Audiobook' }),
+      editionLine('/books/OLSPAM', {
+        works: [{ key: '/works/OL100W' }],
+        languages: [{ key: '/languages/spa' }],
+        isbn_13: [isbn13For(1)],
+      }),
+    ].join(''),
+    authors: AUSTEN,
+  });
+  assert.deepEqual(result.artifact.candidates[0].isbns, [isbn13For(1), isbn13For(9000)].sort());
+  assert.equal(result.worksIsbnTruncated, 0);
+});
+
+test('enrich: equivalent title punctuation and formatting normalizes consistently', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const variants = ['The Sample-Work!', '  sample   WORK  ', 'Sample: Work'];
+  const editions = variants.map((title, index) => englishEdition(`/books/OLVARIANT${index}M`, 9000 + index, { title }));
+  const result = await enrichFixture({
+    directory,
+    candidates: [discoverCandidate({ title: 'Sample Work' })],
+    editions: [...ordinaryEnglish(), ...editions].join(''),
+    authors: AUSTEN,
+  });
+  const chosen = result.artifact.candidates[0].isbns;
+  assert.equal(chosen.length, 200);
+  for (const index of [9000, 9001, 9002]) assert.equal(chosen.includes(isbn13For(index)), true);
+  for (const index of [1197, 1198, 1199]) assert.equal(chosen.includes(isbn13For(index)), false);
+});
+
+test('enrich: other-language and unknown-language ISBN evidence is preserved when capacity remains', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const lines = [
+    englishEdition('/books/OLENG1M', 5000),
+    englishEdition('/books/OLENG2M', 5001),
+    editionLine('/books/OLSPAM', { works: [{ key: '/works/OL100W' }], languages: [{ key: '/languages/spa' }], isbn_13: [isbn13For(10)] }),
+    editionLine('/books/OLUNKNOWNM', { works: [{ key: '/works/OL100W' }], isbn_13: [isbn13For(11)] }),
+  ];
+  const result = await enrichFixture({ directory, candidates: [discoverCandidate()], editions: lines.join(''), authors: AUSTEN });
+  assert.deepEqual(
+    result.artifact.candidates[0].isbns,
+    [isbn13For(5000), isbn13For(5001), isbn13For(10), isbn13For(11)].sort(),
+  );
+  assert.equal(result.worksIsbnTruncated, 0);
+});
+
+test('enrich: reversing a full editions dump yields the same mixed English/other selection', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const authorsIndexPath = await writeAuthorIndex(directory, AUSTEN);
+  const lines = [
+    ...Array.from({ length: 5 }, (_, index) => englishEdition(`/books/OLENG${index}M`, 5000 + index, { title: 'Sample Work' })),
+    englishEdition('/books/OLAUDIOM', 1, { physical_format: 'Audiobook' }),
+    ...Array.from({ length: 150 }, (_, index) => editionLine(`/books/OLSPA${index}M`, {
+      works: [{ key: '/works/OL100W' }], languages: [{ key: '/languages/spa' }], isbn_13: [isbn13For(100 + index)],
+    })),
+    ...Array.from({ length: 100 }, (_, index) => editionLine(`/books/OLUNK${index}M`, {
+      works: [{ key: '/works/OL100W' }], isbn_13: [isbn13For(300 + index)],
+    })),
+  ];
+  const run = (ordered, label) => enrichFixture({
+    directory,
+    candidates: [discoverCandidate({ title: 'Sample Work' })],
+    editions: ordered.join(''),
+    authorsIndexPath,
+    outputName: `${label}.json`,
+    editionsName: `${label}.txt.gz`,
+  });
+  const forward = await run(lines, 'full-forward');
+  const reverse = await run(lines.slice().reverse(), 'full-reverse');
+  const chosen = forward.artifact.candidates[0].isbns;
+  assert.deepEqual(reverse.artifact.candidates[0].isbns, chosen);
+  assert.equal(chosen.length, 200);
+  for (let index = 0; index < 5; index += 1) assert.equal(chosen.includes(isbn13For(5000 + index)), true);
+  assert.equal(chosen.includes(isbn13For(1)), true);
+  assert.equal(chosen.includes(isbn13For(100)), true);
+  assert.equal(chosen.includes(isbn13For(100 + 149)), true);
+  assert.equal(chosen.includes(isbn13For(300 + 99)), false);
+  assert.equal(forward.worksIsbnTruncated, 1);
+  assert.equal(reverse.worksIsbnTruncated, 1);
+});
+
+test('enrich: a duplicate ISBN keeps its best observed quality score regardless of record order', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const authorsIndexPath = await writeAuthorIndex(directory, AUSTEN);
+  const low = englishEdition('/books/OLLOWM', 9000, { title: 'Other title' });
+  const high = englishEdition('/books/OLHIGHM', 9000, {
+    title: 'Sample Work', authors: [{ key: '/authors/OL1A' }], covers: [1], publish_date: '2020',
+  });
+  const run = (ordered, label) => enrichFixture({
+    directory,
+    candidates: [discoverCandidate({ title: 'Sample Work' })],
+    editions: ordered.join(''),
+    authorsIndexPath,
+    outputName: `${label}.json`,
+    editionsName: `${label}.txt.gz`,
+  });
+  const lowFirst = await run([low, ...ordinaryEnglish(), high], 'dup-low-first');
+  const highFirst = await run([high, ...ordinaryEnglish(), low], 'dup-high-first');
+  for (const result of [lowFirst, highFirst]) {
+    assert.equal(result.artifact.candidates[0].isbns.length, 200);
+    assert.equal(result.artifact.candidates[0].isbns.includes(isbn13For(9000)), true);
+  }
+  assert.deepEqual(lowFirst.artifact.candidates[0].isbns, highFirst.artifact.candidates[0].isbns);
 });

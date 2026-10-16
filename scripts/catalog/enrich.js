@@ -5,13 +5,14 @@ import { writeFileAtomic } from './atomic-write.js';
 import { CatalogContractError } from './contracts.js';
 import { validateDiscoverArtifact } from './discover.js';
 import { stableJson } from './external-sort.js';
-import { normalizeIsbn13 } from './normalize.js';
+import { normalizeIsbn13, normalizeTitle } from './normalize.js';
 import {
   createOpenLibraryAuthorLookup,
   isbn13Values,
   readAuthorIndexMetadata,
   readOpenLibraryBulkRecords,
 } from './open-library-bulk.js';
+import { pilotDisqualificationReason } from './pilot-planner.js';
 import { SnapshotRecordError } from './snapshot-reader.js';
 
 export const CATALOG_ENRICH_MAX_ISBNS = 200;
@@ -234,8 +235,8 @@ function englishEditionQuality(data, entry) {
   let score = 0;
   if (typeof data.title === 'string' && data.title.trim()) {
     score += 1;
-    if (data.title.trim().toLowerCase().replace(/\s+/g, ' ')
-      === entry.workTitle.trim().toLowerCase().replace(/\s+/g, ' ')) score += 2;
+    const editionTitle = normalizeTitle(data.title);
+    if (editionTitle && editionTitle === normalizeTitle(entry.workTitle)) score += 2;
   }
   if (Array.isArray(data.authors) && data.authors.some(a => entry.authorKeys.has(a?.key))) score += 4;
   if (Array.isArray(data.covers) && data.covers.some(id => Number.isSafeInteger(id) && id > 0)) score += 2;
@@ -330,7 +331,12 @@ async function scanEditions(editionsPath, entries, counts, progressInterval, onP
       if (!matched.length) continue;
       bump(counts, 'matchedEditions');
       const isbns = isbn13Values(record.data);
-      const english = hasExplicitEnglishLanguage(record.data.languages);
+      const english = hasExplicitEnglishLanguage(record.data.languages)
+        && !pilotDisqualificationReason({
+          format: record.data.physical_format,
+          title: record.data.title,
+          subtitle: record.data.subtitle,
+        });
       addCount(counts, 'badChecksums', isbns.invalid);
       for (const workKey of matched) {
         const entry = entries.get(workKey);
@@ -343,6 +349,17 @@ async function scanEditions(editionsPath, entries, counts, progressInterval, onP
       noteProgress(counts, progressInterval, onProgress);
     }
   }
+}
+
+// Eligible English ISBNs first; remaining capacity is filled with the lowest other valid ISBN-13s.
+// entry.isbns holds the lowest 200 overall, so it always contains enough of the lowest others.
+function selectIsbns(entry) {
+  const selected = new Set(entry.englishIsbns.keys());
+  for (const isbn of [...entry.isbns].sort()) {
+    if (selected.size >= CATALOG_ENRICH_MAX_ISBNS) break;
+    selected.add(isbn);
+  }
+  return [...selected].sort();
 }
 
 function enrichedArtifact(artifact, entries) {
@@ -358,7 +375,7 @@ function enrichedArtifact(artifact, entries) {
       const entry = entries.get(candidate.workKey);
       return {
         ...candidate,
-        isbns: [...(entry.englishIsbns.size ? entry.englishIsbns.keys() : entry.isbns)].sort(),
+        isbns: selectIsbns(entry),
         primaryAuthor: entry.primaryAuthor,
       };
     }),
