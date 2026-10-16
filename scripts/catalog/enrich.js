@@ -9,6 +9,7 @@ import { normalizeIsbn13, normalizeTitle } from './normalize.js';
 import {
   createOpenLibraryAuthorLookup,
   isbn13Values,
+  normalizeFormat,
   readAuthorIndexMetadata,
   readOpenLibraryBulkRecords,
 } from './open-library-bulk.js';
@@ -177,7 +178,7 @@ function candidateEntries(candidates) {
       highestIsbn: '',
       englishIsbns: new Map(),
       workTitle: candidate.title,
-      authorKeys: new Set(candidate.authorKeys),
+      primaryAuthorKey: text(candidate.authorKeys?.[0]),
       truncated: false,
       primaryAuthor: null,
     });
@@ -228,6 +229,15 @@ function addIsbn(entry, isbn, counts) {
   noteTruncation(entry, counts);
 }
 
+function firstAuthorKey(authors) {
+  if (!Array.isArray(authors)) return null;
+  for (const item of authors) {
+    const key = text(item?.key ?? item?.author?.key);
+    if (key) return key;
+  }
+  return null;
+}
+
 // A bounded, deterministic priority queue of ISBNs from explicit English editions.
 // Edition-level completeness helps preserve usable contenders for bridge scoring;
 // ISBN string is only a deterministic tie-breaker.
@@ -238,7 +248,8 @@ function englishEditionQuality(data, entry) {
     const editionTitle = normalizeTitle(data.title);
     if (editionTitle && editionTitle === normalizeTitle(entry.workTitle)) score += 2;
   }
-  if (Array.isArray(data.authors) && data.authors.some(a => entry.authorKeys.has(a?.key))) score += 4;
+  const editionAuthorKey = firstAuthorKey(data.authors);
+  if (entry.primaryAuthorKey && editionAuthorKey === entry.primaryAuthorKey) score += 4;
   if (Array.isArray(data.covers) && data.covers.some(id => Number.isSafeInteger(id) && id > 0)) score += 2;
   if (typeof data.publish_date === 'string' && /\b(?:1[5-9]\d\d|20\d\d|2100)\b/.test(data.publish_date)) score += 1;
   return score;
@@ -279,6 +290,17 @@ function hasExplicitEnglishLanguage(languages) {
     return typeof value === 'string'
       && value.trim().toLowerCase().replace(/^\/languages\//, '') === 'eng';
   });
+}
+
+function isDisqualifiedEnglishEdition(data) {
+  const title = data?.title;
+  const subtitle = data?.subtitle;
+  const rawFormat = data?.physical_format;
+  const normalizedFormat = normalizeFormat(rawFormat);
+  return Boolean(
+    pilotDisqualificationReason({ title, subtitle, format: normalizedFormat })
+    || pilotDisqualificationReason({ title, subtitle, format: rawFormat })
+  );
 }
 
 function authorLookupBuildCommand(authorsIndex, snapshotId) {
@@ -332,11 +354,7 @@ async function scanEditions(editionsPath, entries, counts, progressInterval, onP
       bump(counts, 'matchedEditions');
       const isbns = isbn13Values(record.data);
       const english = hasExplicitEnglishLanguage(record.data.languages)
-        && !pilotDisqualificationReason({
-          format: record.data.physical_format,
-          title: record.data.title,
-          subtitle: record.data.subtitle,
-        });
+        && !isDisqualifiedEnglishEdition(record.data);
       addCount(counts, 'badChecksums', isbns.invalid);
       for (const workKey of matched) {
         const entry = entries.get(workKey);

@@ -836,3 +836,109 @@ test('enrich: a duplicate ISBN keeps its best observed quality score regardless 
   }
   assert.deepEqual(lowFirst.artifact.candidates[0].isbns, highFirst.artifact.candidates[0].isbns);
 });
+
+test('enrich: audio format variants (Audio, Audio book, Audio recording) do not displace eligible print editions', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const authorsIndexPath = await writeAuthorIndex(directory, AUSTEN);
+  const formats = ['Audio', 'Audio book', 'Audio recording'];
+  const highScoringAudio = Array.from({ length: 200 }, (_, index) => editionLine(`/books/OLAUDIO${index}M`, {
+    works: [{ key: '/works/OL100W' }],
+    languages: [{ key: '/languages/eng' }],
+    isbn_13: [isbn13For(2000 + index)],
+    title: 'Sample Work',
+    authors: [{ key: '/authors/OL1A' }],
+    publish_date: '2021',
+    covers: [100 + index],
+    physical_format: formats[index % formats.length],
+  }));
+  const printEdition = editionLine('/books/OLPRINTM', {
+    works: [{ key: '/works/OL100W' }],
+    languages: [{ key: '/languages/eng' }],
+    isbn_13: [isbn13For(9999)],
+    title: 'Sample Work',
+    authors: [{ key: '/authors/OL1A' }],
+    physical_format: 'Paperback',
+  });
+  const run = (ordered, label) => enrichFixture({
+    directory,
+    candidates: [discoverCandidate({ title: 'Sample Work' })],
+    editions: ordered.join(''),
+    authorsIndexPath,
+    outputName: `${label}.json`,
+    editionsName: `${label}.txt.gz`,
+  });
+  const forward = await run([...highScoringAudio, printEdition], 'audio-norm-forward');
+  const reverse = await run([printEdition, ...highScoringAudio].reverse(), 'audio-norm-reverse');
+  const forwardIsbns = forward.artifact.candidates[0].isbns;
+  const reverseIsbns = reverse.artifact.candidates[0].isbns;
+  assert.equal(forwardIsbns.length, 200);
+  assert.deepEqual(reverseIsbns, forwardIsbns);
+  assert.equal(forwardIsbns.includes(isbn13For(9999)), true);
+  // Audio editions are disqualified from englishIsbns, but fill remaining capacity as lowest non-English/other evidence.
+  // The highest audio ISBN (2199) is evicted to make room for print edition 9999.
+  assert.equal(forwardIsbns.includes(isbn13For(2199)), false);
+});
+
+test('enrich: primary author alignment preserves valid primary author edition against secondary-author editions', async (t) => {
+  const directory = await temporaryDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const authors = [
+    { key: '/authors/OL1A', name: 'Primary Author' },
+    { key: '/authors/OL2A', name: 'Secondary Author' },
+  ];
+  const authorsIndexPath = await writeAuthorIndex(directory, authors);
+  const candidates = [
+    discoverCandidate({
+      workKey: '/works/OL100W',
+      title: 'Sample Work',
+      authorKeys: ['/authors/OL1A', '/authors/OL2A'],
+    }),
+  ];
+  const primaryEdition = editionLine('/books/OLPRIMARYM', {
+    works: [{ key: '/works/OL100W' }],
+    languages: [{ key: '/languages/eng' }],
+    isbn_13: [isbn13For(9999)],
+    title: 'Sample Work',
+    authors: [{ key: '/authors/OL1A' }],
+  });
+  const secondaryEditions = Array.from({ length: 200 }, (_, index) => editionLine(`/books/OLSEC${index}M`, {
+    works: [{ key: '/works/OL100W' }],
+    languages: [{ key: '/languages/eng' }],
+    isbn_13: [isbn13For(1000 + index)],
+    title: 'Sample Work',
+    authors: [{ key: '/authors/OL2A' }],
+    covers: [50],
+    publish_date: '2020',
+  }));
+  const run = (ordered, label) => enrichFixture({
+    directory,
+    candidates,
+    editions: ordered.join(''),
+    authorsIndexPath,
+    outputName: `${label}.json`,
+    editionsName: `${label}.txt.gz`,
+  });
+  const forward = await run([...secondaryEditions, primaryEdition], 'author-align-forward');
+  const reverse = await run([primaryEdition, ...secondaryEditions].reverse(), 'author-align-reverse');
+  const forwardIsbns = forward.artifact.candidates[0].isbns;
+  const reverseIsbns = reverse.artifact.candidates[0].isbns;
+  assert.equal(forwardIsbns.length, 200);
+  assert.deepEqual(reverseIsbns, forwardIsbns);
+  assert.equal(forwardIsbns.includes(isbn13For(9999)), true);
+  assert.equal(forwardIsbns.includes(isbn13For(1199)), false);
+
+  // Duplicate ISBN handling: primary author observed in earlier or later duplicate record retains the higher score.
+  const lowDup = editionLine('/books/OLDUP1M', {
+    works: [{ key: '/works/OL100W' }],
+    languages: [{ key: '/languages/eng' }],
+    isbn_13: [isbn13For(9999)],
+    title: 'Sample Work',
+    authors: [{ key: '/authors/OL2A' }],
+  });
+  const highDup = primaryEdition;
+  const dupLowFirst = await run([lowDup, ...secondaryEditions, highDup], 'dup-author-low-first');
+  const dupHighFirst = await run([highDup, ...secondaryEditions, lowDup], 'dup-author-high-first');
+  assert.equal(dupLowFirst.artifact.candidates[0].isbns.includes(isbn13For(9999)), true);
+  assert.deepEqual(dupLowFirst.artifact.candidates[0].isbns, dupHighFirst.artifact.candidates[0].isbns);
+});
