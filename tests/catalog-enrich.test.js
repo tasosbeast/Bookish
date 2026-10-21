@@ -7,7 +7,9 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
-import { buildOpenLibraryAuthorIndex, buildOpenLibraryAuthorLookup } from '../scripts/catalog/open-library-bulk.js';
+import { buildOpenLibraryAuthorIndex, buildOpenLibraryAuthorLookup, createOpenLibraryAuthorLookup, readOpenLibraryBulkRecords } from '../scripts/catalog/open-library-bulk.js';
+import { bridgeCatalogWorks } from '../scripts/catalog/bridge.js';
+import { sealLanguageCheckedArtifact } from './catalog/language-check-helpers.js';
 import {
   CATALOG_DISCOVER_FORMAT,
   CATALOG_DISCOVER_SCORING,
@@ -941,4 +943,107 @@ test('enrich: primary author alignment preserves valid primary author edition ag
   const dupHighFirst = await run([highDup, ...secondaryEditions, lowDup], 'dup-author-high-first');
   assert.equal(dupLowFirst.artifact.candidates[0].isbns.includes(isbn13For(9999)), true);
   assert.deepEqual(dupLowFirst.artifact.candidates[0].isbns, dupHighFirst.artifact.candidates[0].isbns);
+});
+
+// These fixtures exercise retention through the real mapper, scorer and bridge,
+// with one eligible contender and 200 editions that bridge must reject.
+for (const scenario of [
+  { name: 'S6 secondary author with richer metadata', validTitle: 'Sample Work', sourceTitle: 'Sample Work: A Novel', bad: { authors: [{ key: '/authors/OL2A' }] }, validIsbn: 1 },
+  { name: 'non-exact title against rich secondary authors', validTitle: 'Work Sample', bad: { authors: [{ key: '/authors/OL2A' }] } },
+  { name: 'distinct author key with the same resolved name', validAuthor: '/authors/OL3A', bad: { authors: [{ key: '/authors/OL2A' }] } },
+  { name: 'strong author-name match', validAuthor: '/authors/OL4A', bad: { authors: [{ key: '/authors/OL2A' }] } },
+  { name: 'eligibility across author-resolution batch boundaries', badCount: 300, bad: { authors: [{ key: '/authors/OL2A' }] } },
+  { name: 'missing authors', bad: { authors: [] } },
+  { name: 'unresolved first author', bad: { authors: [{ key: '/authors/OL99A' }, { key: '/authors/OL1A' }] } },
+  { name: 'unresolved secondary author', bad: { authors: [{ key: '/authors/OL1A' }, { key: '/authors/OL99A' }] } },
+  { name: 'malformed nested authors', bad: { authors: [{ author: { key: '/authors/OL1A' } }] } },
+  { name: 'unrelated titles', bad: { title: 'Unrelated Title' } },
+  { name: 'Study Guide variant', bad: { subtitle: 'Study Guide' } },
+  { name: 'A Summary variant', bad: { subtitle: 'A Summary' } },
+  ...['Audible', 'Audio', 'Audio book', 'Audio recording', 'large print paperback'].map(physical_format => ({ name: physical_format, bad: { physical_format } })),
+]) {
+  test(`enrich to bridge eligibility: ${scenario.name}, both dump orders`, async (t) => {
+    const directory = await temporaryDirectory();
+    let authorLookup;
+    t.after(async () => {
+      authorLookup?.close();
+      await fs.rm(directory, { recursive: true, force: true });
+    });
+    const authorsIndexPath = await writeAuthorIndex(directory, [
+      { key: '/authors/OL1A', name: 'Jane Austen' },
+      { key: '/authors/OL2A', name: 'Other Writer' },
+      { key: '/authors/OL3A', name: 'Austen, Jane' },
+      { key: '/authors/OL4A', name: 'J. Austen' },
+    ]);
+    const candidate = discoverCandidate({ title: scenario.sourceTitle ?? 'Sample Work', authorKeys: ['/authors/OL1A', '/authors/OL2A'] });
+    const validIsbn = isbn13For(scenario.validIsbn ?? 9999);
+    const valid = englishEdition('/books/OL9999M', scenario.validIsbn ?? 9999, {
+      key: '/books/OL9999M', title: scenario.validTitle ?? 'Sample Work',
+      authors: [{ key: scenario.validAuthor ?? '/authors/OL1A' }], physical_format: 'Paperback',
+    });
+    const bad = Array.from({ length: scenario.badCount ?? 200 }, (_, index) => englishEdition(`/books/OL${1000 + index}M`, 1000 + index, {
+      key: `/books/OL${1000 + index}M`, title: candidate.title,
+      authors: [{ key: '/authors/OL1A' }], covers: [50], publish_date: '2020',
+      ...scenario.bad,
+    }));
+    const lines = [...bad, valid];
+    const outcomes = [];
+    authorLookup = await createOpenLibraryAuthorLookup({ indexPath: authorsIndexPath, snapshotId: SNAPSHOT_ID });
+    for (const [label, ordered] of [['forward', lines], ['reverse', lines.slice().reverse()]]) {
+      const enriched = await enrichFixture({
+        directory, candidates: [candidate], editions: ordered.join(''), authorsIndexPath,
+        outputName: `${label}.json`, editionsName: `${label}.txt.gz`,
+      });
+      const artifact = sealLanguageCheckedArtifact(enriched.artifact);
+      const reportRows = [{ workKey: candidate.workKey, title: candidate.title, status: 'new', matchedBookIds: [], matchedBy: null, languageCheckDigest: artifact.languageCheckDigest }];
+      const result = await bridgeCatalogWorks({ artifact, reportRows, records: readOpenLibraryBulkRecords(enriched.editionsPath), authorLookup });
+      const entry = result.artifact.entries[0];
+      outcomes.push({ label, enriched, entry });
+      if (scenario.validIsbn === 1) t.diagnostic(`S6 ${label}: ${entry.status}, ISBN retained=${enriched.artifact.candidates[0].isbns.includes(validIsbn)}, ${entry.diagnostic?.code ?? entry.metadata.isbn}`);
+    }
+    for (const { label, enriched, entry } of outcomes) {
+      assert.equal(entry.status, 'resolved', `${label}: ${entry.diagnostic?.code}`);
+      assert.equal(entry.metadata.isbn, validIsbn);
+      assert.equal(enriched.artifact.candidates[0].isbns.includes(validIsbn), true);
+      assert.equal(enriched.artifact.candidates[0].isbns.length, 200);
+      assert.equal(enriched.worksIsbnTruncated, 1);
+      validateEnrichedArtifact(JSON.parse(await fs.readFile(enriched.outputPath, 'utf8')));
+      assert.deepEqual(enriched.artifact.candidates[0].isbns, outcomes[0].enriched.artifact.candidates[0].isbns);
+    }
+  });
+}
+
+test('enrich to bridge: duplicate ISBN retains eligibility and best completeness, with lowest-ISBN ties', async (t) => {
+  const directory = await temporaryDirectory();
+  let authorLookup;
+  t.after(async () => {
+    authorLookup?.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+  const authorsIndexPath = await writeAuthorIndex(directory, AUSTEN);
+  authorLookup = await createOpenLibraryAuthorLookup({ indexPath: authorsIndexPath, snapshotId: SNAPSHOT_ID });
+  const ordinary = Array.from({ length: 200 }, (_, index) => englishEdition(`/books/OL${1000 + index}M`, 1000 + index, {
+    key: `/books/OL${1000 + index}M`, title: 'Sample Work', authors: [{ key: '/authors/OL1A' }],
+  }));
+  const low = englishEdition('/books/OL9001M', 9000, {
+    key: '/books/OL9001M', title: 'Sample Work', authors: [], covers: [1], publish_date: '2020',
+  });
+  const high = englishEdition('/books/OL9002M', 9000, {
+    key: '/books/OL9002M', title: 'Sample Work', authors: [{ key: '/authors/OL1A' }],
+    covers: [1], publish_date: '2020', physical_format: 'Paperback',
+  });
+  const lines = [low, ...ordinary, high];
+  const expected = [...Array.from({ length: 199 }, (_, index) => isbn13For(1000 + index)), isbn13For(9000)].sort();
+  for (const [label, ordered] of [['forward', lines], ['reverse', lines.slice().reverse()]]) {
+    const enriched = await enrichFixture({
+      directory, candidates: [discoverCandidate({ title: 'Sample Work' })], editions: ordered.join(''), authorsIndexPath,
+      outputName: `${label}.json`, editionsName: `${label}.txt.gz`,
+    });
+    assert.deepEqual(enriched.artifact.candidates[0].isbns, expected);
+    const artifact = sealLanguageCheckedArtifact(enriched.artifact);
+    const reportRows = [{ workKey: '/works/OL100W', title: 'Sample Work', status: 'new', matchedBookIds: [], matchedBy: null, languageCheckDigest: artifact.languageCheckDigest }];
+    const result = await bridgeCatalogWorks({ artifact, reportRows, records: readOpenLibraryBulkRecords(enriched.editionsPath), authorLookup });
+    assert.equal(result.artifact.entries[0].status, 'resolved');
+    assert.equal(result.artifact.entries[0].metadata.isbn, isbn13For(9000));
+  }
 });
