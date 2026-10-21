@@ -18,6 +18,15 @@ Later pipeline steps will select a "good" book only if it meets all of the follo
 
 Existing rules still apply: non-books rejected via `pilotDisqualificationReason`, ISBN-13 edition identity, controlled genre mapping, no fabricated metadata.
 
+### Follow-up: catalog:enrich ranking inside the eligible tier (from PR #41 review)
+
+Found in the independent re-review of PR #41 (HEAD `0cd5358`). Not blocking; implement only if a real-dump run shows it happens often.
+
+- **Where:** `scripts/catalog/enrich.js`, `englishEditionQuality` / `isHigherRanked` / `rankEnglishBatch`. Within the bridge-eligible tier, editions are ranked by a heuristic (title, author, cover, year) instead of the `evaluation.score` that `rankEnglishBatch` already computes.
+- **Failure:** a work with more than 200 bridge-eligible editions can lose the ISBN the bridge would pick as the winner, so the bridge reports `needs_review(ambiguous_winner)` where `main` resolved it (scenario S7b; the uncapped control resolves).
+- **Impact:** limited to the cap-pressure case; the outcome is `needs_review`, never a wrong import.
+- **Fix direction:** rank inside the eligible tier by `evaluation.score` plus the bridge tie-breakers (preferredIsbn, metadataCompleteness, isbn, candidateIdentity), so the capped decision equals the uncapped decision. Add a regression that uses the real bridge with more than 200 eligible editions.
+
 ### Roadmap (in order)
 
 1. Candidate scoring and selection (`catalog:discover --limit N`) — done
