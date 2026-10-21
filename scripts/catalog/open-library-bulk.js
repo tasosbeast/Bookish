@@ -108,7 +108,7 @@ function editionLanguage(languages) {
   return values.includes('en') ? 'en' : values[0] ?? null;
 }
 
-function normalizeFormat(value) {
+export function normalizeFormat(value) {
   const format = text(value);
   if (!format) return null;
   const folded = format.toLowerCase();

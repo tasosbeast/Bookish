@@ -5,13 +5,17 @@ import { writeFileAtomic } from './atomic-write.js';
 import { CatalogContractError } from './contracts.js';
 import { validateDiscoverArtifact } from './discover.js';
 import { stableJson } from './external-sort.js';
-import { normalizeIsbn13 } from './normalize.js';
+import { normalizeIsbn13, normalizeTitle } from './normalize.js';
 import {
   createOpenLibraryAuthorLookup,
   isbn13Values,
+  mapOpenLibraryEditionRecord,
+  normalizeFormat,
   readAuthorIndexMetadata,
   readOpenLibraryBulkRecords,
 } from './open-library-bulk.js';
+import { adaptCanonicalCandidateForScoring, pilotDisqualificationReason } from './pilot-planner.js';
+import { evaluateEdition } from './score-editions.js';
 import { SnapshotRecordError } from './snapshot-reader.js';
 
 export const CATALOG_ENRICH_MAX_ISBNS = 200;
@@ -28,6 +32,7 @@ const ENRICHED_CANDIDATE_KEYS = Object.freeze([
   'primaryAuthor',
 ]);
 const NO_MATCHES = [];
+const EDITION_BATCH_SIZE = 256;
 
 const plainObject = value => value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 
@@ -174,6 +179,8 @@ function candidateEntries(candidates) {
     entries.set(candidate.workKey, {
       isbns: new Set(),
       highestIsbn: '',
+      englishIsbns: new Map(),
+      workTitle: candidate.title,
       truncated: false,
       primaryAuthor: null,
     });
@@ -224,6 +231,71 @@ function addIsbn(entry, isbn, counts) {
   noteTruncation(entry, counts);
 }
 
+// A bounded, deterministic priority queue of ISBNs from explicit English editions.
+// Bridge eligibility is a strict tier ahead of completeness, never an additive bonus.
+function englishEditionQuality(data, entry, evaluation) {
+  let score = 0;
+  if (typeof data.title === 'string' && data.title.trim()) {
+    score += 1;
+    const editionTitle = normalizeTitle(data.title);
+    if (editionTitle && editionTitle === normalizeTitle(entry.workTitle)) score += 2;
+  }
+  if (evaluation?.authorMatch?.eligible) score += 4;
+  if (Array.isArray(data.covers) && data.covers.some(id => Number.isSafeInteger(id) && id > 0)) score += 2;
+  if (typeof data.publish_date === 'string' && /\b(?:1[5-9]\d\d|20\d\d|2100)\b/.test(data.publish_date)) score += 1;
+  return { eligible: Boolean(evaluation?.eligible), quality: score };
+}
+
+function isHigherRanked(isbn, score, otherIsbn, otherScore) {
+  const priority = Number(score.eligible) - Number(otherScore.eligible)
+    || score.quality - otherScore.quality;
+  return priority > 0 || (priority === 0 && isbn < otherIsbn);
+}
+
+function addEnglishIsbn(entry, isbn, counts, score) {
+  const kept = entry.englishIsbns;
+  if (kept.has(isbn)) {
+    if (isHigherRanked(isbn, score, isbn, kept.get(isbn))) kept.set(isbn, score);
+    return;
+  }
+  if (kept.size < CATALOG_ENRICH_MAX_ISBNS) {
+    kept.set(isbn, score);
+    return;
+  }
+  noteTruncation(entry, counts);
+  let worstIsbn = null;
+  let worstScore = null;
+  for (const [key, value] of kept) {
+    if (worstIsbn === null || isHigherRanked(worstIsbn, worstScore, key, value)) {
+      worstIsbn = key;
+      worstScore = value;
+    }
+  }
+  if (isHigherRanked(isbn, score, worstIsbn, worstScore)) {
+    kept.delete(worstIsbn);
+    kept.set(isbn, score);
+  }
+}
+
+function hasExplicitEnglishLanguage(languages) {
+  return Array.isArray(languages) && languages.some(item => {
+    const value = typeof item === 'string' ? item : item?.key;
+    return typeof value === 'string'
+      && value.trim().toLowerCase().replace(/^\/languages\//, '') === 'eng';
+  });
+}
+
+function isDisqualifiedEnglishEdition(data) {
+  const title = data?.title;
+  const subtitle = data?.subtitle;
+  const rawFormat = data?.physical_format;
+  const normalizedFormat = normalizeFormat(rawFormat);
+  return Boolean(
+    pilotDisqualificationReason({ title, subtitle, format: normalizedFormat })
+    || pilotDisqualificationReason({ title, subtitle, format: rawFormat })
+  );
+}
+
 function authorLookupBuildCommand(authorsIndex, snapshotId) {
   return `npm run catalog:ol-author-lookup-build -- --index "${authorsIndex}" --snapshot-id ${snapshotId}`;
 }
@@ -259,9 +331,38 @@ async function assignPrimaryAuthors(entries, candidates, authorLookup) {
   return worksWithAuthor;
 }
 
-// Stream edition rows with the bulk reader shared by the works index.
-// Only candidate work keys stay in memory; dump rows are discarded after each yield.
-async function scanEditions(editionsPath, entries, counts, progressInterval, onProgress) {
+// Resolve only matched English editions, deduplicating author keys within a bounded
+// batch. No author cache grows with the dump and unrelated rows cause no lookups.
+async function rankEnglishBatch(batch, entries, counts, authorLookup, snapshotId) {
+  const keys = new Set();
+  for (const { record } of batch) {
+    for (const ref of Array.isArray(record.data.authors) ? record.data.authors : []) {
+      const key = text(ref?.key);
+      if (key) keys.add(key);
+    }
+  }
+  const names = keys.size ? await authorLookup.getNames([...keys]) : new Map();
+  const batchLookup = { async getNames() { return names; } };
+  for (const { record, matched, isbns } of batch) {
+    let canonical = null;
+    for await (const edition of mapOpenLibraryEditionRecord(record, { snapshotId, authorLookup: batchLookup })) {
+      if (!(edition instanceof SnapshotRecordError)) { canonical = edition; break; }
+    }
+    for (const workKey of matched) {
+      const entry = entries.get(workKey);
+      const evaluation = canonical && canonical.language === 'en' && entry.primaryAuthor
+        ? evaluateEdition({ key: `open-library-${workKey.slice('/works/'.length).toLowerCase()}`, title: entry.workTitle, author: entry.primaryAuthor }, adaptCanonicalCandidateForScoring(canonical))
+        : null;
+      const rank = englishEditionQuality(record.data, entry, evaluation);
+      for (const isbn of isbns) addEnglishIsbn(entry, isbn, counts, rank);
+    }
+  }
+}
+
+// Stream the dump once; retain at most one matched-edition batch in addition to
+// the existing bounded per-work ISBN queues.
+async function scanEditions(editionsPath, entries, counts, progressInterval, onProgress, authorLookup, snapshotId) {
+  const batch = [];
   for await (const record of readOpenLibraryBulkRecords(editionsPath)) {
     bump(counts, 'rowsScanned');
     try {
@@ -274,15 +375,38 @@ async function scanEditions(editionsPath, entries, counts, progressInterval, onP
       if (!matched.length) continue;
       bump(counts, 'matchedEditions');
       const isbns = isbn13Values(record.data);
+      const english = hasExplicitEnglishLanguage(record.data.languages)
+        && !isDisqualifiedEnglishEdition(record.data);
       addCount(counts, 'badChecksums', isbns.invalid);
       for (const workKey of matched) {
         const entry = entries.get(workKey);
-        for (const isbn of isbns.values) addIsbn(entry, isbn, counts);
+        for (const isbn of isbns.values) {
+          addIsbn(entry, isbn, counts);
+        }
+      }
+      if (english && isbns.values.length) {
+        batch.push({ record, matched, isbns: isbns.values });
+        if (batch.length === EDITION_BATCH_SIZE) {
+          await rankEnglishBatch(batch, entries, counts, authorLookup, snapshotId);
+          batch.length = 0;
+        }
       }
     } finally {
       noteProgress(counts, progressInterval, onProgress);
     }
   }
+  if (batch.length) await rankEnglishBatch(batch, entries, counts, authorLookup, snapshotId);
+}
+
+// Bridge-eligible English ISBNs, then other ranked English evidence, then lowest other ISBNs.
+// entry.isbns holds the lowest 200 overall, so it always contains enough of the lowest others.
+function selectIsbns(entry) {
+  const selected = new Set(entry.englishIsbns.keys());
+  for (const isbn of [...entry.isbns].sort()) {
+    if (selected.size >= CATALOG_ENRICH_MAX_ISBNS) break;
+    selected.add(isbn);
+  }
+  return [...selected].sort();
 }
 
 function enrichedArtifact(artifact, entries) {
@@ -298,7 +422,7 @@ function enrichedArtifact(artifact, entries) {
       const entry = entries.get(candidate.workKey);
       return {
         ...candidate,
-        isbns: [...entry.isbns].sort(),
+        isbns: selectIsbns(entry),
         primaryAuthor: entry.primaryAuthor,
       };
     }),
@@ -345,7 +469,7 @@ export async function enrichCatalogCandidates({
   const authorLookup = await createOpenLibraryAuthorLookup({ indexPath: authorsIndex, snapshotId });
   try {
     counts.worksWithAuthor = await assignPrimaryAuthors(entries, artifact.candidates, authorLookup);
-    await scanEditions(editions, entries, counts, progressInterval, onProgress);
+    await scanEditions(editions, entries, counts, progressInterval, onProgress, authorLookup, snapshotId);
     if (typeof onProgress === 'function') onProgress(progressSnapshot(counts));
     const enriched = enrichedArtifact(artifact, entries);
     validateEnrichedArtifact(enriched, { snapshotId });
